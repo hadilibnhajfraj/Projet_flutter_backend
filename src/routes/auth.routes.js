@@ -1,12 +1,9 @@
+// routes/auth.routes.js
 const express = require("express");
 const bcrypt = require("bcrypt");
 const rateLimit = require("express-rate-limit");
 const User = require("../models/User");
-const {
-  signAccessToken,
-  signRefreshToken,
-  verifyRefreshToken,
-} = require("../utils/tokens");
+const { signAccessToken, signRefreshToken, verifyRefreshToken } = require("../utils/tokens");
 
 const router = express.Router();
 
@@ -18,14 +15,20 @@ const signinLimiter = rateLimit({
 });
 
 function isValidEmail(email) {
-  return (
-    typeof email === "string" &&
-    email.length <= 200 &&
-    /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
-  );
+  return typeof email === "string" && email.length <= 200 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }
 function isStrongPassword(pw) {
   return typeof pw === "string" && pw.length >= 8 && pw.length <= 72;
+}
+
+function cookieOptions() {
+  return {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "lax",
+    path: "/auth/refresh",
+    maxAge: 7 * 24 * 60 * 60 * 1000,
+  };
 }
 
 // POST /auth/signup
@@ -34,10 +37,9 @@ router.post("/signup", async (req, res) => {
     const { email, password } = req.body || {};
 
     if (!isValidEmail(email)) return res.status(400).json({ message: "Invalid email" });
-    if (!isStrongPassword(password)) return res.status(400).json({ message: "Password too weak (min 8 chars)" });
+    if (!isStrongPassword(password)) return res.status(400).json({ message: "Weak password (min 8 chars)" });
 
     const cleanEmail = email.toLowerCase().trim();
-
     const exists = await User.findOne({ where: { email: cleanEmail } });
     if (exists) return res.status(409).json({ message: "Email already used" });
 
@@ -47,30 +49,24 @@ router.post("/signup", async (req, res) => {
       email: cleanEmail,
       passwordHash,
       isActive: true,
+      role: "user",
     });
 
-    const payload = { sub: user.id, email: user.email };
+    const payload = { sub: user.id, email: user.email, role: user.role };
     const accessToken = signAccessToken(payload);
     const refreshToken = signRefreshToken(payload);
 
-    const refreshTokenHash = await bcrypt.hash(refreshToken, 12);
-    await user.update({ refreshTokenHash });
+    await user.update({ refreshTokenHash: await bcrypt.hash(refreshToken, 12) });
 
-    res.cookie("refreshToken", refreshToken, {
-      httpOnly: true,
-      secure: false, // true en HTTPS
-      sameSite: "lax",
-      path: "/auth/refresh",
-      maxAge: 7 * 24 * 60 * 60 * 1000,
-    });
+    res.cookie("refreshToken", refreshToken, cookieOptions());
 
     return res.status(201).json({
-      user: { id: user.id, email: user.email },
+      user: { id: user.id, email: user.email, role: user.role, isActive: user.isActive },
       accessToken,
     });
   } catch (e) {
-    console.error("SIGNUP_ERROR:", e); // ✅ important pour voir la vraie erreur
-    return res.status(500).json({ message: e.message || "Server error" });
+    console.error("SIGNUP_ERROR:", e);
+    return res.status(500).json({ message: "Server error" });
   }
 });
 
@@ -79,9 +75,8 @@ router.post("/signin", signinLimiter, async (req, res) => {
   try {
     const { email, password } = req.body || {};
 
-    if (!isValidEmail(email) || typeof password !== "string") {
-      return res.status(400).json({ message: "Invalid credentials" });
-    }
+    if (!isValidEmail(email)) return res.status(400).json({ message: "Invalid email" });
+    if (!isStrongPassword(password)) return res.status(400).json({ message: "Invalid password" });
 
     const cleanEmail = email.toLowerCase().trim();
     const user = await User.findOne({ where: { email: cleanEmail } });
@@ -92,28 +87,21 @@ router.post("/signin", signinLimiter, async (req, res) => {
     const ok = await bcrypt.compare(password, user.passwordHash);
     if (!ok) return res.status(401).json({ message: "Invalid credentials" });
 
-    const payload = { sub: user.id, email: user.email };
+    const payload = { sub: user.id, email: user.email, role: user.role };
     const accessToken = signAccessToken(payload);
     const refreshToken = signRefreshToken(payload);
 
-    const refreshTokenHash = await bcrypt.hash(refreshToken, 12);
-    await user.update({ refreshTokenHash });
+    await user.update({ refreshTokenHash: await bcrypt.hash(refreshToken, 12) });
 
-    res.cookie("refreshToken", refreshToken, {
-      httpOnly: true,
-      secure: false,
-      sameSite: "lax",
-      path: "/auth/refresh",
-      maxAge: 7 * 24 * 60 * 60 * 1000,
-    });
+    res.cookie("refreshToken", refreshToken, cookieOptions());
 
     return res.json({
-      user: { id: user.id, email: user.email },
+      user: { id: user.id, email: user.email, role: user.role, isActive: user.isActive },
       accessToken,
     });
   } catch (e) {
     console.error("SIGNIN_ERROR:", e);
-    return res.status(500).json({ message: e.message || "Server error" });
+    return res.status(500).json({ message: "Server error" });
   }
 });
 
@@ -130,7 +118,7 @@ router.post("/refresh", async (req, res) => {
     const match = await bcrypt.compare(refreshToken, user.refreshTokenHash);
     if (!match) return res.status(401).json({ message: "Invalid refresh token" });
 
-    const payload = { sub: user.id, email: user.email };
+    const payload = { sub: user.id, email: user.email, role: user.role };
     const newAccessToken = signAccessToken(payload);
 
     return res.json({ accessToken: newAccessToken });
@@ -151,6 +139,7 @@ router.post("/logout", async (req, res) => {
         if (user) await user.update({ refreshTokenHash: null });
       } catch (_) {}
     }
+
     res.clearCookie("refreshToken", { path: "/auth/refresh" });
     return res.json({ message: "Logged out" });
   } catch (e) {
