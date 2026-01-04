@@ -32,6 +32,7 @@ function cookieOptions() {
 }
 
 // POST /auth/signup
+
 router.post("/signup", async (req, res) => {
   try {
     const { email, password } = req.body || {};
@@ -48,27 +49,23 @@ router.post("/signup", async (req, res) => {
     const user = await User.create({
       email: cleanEmail,
       passwordHash,
-      isActive: true,
+      isActive: false,          // ✅ IMPORTANT: admin doit activer
       role: "user",
     });
 
-    const payload = { sub: user.id, email: user.email, role: user.role };
-    const accessToken = signAccessToken(payload);
-    const refreshToken = signRefreshToken(payload);
-
-    await user.update({ refreshTokenHash: await bcrypt.hash(refreshToken, 12) });
-
-    res.cookie("refreshToken", refreshToken, cookieOptions());
-
+    // ✅ Option 1 (recommandé): ne pas connecter un user inactif directement
+    // => on NE renvoie PAS accessToken tant que isActive=false
     return res.status(201).json({
+      message: "Account created. Waiting for admin activation.",
       user: { id: user.id, email: user.email, role: user.role, isActive: user.isActive },
-      accessToken,
     });
+
   } catch (e) {
     console.error("SIGNUP_ERROR:", e);
     return res.status(500).json({ message: "Server error" });
   }
 });
+
 
 // POST /auth/signin
 router.post("/signin", signinLimiter, async (req, res) => {
