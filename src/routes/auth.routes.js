@@ -33,6 +33,7 @@ function cookieOptions() {
 
 // POST /auth/signup
 
+// POST /auth/signup
 router.post("/signup", async (req, res) => {
   try {
     const { email, password } = req.body || {};
@@ -41,30 +42,31 @@ router.post("/signup", async (req, res) => {
     if (!isStrongPassword(password)) return res.status(400).json({ message: "Weak password (min 8 chars)" });
 
     const cleanEmail = email.toLowerCase().trim();
+
     const exists = await User.findOne({ where: { email: cleanEmail } });
     if (exists) return res.status(409).json({ message: "Email already used" });
 
     const passwordHash = await bcrypt.hash(password, 12);
 
+    // ✅ Nouveau user: disabled par défaut
+    // ✅ role forcé "user" (pas de création admin/superadmin via signup)
     const user = await User.create({
       email: cleanEmail,
       passwordHash,
-      isActive: false,          // ✅ IMPORTANT: admin doit activer
+      isActive: false,   // ✅ disabled par défaut
       role: "user",
     });
 
-    // ✅ Option 1 (recommandé): ne pas connecter un user inactif directement
-    // => on NE renvoie PAS accessToken tant que isActive=false
     return res.status(201).json({
       message: "Account created. Waiting for admin activation.",
       user: { id: user.id, email: user.email, role: user.role, isActive: user.isActive },
     });
-
   } catch (e) {
     console.error("SIGNUP_ERROR:", e);
     return res.status(500).json({ message: "Server error" });
   }
 });
+
 
 
 // POST /auth/signin
@@ -79,7 +81,11 @@ router.post("/signin", signinLimiter, async (req, res) => {
     const user = await User.findOne({ where: { email: cleanEmail } });
 
     if (!user) return res.status(401).json({ message: "Invalid credentials" });
-    if (!user.isActive) return res.status(403).json({ message: "Account disabled" });
+
+    // ✅ disabled => refuse login
+    if (!user.isActive) {
+      return res.status(403).json({ message: "Account not activated. Please contact admin." });
+    }
 
     const ok = await bcrypt.compare(password, user.passwordHash);
     if (!ok) return res.status(401).json({ message: "Invalid credentials" });
@@ -101,6 +107,7 @@ router.post("/signin", signinLimiter, async (req, res) => {
     return res.status(500).json({ message: "Server error" });
   }
 });
+
 
 // POST /auth/refresh
 router.post("/refresh", async (req, res) => {
