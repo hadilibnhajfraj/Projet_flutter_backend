@@ -1,6 +1,6 @@
 const express = require("express");
 const { Op } = require("sequelize");
-const { Project, UserProject } = require("../models/associations");
+const { Project, UserProject, ProjectComment } = require("../models/associations");
 const { authRequired } = require("../middleware/auth.middleware");
 
 const router = express.Router();
@@ -31,6 +31,7 @@ function isValidLatLng(lat, lng) {
 function normalizePayload(body = {}) {
   const b = { ...body };
 
+  // support: location:{lat,lng}
   if (b.location && (b.latitude === undefined || b.longitude === undefined)) {
     if (b.location.lat !== undefined) b.latitude = b.location.lat;
     if (b.location.lng !== undefined) b.longitude = b.location.lng;
@@ -38,24 +39,6 @@ function normalizePayload(body = {}) {
 
   if (b.lng !== undefined && b.longitude === undefined) b.longitude = b.lng;
   if (b.lat !== undefined && b.latitude === undefined) b.latitude = b.lat;
-
-  if (Array.isArray(b.comments) && b.localisationCommentaire === undefined) {
-    const lines = b.comments
-      .map((c) => {
-        if (!c) return "";
-        if (typeof c === "string") return c.trim();
-        return reqStr(c.comment);
-      })
-      .filter(Boolean);
-
-    b.localisationCommentaire = lines.join("\n");
-  }
-
-  if (reqStr(b.adresse) && !reqStr(b.localisationCommentaire)) {
-    b.localisationCommentaire = `Adresse: ${reqStr(b.adresse)}`;
-  } else if (reqStr(b.adresse) && reqStr(b.localisationCommentaire)) {
-    b.localisationCommentaire = `Adresse: ${reqStr(b.adresse)}\n${reqStr(b.localisationCommentaire)}`;
-  }
 
   const stringFields = [
     "nomProjet",
@@ -71,10 +54,10 @@ function normalizePayload(body = {}) {
     "bureauEtude",
     "bureauControle",
     "adresse",
-    "localisationCommentaire",
     "entrepriseFluide",
     "entrepriseElectricite",
   ];
+
   for (const f of stringFields) {
     if (b[f] !== undefined && b[f] !== null) {
       b[f] = reqStr(b[f]);
@@ -142,16 +125,19 @@ function validatePayload(body, isUpdate = false) {
   return errors;
 }
 
-async function getAccess(user, projectId) {
-  if (["admin", "superadmin"].includes(user.role)) {
-    return { ok: true, permission: "owner" };
-  }
-  const link = await UserProject.findOne({ where: { userId: user.sub, projectId } });
-  if (!link) return { ok: false };
-  return { ok: true, permission: link.permission };
+// ✅ permission helper: retourne "viewer" si pas de lien
+async function getPermission(user, projectId) {
+  if (["admin", "superadmin"].includes(user.role)) return "owner";
+
+  const link = await UserProject.findOne({
+    where: { userId: user.sub, projectId },
+  });
+
+  return link?.permission || "viewer";
 }
 
 // ---------------- CREATE ----------------
+// creator becomes owner
 router.post("/", authRequired, async (req, res) => {
   try {
     const body = normalizePayload(req.body);
@@ -180,19 +166,17 @@ router.post("/", authRequired, async (req, res) => {
 
       latitude: body.latitude,
       longitude: body.longitude,
-      localisationCommentaire: body.localisationCommentaire || null,
 
       entrepriseFluide: body.entrepriseFluide || null,
       entrepriseElectricite: body.entrepriseElectricite || null,
     });
 
-    // ✅ L'utilisateur qui crée devient owner (sauf si admin/superadmin -> optionnel mais ok)
     await UserProject.findOrCreate({
       where: { userId: req.user.sub, projectId: p.id },
       defaults: { permission: "owner" },
     });
 
-    return res.status(201).json(p);
+    return res.status(201).json({ ...p.toJSON(), permission: "owner" });
   } catch (e) {
     console.error("PROJECT_CREATE_ERROR:", e);
     return res.status(500).json({ message: e.message || "Server error" });
@@ -200,6 +184,8 @@ router.post("/", authRequired, async (req, res) => {
 });
 
 // ---------------- LIST ----------------
+// ✅ Tous les users voient TOUS les projets
+// ✅ permission = viewer si pas de lien user_projects, sinon editor/owner
 router.get("/", authRequired, async (req, res) => {
   try {
     const { q } = req.query;
@@ -214,19 +200,18 @@ router.get("/", authRequired, async (req, res) => {
       ];
     }
 
-    // ✅ Admin/Superadmin => tout
+    // admin => tout owner
     if (["admin", "superadmin"].includes(req.user.role)) {
       const items = await Project.findAll({ where, order: [["createdAt", "DESC"]] });
-      return res.json(items);
+      return res.json(items.map((p) => ({ ...p.toJSON(), permission: "owner" })));
     }
 
-    // ✅ User => seulement ses projets
     const items = await Project.findAll({
       where,
       include: [
         {
           model: UserProject,
-          required: true,
+          required: false, // ✅ LEFT JOIN
           where: { userId: req.user.sub },
           attributes: ["permission"],
         },
@@ -234,7 +219,14 @@ router.get("/", authRequired, async (req, res) => {
       order: [["createdAt", "DESC"]],
     });
 
-    return res.json(items);
+    const out = items.map((p) => {
+      const json = p.toJSON();
+      const perm = (json.UserProjects?.[0]?.permission) || "viewer";
+      delete json.UserProjects;
+      return { ...json, permission: perm };
+    });
+
+    return res.json(out);
   } catch (e) {
     console.error("PROJECT_LIST_ERROR:", e);
     return res.status(500).json({ message: e.message || "Server error" });
@@ -242,15 +234,14 @@ router.get("/", authRequired, async (req, res) => {
 });
 
 // ---------------- GET BY ID ----------------
+// ✅ viewer autorisé (permission par défaut viewer)
 router.get("/:id", authRequired, async (req, res) => {
   try {
-    const access = await getAccess(req.user, req.params.id);
-    if (!access.ok) return res.status(403).json({ message: "Forbidden" });
-
     const item = await Project.findByPk(req.params.id);
     if (!item) return res.status(404).json({ message: "Not found" });
 
-    return res.json({ ...item.toJSON(), permission: access.permission });
+    const permission = await getPermission(req.user, req.params.id);
+    return res.json({ ...item.toJSON(), permission });
   } catch (e) {
     console.error("PROJECT_GET_ERROR:", e);
     return res.status(500).json({ message: e.message || "Server error" });
@@ -258,17 +249,16 @@ router.get("/:id", authRequired, async (req, res) => {
 });
 
 // ---------------- UPDATE ----------------
+// viewer forbidden
 router.put("/:id", authRequired, async (req, res) => {
   try {
-    const access = await getAccess(req.user, req.params.id);
-    if (!access.ok) return res.status(403).json({ message: "Forbidden" });
+    const permission = await getPermission(req.user, req.params.id);
 
-    if (!["admin", "superadmin"].includes(req.user.role) && !["editor", "owner"].includes(access.permission)) {
+    if (!["admin", "superadmin"].includes(req.user.role) && !["editor", "owner"].includes(permission)) {
       return res.status(403).json({ message: "Need editor permission" });
     }
 
     const body = normalizePayload(req.body);
-
     const errors = validatePayload(body, true);
     if (errors.length) return res.status(400).json({ message: "Validation error", errors });
 
@@ -291,7 +281,6 @@ router.put("/:id", authRequired, async (req, res) => {
       "adresse",
       "latitude",
       "longitude",
-      "localisationCommentaire",
       "entrepriseFluide",
       "entrepriseElectricite",
     ];
@@ -302,7 +291,7 @@ router.put("/:id", authRequired, async (req, res) => {
     }
 
     await item.update(up);
-    return res.json(item);
+    return res.json({ ...item.toJSON(), permission });
   } catch (e) {
     console.error("PROJECT_UPDATE_ERROR:", e);
     return res.status(500).json({ message: e.message || "Server error" });
@@ -310,12 +299,12 @@ router.put("/:id", authRequired, async (req, res) => {
 });
 
 // ---------------- DELETE ----------------
+// only owner/admin
 router.delete("/:id", authRequired, async (req, res) => {
   try {
-    const access = await getAccess(req.user, req.params.id);
-    if (!access.ok) return res.status(403).json({ message: "Forbidden" });
+    const permission = await getPermission(req.user, req.params.id);
 
-    if (!["admin", "superadmin"].includes(req.user.role) && access.permission !== "owner") {
+    if (!["admin", "superadmin"].includes(req.user.role) && permission !== "owner") {
       return res.status(403).json({ message: "Need owner permission" });
     }
 
@@ -323,11 +312,93 @@ router.delete("/:id", authRequired, async (req, res) => {
     if (!item) return res.status(404).json({ message: "Not found" });
 
     await item.destroy();
-    await UserProject.destroy({ where: { projectId: req.params.id } }); // nettoyage liens
+    await UserProject.destroy({ where: { projectId: req.params.id } });
 
     return res.json({ message: "Deleted" });
   } catch (e) {
     console.error("PROJECT_DELETE_ERROR:", e);
+    return res.status(500).json({ message: e.message || "Server error" });
+  }
+});
+
+// ---------------- COMMENTS ----------------
+// ✅ list comments
+router.get("/:id/comments", authRequired, async (req, res) => {
+  try {
+    const projectId = req.params.id;
+
+    const project = await Project.findByPk(projectId);
+    if (!project) return res.status(404).json({ message: "Not found" });
+
+    const list = await ProjectComment.findAll({
+      where: { projectId },
+      order: [["createdAt", "ASC"]],
+    });
+
+    return res.json(list);
+  } catch (e) {
+    console.error("PROJECT_COMMENTS_LIST_ERROR:", e);
+    return res.status(500).json({ message: e.message || "Server error" });
+  }
+});
+
+// ✅ add comment or reply
+router.post("/:id/comments", authRequired, async (req, res) => {
+  try {
+    const projectId = req.params.id;
+    const body = reqStr(req.body?.body);
+    const parentId = req.body?.parentId || null;
+
+    if (!body) return res.status(400).json({ message: "body est obligatoire" });
+
+    const project = await Project.findByPk(projectId);
+    if (!project) return res.status(404).json({ message: "Not found" });
+
+    if (parentId) {
+      const parent = await ProjectComment.findByPk(parentId);
+      if (!parent || parent.projectId !== projectId) {
+        return res.status(400).json({ message: "parentId invalide" });
+      }
+    }
+
+    const c = await ProjectComment.create({
+      projectId,
+      authorId: req.user.sub,
+      parentId,
+      body,
+    });
+
+    return res.status(201).json(c);
+  } catch (e) {
+    console.error("PROJECT_COMMENT_CREATE_ERROR:", e);
+    return res.status(500).json({ message: e.message || "Server error" });
+  }
+});
+
+// ---------------- SHARE ----------------
+// owner/admin can assign user as viewer/editor (optionnel)
+router.post("/:id/share", authRequired, async (req, res) => {
+  try {
+    const { userId, permission } = req.body || {};
+    if (!userId) return res.status(400).json({ message: "userId is required" });
+
+    const perm = ["viewer", "editor"].includes(permission) ? permission : "viewer";
+
+    // seul owner/admin peut partager
+    const currentPerm = await getPermission(req.user, req.params.id);
+    if (!["admin", "superadmin"].includes(req.user.role) && currentPerm !== "owner") {
+      return res.status(403).json({ message: "Owner required" });
+    }
+
+    await UserProject.upsert({
+      userId,
+      projectId: req.params.id,
+      permission: perm,
+    });
+
+    return res.json({ message: "User assigned", userId, projectId: req.params.id, permission: perm });
+  } catch (e) {
+    console.error("PROJECT_SHARE_ERROR:", e);
     return res.status(500).json({ message: e.message || "Server error" });
   }
 });
