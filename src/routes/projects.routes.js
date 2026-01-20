@@ -1,8 +1,8 @@
 const express = require("express");
 const { Op } = require("sequelize");
-const { Project, UserProject, ProjectComment } = require("../models/associations");
+const { User, Project, UserProject, ProjectComment } = require("../models/associations");
 const { authRequired } = require("../middleware/auth.middleware");
-
+const { sequelize } = require("../db");
 const router = express.Router();
 
 // ---------------- Helpers ----------------
@@ -206,18 +206,24 @@ router.get("/", authRequired, async (req, res) => {
       return res.json(items.map((p) => ({ ...p.toJSON(), permission: "owner" })));
     }
 
-    const items = await Project.findAll({
-      where,
-      include: [
-        {
-          model: UserProject,
-          required: false, // ✅ LEFT JOIN
-          where: { userId: req.user.sub },
-          attributes: ["permission"],
-        },
-      ],
-      order: [["createdAt", "DESC"]],
-    });
+   const items = await Project.findAll({
+  where,
+  include: [
+    {
+      model: UserProject,
+      required: false,
+      where: { userId: req.user.sub },
+      attributes: ["permission"],
+    },
+  ],
+  order: [["createdAt", "DESC"]],
+  attributes: {
+    include: [
+      [sequelize.literal(`(SELECT COUNT(*) FROM project_comments pc WHERE pc."projectId" = "Project"."id")`), "commentCount"]
+    ]
+  }
+});
+
 
     const out = items.map((p) => {
       const json = p.toJSON();
@@ -330,12 +336,42 @@ router.get("/:id/comments", authRequired, async (req, res) => {
     const project = await Project.findByPk(projectId);
     if (!project) return res.status(404).json({ message: "Not found" });
 
-    const list = await ProjectComment.findAll({
+    // 1) on récupère tout (parents + replies)
+    const all = await ProjectComment.findAll({
       where: { projectId },
+      include: [{ model: User, attributes: ["id", "email"] }],
       order: [["createdAt", "ASC"]],
     });
 
-    return res.json(list);
+    // 2) build tree
+    const map = new Map();
+    const roots = [];
+
+    const toJson = (c) => {
+      const j = c.toJSON();
+      return {
+        ...j,
+        authorName: j.User?.email ?? "Inconnu",
+        replies: [],
+      };
+    };
+
+    for (const c of all) {
+      const j = toJson(c);
+      map.set(j.id, j);
+    }
+
+    for (const c of map.values()) {
+      if (c.parentId) {
+        const parent = map.get(c.parentId);
+        if (parent) parent.replies.push(c);
+        else roots.push(c); // sécurité
+      } else {
+        roots.push(c);
+      }
+    }
+
+    return res.json(roots);
   } catch (e) {
     console.error("PROJECT_COMMENTS_LIST_ERROR:", e);
     return res.status(500).json({ message: e.message || "Server error" });
@@ -399,6 +435,51 @@ router.post("/:id/share", authRequired, async (req, res) => {
     return res.json({ message: "User assigned", userId, projectId: req.params.id, permission: perm });
   } catch (e) {
     console.error("PROJECT_SHARE_ERROR:", e);
+    return res.status(500).json({ message: e.message || "Server error" });
+  }
+});
+// ✅ update comment (author or admin)
+router.put("/:id/comments/:commentId", authRequired, async (req, res) => {
+  try {
+    const { id: projectId, commentId } = req.params;
+    const body = reqStr(req.body?.body);
+
+    if (!body) return res.status(400).json({ message: "body est obligatoire" });
+
+    const c = await ProjectComment.findOne({ where: { id: commentId, projectId } });
+    if (!c) return res.status(404).json({ message: "Commentaire introuvable" });
+
+    // ✅ seul l'auteur ou admin/superadmin
+    const isAdmin = ["admin", "superadmin"].includes(req.user.role);
+    const isOwner = c.authorId === req.user.sub;
+    if (!isAdmin && !isOwner) return res.status(403).json({ message: "Accès interdit" });
+
+    await c.update({ body });
+    return res.json(c);
+  } catch (e) {
+    console.error("PROJECT_COMMENT_UPDATE_ERROR:", e);
+    return res.status(500).json({ message: e.message || "Server error" });
+  }
+});
+// ✅ delete comment (author or admin) + delete replies
+router.delete("/:id/comments/:commentId", authRequired, async (req, res) => {
+  try {
+    const { id: projectId, commentId } = req.params;
+
+    const c = await ProjectComment.findOne({ where: { id: commentId, projectId } });
+    if (!c) return res.status(404).json({ message: "Commentaire introuvable" });
+
+    const isAdmin = ["admin", "superadmin"].includes(req.user.role);
+    const isOwner = c.authorId === req.user.sub;
+    if (!isAdmin && !isOwner) return res.status(403).json({ message: "Accès interdit" });
+
+    // ✅ supprimer aussi les réponses
+    await ProjectComment.destroy({ where: { parentId: commentId } });
+    await c.destroy();
+
+    return res.json({ message: "Supprimé" });
+  } catch (e) {
+    console.error("PROJECT_COMMENT_DELETE_ERROR:", e);
     return res.status(500).json({ message: e.message || "Server error" });
   }
 });
