@@ -1,10 +1,15 @@
+// models/Project.js
 const { DataTypes } = require("sequelize");
 const { sequelize } = require("../db");
 
 const Project = sequelize.define(
   "Project",
   {
-    id: { type: DataTypes.UUID, defaultValue: DataTypes.UUIDV4, primaryKey: true },
+    id: {
+      type: DataTypes.UUID,
+      defaultValue: DataTypes.UUIDV4,
+      primaryKey: true,
+    },
 
     nomProjet: { type: DataTypes.STRING(200), allowNull: false },
     dateDemarrage: { type: DataTypes.DATEONLY, allowNull: false },
@@ -34,6 +39,30 @@ const Project = sequelize.define(
 
     entrepriseFluide: { type: DataTypes.STRING(200), allowNull: true },
     entrepriseElectricite: { type: DataTypes.STRING(200), allowNull: true },
+
+    // ✅ NOUVEAUX CHAMPS
+    pourcentageReussite: {
+      type: DataTypes.DECIMAL(5, 2), // ex: 75.50
+      allowNull: true,
+      validate: { min: 0, max: 100 },
+    },
+
+    validationStatut: {
+      type: DataTypes.ENUM("Validé", "Non validé"),
+      allowNull: true,
+      defaultValue: "Non validé",
+    },
+
+    typeProjet: {
+      type: DataTypes.STRING(120),
+      allowNull: true,
+    },
+
+    surfaceProspectee: {
+      type: DataTypes.DECIMAL(12, 2), // ex: 1200.50 (m²)
+      allowNull: true,
+      validate: { min: 0 },
+    },
   },
   {
     tableName: "projects",

@@ -1,8 +1,10 @@
+// routes/projects.routes.js
 const express = require("express");
 const { Op } = require("sequelize");
 const { User, Project, UserProject, ProjectComment } = require("../models/associations");
 const { authRequired } = require("../middleware/auth.middleware");
 const { sequelize } = require("../db");
+
 const router = express.Router();
 
 // ---------------- Helpers ----------------
@@ -25,6 +27,12 @@ function isValidLatLng(lat, lng) {
   const lo = Number(lng);
   if (!Number.isFinite(la) || !Number.isFinite(lo)) return false;
   return la >= -90 && la <= 90 && lo >= -180 && lo <= 180;
+}
+
+function toNumberOrNull(v) {
+  if (v === undefined || v === null || v === "") return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : NaN;
 }
 
 // ✅ normalize payload (flutter-friendly)
@@ -56,6 +64,11 @@ function normalizePayload(body = {}) {
     "adresse",
     "entrepriseFluide",
     "entrepriseElectricite",
+
+    // ✅ nouveaux champs string/enum
+    "validationStatut",
+    "typeProjet",
+    "localisationCommentaire",
   ];
 
   for (const f of stringFields) {
@@ -64,6 +77,10 @@ function normalizePayload(body = {}) {
       if (b[f] === "") b[f] = null;
     }
   }
+
+  // ✅ nouveaux champs numériques
+  if (b.pourcentageReussite !== undefined) b.pourcentageReussite = toNumberOrNull(b.pourcentageReussite);
+  if (b.surfaceProspectee !== undefined) b.surfaceProspectee = toNumberOrNull(b.surfaceProspectee);
 
   return b;
 }
@@ -122,10 +139,32 @@ function validatePayload(body, isUpdate = false) {
     }
   }
 
+  // ✅ validationStatut
+  if (body.validationStatut !== undefined && body.validationStatut !== null) {
+    const allowed = ["Validé", "Non validé"];
+    if (!allowed.includes(body.validationStatut)) {
+      errors.push("validationStatut invalide (Validé | Non validé)");
+    }
+  }
+
+  // ✅ pourcentageReussite
+  if (body.pourcentageReussite !== undefined && body.pourcentageReussite !== null) {
+    if (Number.isNaN(body.pourcentageReussite)) errors.push("pourcentageReussite doit être un nombre");
+    else if (body.pourcentageReussite < 0 || body.pourcentageReussite > 100) {
+      errors.push("pourcentageReussite doit être entre 0 et 100");
+    }
+  }
+
+  // ✅ surfaceProspectee
+  if (body.surfaceProspectee !== undefined && body.surfaceProspectee !== null) {
+    if (Number.isNaN(body.surfaceProspectee)) errors.push("surfaceProspectee doit être un nombre");
+    else if (body.surfaceProspectee < 0) errors.push("surfaceProspectee doit être >= 0");
+  }
+
   return errors;
 }
 
-// ✅ permission helper: retourne "viewer" si pas de lien
+// ✅ permission helper
 async function getPermission(user, projectId) {
   if (["admin", "superadmin"].includes(user.role)) return "owner";
 
@@ -137,7 +176,6 @@ async function getPermission(user, projectId) {
 }
 
 // ---------------- CREATE ----------------
-// creator becomes owner
 router.post("/", authRequired, async (req, res) => {
   try {
     const body = normalizePayload(req.body);
@@ -167,8 +205,16 @@ router.post("/", authRequired, async (req, res) => {
       latitude: body.latitude,
       longitude: body.longitude,
 
+      localisationCommentaire: body.localisationCommentaire || null,
+
       entrepriseFluide: body.entrepriseFluide || null,
       entrepriseElectricite: body.entrepriseElectricite || null,
+
+      // ✅ nouveaux champs
+      pourcentageReussite: body.pourcentageReussite ?? null,
+      validationStatut: body.validationStatut ?? "Non validé",
+      typeProjet: body.typeProjet ?? null,
+      surfaceProspectee: body.surfaceProspectee ?? null,
     });
 
     await UserProject.findOrCreate({
@@ -184,50 +230,68 @@ router.post("/", authRequired, async (req, res) => {
 });
 
 // ---------------- LIST ----------------
-// ✅ Tous les users voient TOUS les projets
-// ✅ permission = viewer si pas de lien user_projects, sinon editor/owner
 router.get("/", authRequired, async (req, res) => {
   try {
     const { q } = req.query;
     const where = {};
 
     if (typeof q === "string" && q.trim()) {
+      const s = q.trim();
       where[Op.or] = [
-        { nomProjet: { [Op.iLike]: `%${q.trim()}%` } },
-        { entreprise: { [Op.iLike]: `%${q.trim()}%` } },
-        { promoteur: { [Op.iLike]: `%${q.trim()}%` } },
-        { adresse: { [Op.iLike]: `%${q.trim()}%` } },
+        { nomProjet: { [Op.iLike]: `%${s}%` } },
+        { entreprise: { [Op.iLike]: `%${s}%` } },
+        { promoteur: { [Op.iLike]: `%${s}%` } },
+        { adresse: { [Op.iLike]: `%${s}%` } },
+        { typeProjet: { [Op.iLike]: `%${s}%` } }, // ✅ ajouté
+        { validationStatut: { [Op.iLike]: `%${s}%` } }, // ✅ ajouté
       ];
     }
 
     // admin => tout owner
     if (["admin", "superadmin"].includes(req.user.role)) {
-      const items = await Project.findAll({ where, order: [["createdAt", "DESC"]] });
+      const items = await Project.findAll({
+        where,
+        order: [["createdAt", "DESC"]],
+        attributes: {
+          include: [
+            [
+              sequelize.literal(
+                `(SELECT COUNT(*) FROM project_comments pc WHERE pc."projectId" = "Project"."id")`
+              ),
+              "commentCount",
+            ],
+          ],
+        },
+      });
       return res.json(items.map((p) => ({ ...p.toJSON(), permission: "owner" })));
     }
 
-   const items = await Project.findAll({
-  where,
-  include: [
-    {
-      model: UserProject,
-      required: false,
-      where: { userId: req.user.sub },
-      attributes: ["permission"],
-    },
-  ],
-  order: [["createdAt", "DESC"]],
-  attributes: {
-    include: [
-      [sequelize.literal(`(SELECT COUNT(*) FROM project_comments pc WHERE pc."projectId" = "Project"."id")`), "commentCount"]
-    ]
-  }
-});
-
+    const items = await Project.findAll({
+      where,
+      include: [
+        {
+          model: UserProject,
+          required: false,
+          where: { userId: req.user.sub },
+          attributes: ["permission"],
+        },
+      ],
+      order: [["createdAt", "DESC"]],
+      attributes: {
+        include: [
+          [
+            sequelize.literal(
+              `(SELECT COUNT(*) FROM project_comments pc WHERE pc."projectId" = "Project"."id")`
+            ),
+            "commentCount",
+          ],
+        ],
+      },
+    });
 
     const out = items.map((p) => {
       const json = p.toJSON();
-      const perm = (json.UserProjects?.[0]?.permission) || "viewer";
+      const perm = json.UserProjects?.[0]?.permission || "viewer";
       delete json.UserProjects;
       return { ...json, permission: perm };
     });
@@ -240,7 +304,6 @@ router.get("/", authRequired, async (req, res) => {
 });
 
 // ---------------- GET BY ID ----------------
-// ✅ viewer autorisé (permission par défaut viewer)
 router.get("/:id", authRequired, async (req, res) => {
   try {
     const item = await Project.findByPk(req.params.id);
@@ -255,7 +318,6 @@ router.get("/:id", authRequired, async (req, res) => {
 });
 
 // ---------------- UPDATE ----------------
-// viewer forbidden
 router.put("/:id", authRequired, async (req, res) => {
   try {
     const permission = await getPermission(req.user, req.params.id);
@@ -287,8 +349,15 @@ router.put("/:id", authRequired, async (req, res) => {
       "adresse",
       "latitude",
       "longitude",
+      "localisationCommentaire",
       "entrepriseFluide",
       "entrepriseElectricite",
+
+      // ✅ nouveaux champs
+      "pourcentageReussite",
+      "validationStatut",
+      "typeProjet",
+      "surfaceProspectee",
     ];
 
     const up = {};
@@ -305,7 +374,6 @@ router.put("/:id", authRequired, async (req, res) => {
 });
 
 // ---------------- DELETE ----------------
-// only owner/admin
 router.delete("/:id", authRequired, async (req, res) => {
   try {
     const permission = await getPermission(req.user, req.params.id);
@@ -328,7 +396,6 @@ router.delete("/:id", authRequired, async (req, res) => {
 });
 
 // ---------------- COMMENTS ----------------
-// ✅ list comments
 router.get("/:id/comments", authRequired, async (req, res) => {
   try {
     const projectId = req.params.id;
@@ -336,14 +403,12 @@ router.get("/:id/comments", authRequired, async (req, res) => {
     const project = await Project.findByPk(projectId);
     if (!project) return res.status(404).json({ message: "Not found" });
 
-    // 1) on récupère tout (parents + replies)
     const all = await ProjectComment.findAll({
       where: { projectId },
       include: [{ model: User, attributes: ["id", "email"] }],
       order: [["createdAt", "ASC"]],
     });
 
-    // 2) build tree
     const map = new Map();
     const roots = [];
 
@@ -365,7 +430,7 @@ router.get("/:id/comments", authRequired, async (req, res) => {
       if (c.parentId) {
         const parent = map.get(c.parentId);
         if (parent) parent.replies.push(c);
-        else roots.push(c); // sécurité
+        else roots.push(c);
       } else {
         roots.push(c);
       }
@@ -378,7 +443,6 @@ router.get("/:id/comments", authRequired, async (req, res) => {
   }
 });
 
-// ✅ add comment or reply
 router.post("/:id/comments", authRequired, async (req, res) => {
   try {
     const projectId = req.params.id;
@@ -412,7 +476,6 @@ router.post("/:id/comments", authRequired, async (req, res) => {
 });
 
 // ---------------- SHARE ----------------
-// owner/admin can assign user as viewer/editor (optionnel)
 router.post("/:id/share", authRequired, async (req, res) => {
   try {
     const { userId, permission } = req.body || {};
@@ -420,7 +483,6 @@ router.post("/:id/share", authRequired, async (req, res) => {
 
     const perm = ["viewer", "editor"].includes(permission) ? permission : "viewer";
 
-    // seul owner/admin peut partager
     const currentPerm = await getPermission(req.user, req.params.id);
     if (!["admin", "superadmin"].includes(req.user.role) && currentPerm !== "owner") {
       return res.status(403).json({ message: "Owner required" });
@@ -438,7 +500,8 @@ router.post("/:id/share", authRequired, async (req, res) => {
     return res.status(500).json({ message: e.message || "Server error" });
   }
 });
-// ✅ update comment (author or admin)
+
+// ✅ update comment
 router.put("/:id/comments/:commentId", authRequired, async (req, res) => {
   try {
     const { id: projectId, commentId } = req.params;
@@ -449,7 +512,6 @@ router.put("/:id/comments/:commentId", authRequired, async (req, res) => {
     const c = await ProjectComment.findOne({ where: { id: commentId, projectId } });
     if (!c) return res.status(404).json({ message: "Commentaire introuvable" });
 
-    // ✅ seul l'auteur ou admin/superadmin
     const isAdmin = ["admin", "superadmin"].includes(req.user.role);
     const isOwner = c.authorId === req.user.sub;
     if (!isAdmin && !isOwner) return res.status(403).json({ message: "Accès interdit" });
@@ -461,7 +523,8 @@ router.put("/:id/comments/:commentId", authRequired, async (req, res) => {
     return res.status(500).json({ message: e.message || "Server error" });
   }
 });
-// ✅ delete comment (author or admin) + delete replies
+
+// ✅ delete comment + replies
 router.delete("/:id/comments/:commentId", authRequired, async (req, res) => {
   try {
     const { id: projectId, commentId } = req.params;
@@ -473,7 +536,6 @@ router.delete("/:id/comments/:commentId", authRequired, async (req, res) => {
     const isOwner = c.authorId === req.user.sub;
     if (!isAdmin && !isOwner) return res.status(403).json({ message: "Accès interdit" });
 
-    // ✅ supprimer aussi les réponses
     await ProjectComment.destroy({ where: { parentId: commentId } });
     await c.destroy();
 
