@@ -4,6 +4,7 @@ const bcrypt = require("bcrypt");
 const rateLimit = require("express-rate-limit");
 const User = require("../models/User");
 const { signAccessToken, signRefreshToken, verifyRefreshToken } = require("../utils/tokens");
+const UserProfile = require("../models/UserProfile");
 
 const router = express.Router();
 
@@ -56,7 +57,18 @@ router.post("/signup", async (req, res) => {
       isActive: false,   // ✅ disabled par défaut
       role: "user",
     });
-
+    await UserProfile.create({
+  userId: user.id,
+  name: null,
+  designation: null,
+  birthday: null,
+  phone: null,
+  country: null,
+  state: null,
+  address: null,
+  about: null,
+  avatarUrl: null,
+});
     return res.status(201).json({
       message: "Account created. Waiting for admin activation.",
       user: { id: user.id, email: user.email, role: user.role, isActive: user.isActive },
