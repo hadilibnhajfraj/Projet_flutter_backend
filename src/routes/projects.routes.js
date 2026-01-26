@@ -35,6 +35,12 @@ function toNumberOrNull(v) {
   return Number.isFinite(n) ? n : NaN;
 }
 
+function isUUID(v) {
+  const s = String(v || "");
+  // UUID v1-v5
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(s);
+}
+
 // ✅ normalize payload (flutter-friendly)
 function normalizePayload(body = {}) {
   const b = { ...body };
@@ -64,8 +70,6 @@ function normalizePayload(body = {}) {
     "adresse",
     "entrepriseFluide",
     "entrepriseElectricite",
-
-    // ✅ nouveaux champs string/enum
     "validationStatut",
     "typeProjet",
     "localisationCommentaire",
@@ -78,7 +82,6 @@ function normalizePayload(body = {}) {
     }
   }
 
-  // ✅ nouveaux champs numériques
   if (b.pourcentageReussite !== undefined) b.pourcentageReussite = toNumberOrNull(b.pourcentageReussite);
   if (b.surfaceProspectee !== undefined) b.surfaceProspectee = toNumberOrNull(b.surfaceProspectee);
 
@@ -139,7 +142,6 @@ function validatePayload(body, isUpdate = false) {
     }
   }
 
-  // ✅ validationStatut
   if (body.validationStatut !== undefined && body.validationStatut !== null) {
     const allowed = ["Validé", "Non validé"];
     if (!allowed.includes(body.validationStatut)) {
@@ -147,7 +149,6 @@ function validatePayload(body, isUpdate = false) {
     }
   }
 
-  // ✅ pourcentageReussite
   if (body.pourcentageReussite !== undefined && body.pourcentageReussite !== null) {
     if (Number.isNaN(body.pourcentageReussite)) errors.push("pourcentageReussite doit être un nombre");
     else if (body.pourcentageReussite < 0 || body.pourcentageReussite > 100) {
@@ -155,7 +156,6 @@ function validatePayload(body, isUpdate = false) {
     }
   }
 
-  // ✅ surfaceProspectee
   if (body.surfaceProspectee !== undefined && body.surfaceProspectee !== null) {
     if (Number.isNaN(body.surfaceProspectee)) errors.push("surfaceProspectee doit être un nombre");
     else if (body.surfaceProspectee < 0) errors.push("surfaceProspectee doit être >= 0");
@@ -174,6 +174,401 @@ async function getPermission(user, projectId) {
 
   return link?.permission || "viewer";
 }
+
+/* ============================================================
+   ✅ KPI ROUTES (IMPORTANT: BEFORE "/:id")
+   ============================================================ */
+
+router.get("/user-kpi", authRequired, async (req, res) => {
+  try {
+    const totalUsers = await User.count();
+    const activeUsers = await User.count({ where: { isActive: true } });
+    const activePercentage = totalUsers === 0 ? 0 : Number(((activeUsers / totalUsers) * 100).toFixed(2));
+    res.json({ activeUsers, totalUsers, activePercentage });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+router.get("/kpi/validation-summary", authRequired, async (req, res) => {
+  try {
+    const totalProjects = await Project.count();
+    const validatedProjects = await Project.count({ where: { validationStatut: "Validé" } });
+
+    const validatedPercentage =
+      totalProjects === 0 ? 0 : Number(((validatedProjects / totalProjects) * 100).toFixed(2));
+
+    res.json({ totalProjects, validatedProjects, validatedPercentage });
+  } catch (err) {
+    res.status(500).json({ error: "KPI_VALIDATION_SUMMARY_ERROR", details: err.message });
+  }
+});
+
+router.get("/kpi/validation-by-surface", authRequired, async (req, res) => {
+  try {
+    const rows = await Project.findAll({
+      attributes: [
+        "surfaceProspectee",
+        [sequelize.fn("COUNT", sequelize.col("id")), "totalProjects"],
+        [
+          sequelize.fn(
+            "SUM",
+            sequelize.literal(`CASE WHEN "validationStatut" = 'Validé' THEN 1 ELSE 0 END`)
+          ),
+          "validatedProjects",
+        ],
+        // ✅ moyenne du pourcentage de réussite
+        [
+          sequelize.fn("AVG", sequelize.cast(sequelize.col("pourcentageReussite"), "float")),
+          "avgReussite",
+        ],
+      ],
+      group: ["surfaceProspectee"],
+      order: [[sequelize.col("surfaceProspectee"), "ASC"]],
+      raw: true,
+    });
+
+    const result = rows.map((r) => {
+      const total = Number(r.totalProjects || 0);
+      const validated = Number(r.validatedProjects || 0);
+      const avgReussite = r.avgReussite == null ? null : Number(Number(r.avgReussite).toFixed(2));
+
+      return {
+        surfaceProspectee: r.surfaceProspectee,
+        totalProjects: total,
+        validatedProjects: validated,
+
+        // ✅ ton ancien % (validationStatut)
+        validatedPercentage: total === 0 ? 0 : Number(((validated / total) * 100).toFixed(2)),
+
+        // ✅ le vrai % que tu veux (pourcentageReussite)
+        avgReussite,
+      };
+    });
+
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: "KPI_VALIDATION_BY_SURFACE_ERROR", details: err.message });
+  }
+});
+
+
+router.get("/kpi/validation-by-location", authRequired, async (req, res) => {
+  try {
+    // précision clustering (3 => ~110m). change à 2 si tu veux regrouper plus.
+    const PRECISION = 3;
+
+    const latExpr = sequelize.literal(`ROUND(CAST("latitude" AS numeric), ${PRECISION})`);
+    const lngExpr = sequelize.literal(`ROUND(CAST("longitude" AS numeric), ${PRECISION})`);
+
+    const zoneExpr = sequelize.literal(`
+      COALESCE(NULLIF(TRIM("adresse"), ''), NULLIF(TRIM("localisationCommentaire"), ''), '')
+    `);
+
+    const rows = await Project.findAll({
+      attributes: [
+        [latExpr, "lat"],
+        [lngExpr, "lng"],
+        [sequelize.fn("COUNT", sequelize.col("id")), "totalProjects"],
+        [
+          sequelize.fn(
+            "SUM",
+            sequelize.literal(`CASE WHEN "validationStatut" = 'Validé' THEN 1 ELSE 0 END`)
+          ),
+          "validatedProjects",
+        ],
+        [zoneExpr, "zoneFromDb"],
+      ],
+      group: [latExpr, lngExpr, zoneExpr],
+      raw: true,
+    });
+
+    const result = rows.map((r) => {
+      const total = Number(r.totalProjects || 0);
+      const validated = Number(r.validatedProjects || 0);
+
+      const lat = Number(r.lat);
+      const lng = Number(r.lng);
+
+      // zone: si vide => fallback lat,lng
+      const zone = (r.zoneFromDb && String(r.zoneFromDb).trim())
+        ? String(r.zoneFromDb).trim()
+        : `${lat}, ${lng}`;
+
+      return {
+        zone,
+        latitude: lat,
+        longitude: lng,
+        totalProjects: total,
+        validatedProjects: validated,
+        validatedPercentage: total === 0 ? 0 : Number(((validated / total) * 100).toFixed(2)),
+      };
+    });
+
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: "KPI_VALIDATION_BY_LOCATION_ERROR", details: err.message });
+  }
+});
+
+
+router.get("/kpi/validation-status-count", authRequired, async (req, res) => {
+  try {
+    const rows = await Project.findAll({
+      attributes: [
+        "validationStatut",
+        [sequelize.fn("COUNT", sequelize.col("id")), "projectCount"],
+      ],
+      group: ["validationStatut"],
+      raw: true,
+    });
+
+    res.json(
+      rows.map((r) => ({
+        validationStatut: r.validationStatut ?? "Non défini",
+        projectCount: Number(r.projectCount || 0),
+      }))
+    );
+  } catch (err) {
+    res.status(500).json({ error: "KPI_VALIDATION_STATUS_COUNT_ERROR", details: err.message });
+  }
+});
+router.get("/kpi/dashboard", authRequired, async (req, res) => {
+  try {
+    const totalProjects = await Project.count();
+    const validatedProjects = await Project.count({
+      where: { validationStatut: "Validé" },
+    });
+    const nonValidatedProjects = totalProjects - validatedProjects;
+
+    const validatedPercentage =
+      totalProjects === 0
+        ? 0
+        : Number(((validatedProjects / totalProjects) * 100).toFixed(2));
+
+    // ✅ Validation status count
+    const validationStatusCount = await Project.findAll({
+      attributes: [
+        "validationStatut",
+        [sequelize.fn("COUNT", sequelize.col("id")), "projectCount"],
+      ],
+      group: ["validationStatut"],
+      raw: true,
+    });
+
+    // ✅ Validation by surface
+    const bySurfaceRows = await Project.findAll({
+      attributes: [
+        "surfaceProspectee",
+        [sequelize.fn("COUNT", sequelize.col("id")), "totalProjects"],
+        [
+          sequelize.fn(
+            "SUM",
+            sequelize.literal(
+              `CASE WHEN "validationStatut" = 'Validé' THEN 1 ELSE 0 END`
+            )
+          ),
+          "validatedProjects",
+        ],
+      ],
+      group: ["surfaceProspectee"],
+      order: [[sequelize.col("surfaceProspectee"), "ASC"]],
+      raw: true,
+    });
+
+    const bySurface = bySurfaceRows.map((r) => {
+      const total = Number(r.totalProjects || 0);
+      const validated = Number(r.validatedProjects || 0);
+      return {
+        surfaceProspectee: r.surfaceProspectee,
+        totalProjects: total,
+        validatedProjects: validated,
+        validatedPercentage:
+          total === 0 ? 0 : Number(((validated / total) * 100).toFixed(2)),
+      };
+    });
+
+    // ✅ Map projects
+    const mapProjects = await Project.findAll({
+      attributes: [
+        "id",
+        "nomProjet",
+        "latitude",
+        "longitude",
+        "validationStatut",
+        "statut",
+        "adresse",
+        "localisationCommentaire",
+        "createdAt",
+      ],
+      where: {
+        latitude: { [Op.ne]: null },
+        longitude: { [Op.ne]: null },
+      },
+      order: [["createdAt", "DESC"]],
+      limit: 200,
+      raw: true,
+    });
+
+    // ✅ Projects per user
+    const projectsPerUser = await UserProject.findAll({
+      attributes: [
+        "userId",
+        [sequelize.fn("COUNT", sequelize.col("projectId")), "projectsCount"],
+      ],
+      group: ["userId"],
+      raw: true,
+    });
+
+    const userIds = projectsPerUser.map((x) => x.userId).filter(Boolean);
+
+    // ✅ IMPORTANT: sélectionner uniquement les colonnes existantes dans User
+    const wanted = [
+      "id",
+      "email",
+      "username",
+      "firstname",
+      "lastname",
+      "firstName",
+      "lastName",
+      "prenom",
+      "nom",
+      "name",
+      "fullName",
+    ];
+    const safeAttrs = wanted.filter((a) => !!User.rawAttributes?.[a]);
+
+    const users = userIds.length
+      ? await User.findAll({
+          where: { id: userIds },
+          attributes: safeAttrs.length ? safeAttrs : ["id"], // fallback
+          raw: true,
+        })
+      : [];
+
+    const userMap = new Map(users.map((u) => [u.id, u]));
+
+    const displayName = (u) =>
+      u.firstname ||
+      u.firstName ||
+      u.prenom ||
+      u.lastname ||
+      u.lastName ||
+      u.nom ||
+      u.username ||
+      u.name ||
+      u.fullName ||
+      u.email ||
+      "Inconnu";
+
+    const topUsers = projectsPerUser
+      .map((x) => {
+        const u = userMap.get(x.userId);
+        return {
+          userId: x.userId,
+          projectsCount: Number(x.projectsCount || 0),
+          user: u ? { ...u, displayName: displayName(u) } : null,
+        };
+      })
+      .sort((a, b) => b.projectsCount - a.projectsCount)
+      .slice(0, 5);
+
+    // ✅ latest projects
+    const latestProjects = await Project.findAll({
+      order: [["createdAt", "DESC"]],
+      limit: 5,
+      attributes: [
+        "id",
+        "nomProjet",
+        "validationStatut",
+        "statut",
+        "createdAt",
+        "latitude",
+        "longitude",
+      ],
+      raw: true,
+    });
+
+    return res.json({
+      summary: {
+        totalProjects,
+        validatedProjects,
+        nonValidatedProjects,
+        validatedPercentage,
+      },
+      validationStatusCount: validationStatusCount.map((r) => ({
+        validationStatut: r.validationStatut ?? "Non défini",
+        projectCount: Number(r.projectCount || 0),
+      })),
+      bySurface,
+      mapProjects,
+      topUsers,
+      latestProjects,
+    });
+  } catch (err) {
+    console.error("KPI_DASHBOARD_ERROR:", err);
+    return res
+      .status(500)
+      .json({ error: "KPI_DASHBOARD_ERROR", details: err.message });
+  }
+});
+
+
+router.get("/kpi/map-projects", authRequired, async (req, res) => {
+  try {
+    const items = await Project.findAll({
+      attributes: [
+        "id",
+        "nomProjet",
+        "latitude",
+        "longitude",
+        "validationStatut",
+        "statut",
+        "adresse",
+        "localisationCommentaire",
+        "createdAt",
+      ],
+      where: {
+        latitude: { [Op.ne]: null },
+        longitude: { [Op.ne]: null },
+      },
+      order: [["createdAt", "DESC"]],
+      raw: true,
+    });
+
+    res.json(items);
+  } catch (err) {
+    res.status(500).json({ error: "KPI_MAP_PROJECTS_ERROR", details: err.message });
+  }
+});
+// routes/projects.routes.js
+
+// Nouvelle route pour récupérer le nombre de projets par statut
+router.get("/kpi/projects-by-status", authRequired, async (req, res) => {
+  try {
+    const rows = await Project.findAll({
+      attributes: [
+        "statut", // Le statut des projets
+        [sequelize.fn("COUNT", sequelize.col("id")), "projectCount"], // Nombre de projets pour chaque statut
+      ],
+      group: ["statut"], // Groupé par statut
+      raw: true,
+    });
+
+    const result = rows.map((r) => ({
+      statut: r.statut, // "En cours", "Préparation", ou "Terminé"
+      projectCount: Number(r.projectCount || 0), // Nombre de projets pour chaque statut
+    }));
+
+    res.json(result); // Retourne les résultats au frontend
+  } catch (err) {
+    res.status(500).json({ error: "KPI_PROJECTS_BY_STATUS_ERROR", details: err.message });
+  }
+});
+
+/* ============================================================
+   ✅ CRUD ROUTES
+   ============================================================ */
 
 // ---------------- CREATE ----------------
 router.post("/", authRequired, async (req, res) => {
@@ -210,7 +605,6 @@ router.post("/", authRequired, async (req, res) => {
       entrepriseFluide: body.entrepriseFluide || null,
       entrepriseElectricite: body.entrepriseElectricite || null,
 
-      // ✅ nouveaux champs
       pourcentageReussite: body.pourcentageReussite ?? null,
       validationStatut: body.validationStatut ?? "Non validé",
       typeProjet: body.typeProjet ?? null,
@@ -242,12 +636,11 @@ router.get("/", authRequired, async (req, res) => {
         { entreprise: { [Op.iLike]: `%${s}%` } },
         { promoteur: { [Op.iLike]: `%${s}%` } },
         { adresse: { [Op.iLike]: `%${s}%` } },
-        { typeProjet: { [Op.iLike]: `%${s}%` } }, // ✅ ajouté
-        { validationStatut: { [Op.iLike]: `%${s}%` } }, // ✅ ajouté
+        { typeProjet: { [Op.iLike]: `%${s}%` } },
+        { validationStatut: { [Op.iLike]: `%${s}%` } },
       ];
     }
 
-    // admin => tout owner
     if (["admin", "superadmin"].includes(req.user.role)) {
       const items = await Project.findAll({
         where,
@@ -306,6 +699,10 @@ router.get("/", authRequired, async (req, res) => {
 // ---------------- GET BY ID ----------------
 router.get("/:id", authRequired, async (req, res) => {
   try {
+    if (!isUUID(req.params.id)) {
+      return res.status(400).json({ message: "Invalid project id (UUID required)" });
+    }
+
     const item = await Project.findByPk(req.params.id);
     if (!item) return res.status(404).json({ message: "Not found" });
 
@@ -320,6 +717,10 @@ router.get("/:id", authRequired, async (req, res) => {
 // ---------------- UPDATE ----------------
 router.put("/:id", authRequired, async (req, res) => {
   try {
+    if (!isUUID(req.params.id)) {
+      return res.status(400).json({ message: "Invalid project id (UUID required)" });
+    }
+
     const permission = await getPermission(req.user, req.params.id);
 
     if (!["admin", "superadmin"].includes(req.user.role) && !["editor", "owner"].includes(permission)) {
@@ -352,8 +753,6 @@ router.put("/:id", authRequired, async (req, res) => {
       "localisationCommentaire",
       "entrepriseFluide",
       "entrepriseElectricite",
-
-      // ✅ nouveaux champs
       "pourcentageReussite",
       "validationStatut",
       "typeProjet",
@@ -376,6 +775,10 @@ router.put("/:id", authRequired, async (req, res) => {
 // ---------------- DELETE ----------------
 router.delete("/:id", authRequired, async (req, res) => {
   try {
+    if (!isUUID(req.params.id)) {
+      return res.status(400).json({ message: "Invalid project id (UUID required)" });
+    }
+
     const permission = await getPermission(req.user, req.params.id);
 
     if (!["admin", "superadmin"].includes(req.user.role) && permission !== "owner") {
@@ -399,6 +802,7 @@ router.delete("/:id", authRequired, async (req, res) => {
 router.get("/:id/comments", authRequired, async (req, res) => {
   try {
     const projectId = req.params.id;
+    if (!isUUID(projectId)) return res.status(400).json({ message: "Invalid project id (UUID required)" });
 
     const project = await Project.findByPk(projectId);
     if (!project) return res.status(404).json({ message: "Not found" });
@@ -414,17 +818,10 @@ router.get("/:id/comments", authRequired, async (req, res) => {
 
     const toJson = (c) => {
       const j = c.toJSON();
-      return {
-        ...j,
-        authorName: j.User?.email ?? "Inconnu",
-        replies: [],
-      };
+      return { ...j, authorName: j.User?.email ?? "Inconnu", replies: [] };
     };
 
-    for (const c of all) {
-      const j = toJson(c);
-      map.set(j.id, j);
-    }
+    for (const c of all) map.set(c.id, toJson(c));
 
     for (const c of map.values()) {
       if (c.parentId) {
@@ -446,6 +843,8 @@ router.get("/:id/comments", authRequired, async (req, res) => {
 router.post("/:id/comments", authRequired, async (req, res) => {
   try {
     const projectId = req.params.id;
+    if (!isUUID(projectId)) return res.status(400).json({ message: "Invalid project id (UUID required)" });
+
     const body = reqStr(req.body?.body);
     const parentId = req.body?.parentId || null;
 
@@ -455,10 +854,9 @@ router.post("/:id/comments", authRequired, async (req, res) => {
     if (!project) return res.status(404).json({ message: "Not found" });
 
     if (parentId) {
+      if (!isUUID(parentId)) return res.status(400).json({ message: "parentId invalide (UUID required)" });
       const parent = await ProjectComment.findByPk(parentId);
-      if (!parent || parent.projectId !== projectId) {
-        return res.status(400).json({ message: "parentId invalide" });
-      }
+      if (!parent || parent.projectId !== projectId) return res.status(400).json({ message: "parentId invalide" });
     }
 
     const c = await ProjectComment.create({
@@ -478,23 +876,26 @@ router.post("/:id/comments", authRequired, async (req, res) => {
 // ---------------- SHARE ----------------
 router.post("/:id/share", authRequired, async (req, res) => {
   try {
+    const projectId = req.params.id;
+    if (!isUUID(projectId)) return res.status(400).json({ message: "Invalid project id (UUID required)" });
+
     const { userId, permission } = req.body || {};
     if (!userId) return res.status(400).json({ message: "userId is required" });
 
     const perm = ["viewer", "editor"].includes(permission) ? permission : "viewer";
 
-    const currentPerm = await getPermission(req.user, req.params.id);
+    const currentPerm = await getPermission(req.user, projectId);
     if (!["admin", "superadmin"].includes(req.user.role) && currentPerm !== "owner") {
       return res.status(403).json({ message: "Owner required" });
     }
 
     await UserProject.upsert({
       userId,
-      projectId: req.params.id,
+      projectId,
       permission: perm,
     });
 
-    return res.json({ message: "User assigned", userId, projectId: req.params.id, permission: perm });
+    return res.json({ message: "User assigned", userId, projectId, permission: perm });
   } catch (e) {
     console.error("PROJECT_SHARE_ERROR:", e);
     return res.status(500).json({ message: e.message || "Server error" });
@@ -505,8 +906,10 @@ router.post("/:id/share", authRequired, async (req, res) => {
 router.put("/:id/comments/:commentId", authRequired, async (req, res) => {
   try {
     const { id: projectId, commentId } = req.params;
-    const body = reqStr(req.body?.body);
+    if (!isUUID(projectId)) return res.status(400).json({ message: "Invalid project id (UUID required)" });
+    if (!isUUID(commentId)) return res.status(400).json({ message: "Invalid comment id (UUID required)" });
 
+    const body = reqStr(req.body?.body);
     if (!body) return res.status(400).json({ message: "body est obligatoire" });
 
     const c = await ProjectComment.findOne({ where: { id: commentId, projectId } });
@@ -528,6 +931,8 @@ router.put("/:id/comments/:commentId", authRequired, async (req, res) => {
 router.delete("/:id/comments/:commentId", authRequired, async (req, res) => {
   try {
     const { id: projectId, commentId } = req.params;
+    if (!isUUID(projectId)) return res.status(400).json({ message: "Invalid project id (UUID required)" });
+    if (!isUUID(commentId)) return res.status(400).json({ message: "Invalid comment id (UUID required)" });
 
     const c = await ProjectComment.findOne({ where: { id: commentId, projectId } });
     if (!c) return res.status(404).json({ message: "Commentaire introuvable" });

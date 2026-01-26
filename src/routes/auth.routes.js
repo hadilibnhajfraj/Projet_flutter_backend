@@ -5,8 +5,129 @@ const rateLimit = require("express-rate-limit");
 const User = require("../models/User");
 const { signAccessToken, signRefreshToken, verifyRefreshToken } = require("../utils/tokens");
 const UserProfile = require("../models/UserProfile");
-
+// routes/auth.routes.js (ajoute en haut si pas déjà)
+const crypto = require("crypto");
+const { sendMail } = require("../utils/mailer");
+const { generateResetToken } = require("../utils/passwordReset");
 const router = express.Router();
+// (optionnel) base URL frontend pour construire le lien
+const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:57745";
+
+const forgotLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// POST /auth/forgot-password
+router.post("/forgot-password", forgotLimiter, async (req, res) => {
+  try {
+    const { email } = req.body || {};
+    if (!isValidEmail(email)) {
+      // réponse neutre (évite l’enumération d’emails)
+      return res.json({ message: "If the email exists, a reset link has been sent." });
+    }
+
+    const cleanEmail = email.toLowerCase().trim();
+    const user = await User.findOne({ where: { email: cleanEmail } });
+
+    // réponse neutre même si pas trouvé
+    if (!user) {
+      return res.json({ message: "If the email exists, a reset link has been sent." });
+    }
+
+    const { token, tokenHash } = generateResetToken();
+
+    // expire dans 30 minutes (tu peux changer)
+    const expiresAt = new Date(Date.now() + 30 * 60 * 1000);
+
+    await user.update({
+      resetPasswordTokenHash: tokenHash,
+      resetPasswordExpiresAt: expiresAt,
+    });
+
+    // lien reset (frontend)
+    const resetLink = `${FRONTEND_URL}/reset-password?token=${token}&email=${encodeURIComponent(cleanEmail)}`;
+
+    const subject = "Reset your password";
+    const text = `You requested a password reset. Open this link: ${resetLink} (valid 30 minutes).`;
+    const html = `
+      <div style="font-family:Arial,sans-serif;line-height:1.5">
+        <h2>Password reset</h2>
+        <p>You requested a password reset.</p>
+        <p>
+          <a href="${resetLink}" style="display:inline-block;padding:10px 14px;border-radius:8px;background:#0F4FA8;color:#fff;text-decoration:none">
+            Reset password
+          </a>
+        </p>
+        <p style="color:#555">This link is valid for 30 minutes.</p>
+        <p style="color:#999;font-size:12px">If you did not request this, ignore this email.</p>
+      </div>
+    `;
+
+    // envoi email
+    await sendMail({ to: cleanEmail, subject, text, html });
+
+    return res.json({ message: "If the email exists, a reset link has been sent." });
+  } catch (e) {
+    console.error("FORGOT_PASSWORD_ERROR:", e);
+    // réponse neutre
+    return res.json({ message: "If the email exists, a reset link has been sent." });
+  }
+});
+
+function isValidToken(t) {
+  return typeof t === "string" && t.length >= 20 && t.length <= 200;
+}
+
+// POST /auth/reset-password
+router.post("/reset-password", async (req, res) => {
+  try {
+    const { email, token, newPassword } = req.body || {};
+
+    if (!isValidEmail(email)) return res.status(400).json({ message: "Invalid email" });
+    if (!isValidToken(token)) return res.status(400).json({ message: "Invalid token" });
+    if (!isStrongPassword(newPassword)) return res.status(400).json({ message: "Weak password (min 8 chars)" });
+
+    const cleanEmail = email.toLowerCase().trim();
+
+    // hash token reçu pour comparer avec DB
+    const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
+
+    const user = await User.findOne({ where: { email: cleanEmail } });
+    if (!user || !user.resetPasswordTokenHash || !user.resetPasswordExpiresAt) {
+      return res.status(400).json({ message: "Invalid or expired reset token" });
+    }
+
+    // expire ?
+    if (new Date(user.resetPasswordExpiresAt).getTime() < Date.now()) {
+      return res.status(400).json({ message: "Invalid or expired reset token" });
+    }
+
+    // match ?
+    if (user.resetPasswordTokenHash !== tokenHash) {
+      return res.status(400).json({ message: "Invalid or expired reset token" });
+    }
+
+    // update password + invalidate reset token + invalidate refresh
+    const passwordHash = await bcrypt.hash(newPassword, 12);
+
+    await user.update({
+      passwordHash,
+      resetPasswordTokenHash: null,
+      resetPasswordExpiresAt: null,
+      refreshTokenHash: null, // force re-login partout
+    });
+
+    return res.json({ message: "Password updated successfully. Please sign in again." });
+  } catch (e) {
+    console.error("RESET_PASSWORD_ERROR:", e);
+    return res.status(500).json({ message: "Server error" });
+  }
+});
+
+
 
 const signinLimiter = rateLimit({
   windowMs: 10 * 60 * 1000,

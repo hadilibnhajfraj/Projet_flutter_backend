@@ -18,7 +18,10 @@ const User = sequelize.define(
       defaultValue: "user",
     },
 
-    refreshTokenHash: { type: DataTypes.STRING(200), allowNull: true },
+    // models/User.js (extrait)
+resetPasswordTokenHash: { type: DataTypes.STRING, allowNull: true },
+resetPasswordExpiresAt: { type: DataTypes.DATE, allowNull: true },
+
   },
   {
     tableName: "users",
