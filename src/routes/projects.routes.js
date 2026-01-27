@@ -513,7 +513,6 @@ router.get("/kpi/dashboard", authRequired, async (req, res) => {
   }
 });
 
-
 router.get("/kpi/map-projects", authRequired, async (req, res) => {
   try {
     const items = await Project.findAll({
@@ -541,7 +540,6 @@ router.get("/kpi/map-projects", authRequired, async (req, res) => {
     res.status(500).json({ error: "KPI_MAP_PROJECTS_ERROR", details: err.message });
   }
 });
-// routes/projects.routes.js
 
 // Nouvelle route pour récupérer le nombre de projets par statut
 router.get("/kpi/projects-by-status", authRequired, async (req, res) => {
@@ -590,6 +588,191 @@ router.get("/kpi/projects-by-status-and-date", authRequired, async (req, res) =>
     res.json(result); // Retourner les résultats au frontend
   } catch (err) {
     res.status(500).json({ error: "KPI_PROJECTS_BY_STATUS_AND_DATE_ERROR", details: err.message });
+  }
+});
+// ✅ Projets groupés par mois (dateDemarrage) avec % validé + moyenne pourcentageReussite
+router.get("/kpi/projects-by-month", authRequired, async (req, res) => {
+  try {
+    // monthKey: 2026-01, 2026-02 ...
+    const rows = await Project.findAll({
+      attributes: [
+        [sequelize.fn("to_char", sequelize.col("dateDemarrage"), "YYYY-MM"), "monthKey"],
+        [sequelize.fn("COUNT", sequelize.col("id")), "totalProjects"],
+        [
+          sequelize.fn("SUM", sequelize.literal(`CASE WHEN "validationStatut" = 'Validé' THEN 1 ELSE 0 END`)),
+          "validatedProjects",
+        ],
+        [sequelize.fn("AVG", sequelize.cast(sequelize.col("pourcentageReussite"), "float")), "avgReussite"],
+      ],
+      group: [sequelize.fn("to_char", sequelize.col("dateDemarrage"), "YYYY-MM")],
+      order: [[sequelize.fn("to_char", sequelize.col("dateDemarrage"), "YYYY-MM"), "ASC"]],
+      raw: true,
+    });
+
+    const result = rows.map((r) => {
+      const total = Number(r.totalProjects || 0);
+      const validated = Number(r.validatedProjects || 0);
+      const validatedPercentage = total === 0 ? 0 : Number(((validated / total) * 100).toFixed(2));
+      const avgReussite = r.avgReussite == null ? 0 : Number(Number(r.avgReussite).toFixed(2));
+
+      return {
+        month: String(r.monthKey),            // "2026-01"
+        totalProjects: total,
+        validatedProjects: validated,
+        validatedPercentage,
+        avgReussite,
+      };
+    });
+
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: "KPI_PROJECTS_BY_MONTH_ERROR", details: err.message });
+  }
+});
+router.get("/kpi/latest-projects", authRequired, async (req, res) => {
+  try {
+    const items = await Project.findAll({
+      order: [["createdAt", "DESC"]],
+      limit: 15,
+      attributes: ["id", "nomProjet", "dateDemarrage", "validationStatut", "statut", "createdAt"],
+      include: [
+        {
+          model: UserProject,
+          required: false,
+          attributes: ["permission", "userId"],
+          where: { permission: "owner" },
+          include: [{ model: User, attributes: ["id", "username", "email"] }],
+        },
+      ],
+    });
+
+    const out = items.map((p) => {
+      const j = p.toJSON();
+      const ownerLink = j.UserProjects?.[0];
+      const ownerUser = ownerLink?.User;
+
+      return {
+        ...j,
+        owner: ownerUser
+          ? { id: ownerUser.id, username: ownerUser.username, email: ownerUser.email }
+          : null,
+        permission: (["admin","superadmin"].includes(req.user.role)) ? "owner" : "viewer",
+        // NOTE: si tu veux vraie permission utilisateur connecté, fais une query UserProject sur req.user.sub
+      };
+    });
+
+    res.json(out);
+  } catch (err) {
+    res.status(500).json({ error: "KPI_LATEST_PROJECTS_ERROR", details: err.message });
+  }
+});
+// ---------------- LIST ----------------
+// ✅ LIST projects + users linked (owner + members)
+// GET /projects/projectsusers?q=...
+router.get("/projectsusers", authRequired, async (req, res) => {
+  try {
+    const { q } = req.query;
+    const where = {};
+
+    if (typeof q === "string" && q.trim()) {
+      const s = q.trim();
+      where[Op.or] = [
+        { nomProjet: { [Op.iLike]: `%${s}%` } },
+        { entreprise: { [Op.iLike]: `%${s}%` } },
+        { promoteur: { [Op.iLike]: `%${s}%` } },
+        { adresse: { [Op.iLike]: `%${s}%` } },
+        { typeProjet: { [Op.iLike]: `%${s}%` } },
+        { validationStatut: { [Op.iLike]: `%${s}%` } },
+      ];
+    }
+
+    // ✅ safe user attrs (avoid "username doesn't exist")
+    const wanted = [
+      "id",
+      "email",
+      "username",
+      "firstname",
+      "lastname",
+      "firstName",
+      "lastName",
+      "prenom",
+      "nom",
+      "name",
+      "fullName",
+    ];
+    const safeAttrs = wanted.filter((a) => !!User.rawAttributes?.[a]);
+    const userAttrs = safeAttrs.length ? safeAttrs : ["id", "email"];
+
+    const items = await Project.findAll({
+      where,
+      include: [
+        {
+          model: UserProject,
+          required: false,
+          attributes: ["id", "userId", "projectId", "permission", "createdAt"],
+          include: [
+            {
+              model: User,
+              attributes: userAttrs,
+            },
+          ],
+        },
+      ],
+      order: [["createdAt", "DESC"]],
+    });
+
+    const displayName = (u) =>
+      u?.firstname ||
+      u?.firstName ||
+      u?.prenom ||
+      u?.lastname ||
+      u?.lastName ||
+      u?.nom ||
+      u?.username ||
+      u?.name ||
+      u?.fullName ||
+      u?.email ||
+      "Inconnu";
+
+    const out = items.map((p) => {
+      const json = p.toJSON();
+
+      // all linked users (members)
+      const members =
+        (json.UserProjects || [])
+          .map((up) => ({
+            userId: up.userId,
+            permission: up.permission,
+            user: up.User
+              ? {
+                  id: up.User.id,
+                  email: up.User.email,
+                  displayName: displayName(up.User),
+                }
+              : null,
+          }))
+          .filter((x) => x.user) || [];
+
+      // owner = first userProject with permission owner
+      const owner = members.find((m) => m.permission === "owner") || null;
+
+      // clean
+      delete json.UserProjects;
+
+      return {
+        ...json,
+        owner: owner ? owner.user : null,
+        members: members.map((m) => ({
+          permission: m.permission,
+          ...m.user,
+        })),
+      };
+    });
+
+    return res.json(out);
+  } catch (e) {
+    console.error("PROJECTS_USERS_LIST_ERROR:", e);
+    return res.status(500).json({ message: e.message || "Server error" });
   }
 });
 
