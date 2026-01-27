@@ -565,6 +565,33 @@ router.get("/kpi/projects-by-status", authRequired, async (req, res) => {
     res.status(500).json({ error: "KPI_PROJECTS_BY_STATUS_ERROR", details: err.message });
   }
 });
+// Nouvelle route pour récupérer les projets par validationStatut et dateDemarrage
+router.get("/kpi/projects-by-status-and-date", authRequired, async (req, res) => {
+  try {
+    // Récupérer les projets groupés par validationStatut et dateDemarrage
+    const rows = await Project.findAll({
+      attributes: [
+        "validationStatut", // Le statut de validation
+        "dateDemarrage", // La date de démarrage
+        [sequelize.fn("COUNT", sequelize.col("id")), "projectCount"], // Nombre de projets pour chaque combinaison
+      ],
+      group: ["validationStatut", "dateDemarrage"], // Grouper par validationStatut et dateDemarrage
+      order: [["dateDemarrage", "ASC"], ["validationStatut", "ASC"]], // Trier par dateDemarrage et validationStatut
+      raw: true,
+    });
+
+    // Transformer les résultats
+    const result = rows.map((r) => ({
+      validationStatut: r.validationStatut, // "Validé" ou "Non validé"
+      dateDemarrage: r.dateDemarrage, // La date de démarrage
+      projectCount: Number(r.projectCount || 0), // Nombre de projets pour chaque combinaison
+    }));
+
+    res.json(result); // Retourner les résultats au frontend
+  } catch (err) {
+    res.status(500).json({ error: "KPI_PROJECTS_BY_STATUS_AND_DATE_ERROR", details: err.message });
+  }
+});
 
 /* ============================================================
    ✅ CRUD ROUTES
