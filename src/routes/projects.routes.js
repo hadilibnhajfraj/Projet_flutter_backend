@@ -1029,17 +1029,18 @@ router.delete("/:id", authRequired, async (req, res) => {
       return res.status(400).json({ message: "Invalid project id (UUID required)" });
     }
 
-    const permission = await getPermission(req.user, req.params.id);
-
-    if (!["admin", "superadmin"].includes(req.user.role) && permission !== "owner") {
-      return res.status(403).json({ message: "Need owner permission" });
+    // ✅ Autoriser uniquement admin / superadmin
+    if (!["admin", "superadmin"].includes(req.user.role)) {
+      return res.status(403).json({ message: "Only admin/superadmin can delete projects" });
     }
 
     const item = await Project.findByPk(req.params.id);
     if (!item) return res.status(404).json({ message: "Not found" });
 
-    await item.destroy();
+    // ✅ supprimer d'abord les relations (si FK constraints)
     await UserProject.destroy({ where: { projectId: req.params.id } });
+
+    await item.destroy();
 
     return res.json({ message: "Deleted" });
   } catch (e) {
