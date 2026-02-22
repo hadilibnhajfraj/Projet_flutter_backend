@@ -174,6 +174,46 @@ async function getPermission(user, projectId) {
 
   return link?.permission || "viewer";
 }
+// routes/projects.routes.js (or equivalent file where routes are defined)
+
+router.get("/calendar", authRequired, async (req, res) => {
+  try {
+    const projects = await Project.findAll({
+      attributes: ['id', 'nomProjet', 'dateDemarrage', 'statut', 'validationStatut'],
+    });
+
+    const calendarProjects = projects.map(project => {
+      const statusColor = getStatusColor(project.statut, project.validationStatut);
+      return {
+        id: project.id,
+        nomProjet: project.nomProjet,
+        dateDemarrage: project.dateDemarrage,
+        statut: project.statut,
+        validationStatut: project.validationStatut,
+        color: statusColor,
+      };
+    });
+
+    res.json(calendarProjects);
+  } catch (error) {
+    console.error("Error fetching projects:", error);
+    res.status(500).json({ message: 'Error fetching projects' });
+  }
+});
+
+// Helper function to return color based on project status
+function getStatusColor(statut, validationStatut) {
+  if (statut === 'En cours') {
+    return 'red'; // Red for "En cours"
+  } else if (statut === 'Préparation') {
+    return 'blue'; // Blue for "Préparation"
+  } else if (statut === 'Terminé' && validationStatut === 'Validé') {
+    return 'green'; // Green for "Terminé" and "Validé"
+  } else if (statut === 'Terminé' && validationStatut === 'Non validé') {
+    return 'orange'; // Orange for "Terminé" and "Non validé"
+  }
+  return 'gray'; // Default color for other cases
+}
 
 /* ============================================================
    ✅ KPI ROUTES (IMPORTANT: BEFORE "/:id")
