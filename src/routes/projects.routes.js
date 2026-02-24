@@ -819,7 +819,6 @@ router.get("/projectsusers", authRequired, async (req, res) => {
    ✅ CRUD ROUTES
    ============================================================ */
 
-
 // ---------------- CREATE ----------------
 router.post("/", authRequired, async (req, res) => {
   try {
@@ -842,7 +841,10 @@ router.post("/", authRequired, async (req, res) => {
       body?.longitude;
 
     if (lat == null || lng == null) {
-      return res.status(400).json({ message: "Validation error", errors: ["latitude/longitude est obligatoire"] });
+      return res.status(400).json({
+        message: "Validation error",
+        errors: ["latitude/longitude est obligatoire"],
+      });
     }
 
     const nomProjet = String(body.nomProjet || "").trim();
@@ -850,7 +852,7 @@ router.post("/", authRequired, async (req, res) => {
       return res.status(400).json({ message: "Validation error", errors: ["nomProjet est obligatoire"] });
     }
 
-    // ✅ CHECK unicité: on part de la table pivot (UserProject)
+    // ✅ Unicité (par user) case-insensitive : on vérifie via la table pivot
     const exists = await UserProject.findOne({
       where: { userId: req.user.sub },
       include: [
@@ -858,8 +860,7 @@ router.post("/", authRequired, async (req, res) => {
           model: Project,
           required: true,
           attributes: ["id", "nomProjet"],
-          // ✅ IMPORTANT: col('nomProjet') ici est bien dans Project (table join)
-          where: where(fn("lower", col("nomProjet")), nomProjet.toLowerCase()),
+          where: where(fn("lower", col("Project.nomProjet")), nomProjet.toLowerCase()),
         },
       ],
     });
@@ -921,6 +922,7 @@ router.post("/", authRequired, async (req, res) => {
   }
 });
 // ---------------- LIST ----------------
+// ---------------- LIST ----------------
 router.get("/", authRequired, async (req, res) => {
   try {
     const { q } = req.query;
@@ -938,23 +940,10 @@ router.get("/", authRequired, async (req, res) => {
       ];
     }
 
-    if (["admin", "superadmin"].includes(req.user.role)) {
-      const items = await Project.findAll({
-        where,
-        order: [["createdAt", "DESC"]],
-        attributes: {
-          include: [
-            [
-              sequelize.literal(
-                `(SELECT COUNT(*) FROM project_comments pc WHERE pc."projectId" = "Project"."id")`
-              ),
-              "commentCount",
-            ],
-          ],
-        },
-      });
-      return res.json(items.map((p) => ({ ...p.toJSON(), permission: "owner" })));
-    }
+    // ✅ safe attrs user
+    const wanted = ["id", "email", "username", "firstname", "lastname", "firstName", "lastName", "prenom", "nom", "name", "fullName"];
+    const safeAttrs = wanted.filter((a) => !!User.rawAttributes?.[a]);
+    const userAttrs = safeAttrs.length ? safeAttrs : ["id", "email"];
 
     const items = await Project.findAll({
       where,
@@ -962,8 +951,8 @@ router.get("/", authRequired, async (req, res) => {
         {
           model: UserProject,
           required: false,
-          where: { userId: req.user.sub },
-          attributes: ["permission"],
+          attributes: ["permission", "userId", "createdAt"],
+          include: [{ model: User, attributes: userAttrs }],
         },
       ],
       order: [["createdAt", "DESC"]],
@@ -979,11 +968,37 @@ router.get("/", authRequired, async (req, res) => {
       },
     });
 
+    const displayName = (u) =>
+      u?.username ||
+      u?.firstname ||
+      u?.firstName ||
+      u?.prenom ||
+      u?.lastname ||
+      u?.lastName ||
+      u?.nom ||
+      u?.name ||
+      u?.fullName ||
+      u?.email ||
+      "Inconnu";
+
     const out = items.map((p) => {
       const json = p.toJSON();
-      const perm = json.UserProjects?.[0]?.permission || "viewer";
+
+      // ✅ permission utilisateur connecté
+      const meLink = (json.UserProjects || []).find((up) => up.userId === req.user.sub);
+      const perm = ["admin", "superadmin"].includes(req.user.role) ? "owner" : (meLink?.permission || "viewer");
+
+      // ✅ owner (créateur) = permission owner
+      const ownerLink = (json.UserProjects || []).find((up) => up.permission === "owner");
+      const ownerName = ownerLink?.User ? displayName(ownerLink.User) : "";
+
       delete json.UserProjects;
-      return { ...json, permission: perm };
+
+      return {
+        ...json,
+        permission: perm,
+        ownerName, // ✅ important pour Flutter
+      };
     });
 
     return res.json(out);
@@ -1000,11 +1015,31 @@ router.get("/:id", authRequired, async (req, res) => {
       return res.status(400).json({ message: "Invalid project id (UUID required)" });
     }
 
-    const item = await Project.findByPk(req.params.id);
+    const item = await Project.findByPk(req.params.id, {
+      include: [
+        {
+          model: UserProject,
+          required: false,
+          attributes: ["permission", "userId", "createdAt"],
+          include: [{ model: User, attributes: ["id", "email", ...(User.rawAttributes?.username ? ["username"] : [])] }],
+        },
+      ],
+    });
+
     if (!item) return res.status(404).json({ message: "Not found" });
 
+    const json = item.toJSON();
     const permission = await getPermission(req.user, req.params.id);
-    return res.json({ ...item.toJSON(), permission });
+
+    const ownerLink = (json.UserProjects || []).find((up) => up.permission === "owner");
+    const ownerName =
+      ownerLink?.User?.username ||
+      ownerLink?.User?.email ||
+      "";
+
+    delete json.UserProjects;
+
+    return res.json({ ...json, permission, ownerName });
   } catch (e) {
     console.error("PROJECT_GET_ERROR:", e);
     return res.status(500).json({ message: e.message || "Server error" });
