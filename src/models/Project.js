@@ -18,12 +18,22 @@ const Project = sequelize.define(
     ingenieurResponsable: { type: DataTypes.STRING(200), allowNull: false },
     telephoneIngenieur: { type: DataTypes.STRING(30), allowNull: false },
 
-    architecte: { type: DataTypes.STRING(200), allowNull: false },
-    telephoneArchitecte: { type: DataTypes.STRING(30), allowNull: false },
+    // ✅ deviennent optionnels côté front, donc on les rend optionnels ici aussi
+    architecte: { type: DataTypes.STRING(200), allowNull: true },
+    telephoneArchitecte: { type: DataTypes.STRING(30), allowNull: true },
+
+    // ✅ NOUVEAU : Matricule fiscale (optionnel)
+    matriculeFiscale: {
+      type: DataTypes.STRING(60),
+      allowNull: true,
+    },
 
     entreprise: { type: DataTypes.STRING(200), allowNull: false },
-    promoteur: { type: DataTypes.STRING(200), allowNull: false },
-    bureauEtude: { type: DataTypes.STRING(200), allowNull: false },
+
+    // ✅ deviennent optionnels côté front, donc allowNull true
+    promoteur: { type: DataTypes.STRING(200), allowNull: true },
+    bureauEtude: { type: DataTypes.STRING(200), allowNull: true },
+
     bureauControle: { type: DataTypes.STRING(200), allowNull: false },
 
     adresse: { type: DataTypes.STRING(255), allowNull: true },
@@ -42,7 +52,7 @@ const Project = sequelize.define(
 
     // ✅ NOUVEAUX CHAMPS
     pourcentageReussite: {
-      type: DataTypes.DECIMAL(5, 2), // ex: 75.50
+      type: DataTypes.DECIMAL(5, 2),
       allowNull: true,
       validate: { min: 0, max: 100 },
     },
@@ -59,7 +69,7 @@ const Project = sequelize.define(
     },
 
     surfaceProspectee: {
-      type: DataTypes.DECIMAL(12, 2), // ex: 1200.50 (m²)
+      type: DataTypes.DECIMAL(12, 2),
       allowNull: true,
       validate: { min: 0 },
     },

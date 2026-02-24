@@ -1,6 +1,6 @@
 // routes/projects.routes.js
 const express = require("express");
-const { Op } = require("sequelize");
+const { Op, fn, col, where } = require("sequelize");
 const { User, Project, UserProject, ProjectComment } = require("../models/associations");
 const { authRequired } = require("../middleware/auth.middleware");
 const { sequelize } = require("../db");
@@ -97,11 +97,10 @@ function validatePayload(body, isUpdate = false) {
     "typeAdresseChantier",
     "ingenieurResponsable",
     "telephoneIngenieur",
-    "architecte",
-    "telephoneArchitecte",
+
+
     "entreprise",
-    "promoteur",
-    "bureauEtude",
+
     "bureauControle",
     "latitude",
     "longitude",
@@ -820,6 +819,7 @@ router.get("/projectsusers", authRequired, async (req, res) => {
    ✅ CRUD ROUTES
    ============================================================ */
 
+
 // ---------------- CREATE ----------------
 router.post("/", authRequired, async (req, res) => {
   try {
@@ -828,36 +828,84 @@ router.post("/", authRequired, async (req, res) => {
     const errors = validatePayload(body, false);
     if (errors.length) return res.status(400).json({ message: "Validation error", errors });
 
+    const lat =
+      body?.location?.lat ??
+      body?.location?.latitude ??
+      body?.lat ??
+      body?.latitude;
+
+    const lng =
+      body?.location?.lng ??
+      body?.location?.lon ??
+      body?.location?.longitude ??
+      body?.lng ??
+      body?.longitude;
+
+    if (lat == null || lng == null) {
+      return res.status(400).json({ message: "Validation error", errors: ["latitude/longitude est obligatoire"] });
+    }
+
+    const nomProjet = String(body.nomProjet || "").trim();
+    if (!nomProjet) {
+      return res.status(400).json({ message: "Validation error", errors: ["nomProjet est obligatoire"] });
+    }
+
+    // ✅ CHECK unicité: on part de la table pivot (UserProject)
+    const exists = await UserProject.findOne({
+      where: { userId: req.user.sub },
+      include: [
+        {
+          model: Project,
+          required: true,
+          attributes: ["id", "nomProjet"],
+          // ✅ IMPORTANT: col('nomProjet') ici est bien dans Project (table join)
+          where: where(fn("lower", col("nomProjet")), nomProjet.toLowerCase()),
+        },
+      ],
+    });
+
+    if (exists) {
+      return res.status(409).json({
+        message: "Project name already exists",
+        errors: ["Un projet avec ce nom existe déjà."],
+      });
+    }
+
     const p = await Project.create({
-      nomProjet: body.nomProjet,
+      nomProjet,
       dateDemarrage: body.dateDemarrage,
       statut: body.statut || null,
-      typeAdresseChantier: body.typeAdresseChantier,
+      typeAdresseChantier: String(body.typeAdresseChantier || "").trim(),
 
-      ingenieurResponsable: body.ingenieurResponsable,
-      telephoneIngenieur: body.telephoneIngenieur,
+      ingenieurResponsable: String(body.ingenieurResponsable || "").trim(),
+      telephoneIngenieur: String(body.telephoneIngenieur || "").trim(),
 
-      architecte: body.architecte,
-      telephoneArchitecte: body.telephoneArchitecte,
+      architecte: body.architecte?.trim() ? body.architecte.trim() : null,
+      telephoneArchitecte: body.telephoneArchitecte?.trim() ? body.telephoneArchitecte.trim() : null,
 
-      entreprise: body.entreprise,
-      promoteur: body.promoteur,
-      bureauEtude: body.bureauEtude,
-      bureauControle: body.bureauControle,
+      matriculeFiscale: body.matriculeFiscale?.trim() ? body.matriculeFiscale.trim() : null,
 
-      adresse: body.adresse || null,
+      entreprise: String(body.entreprise || "").trim(),
+      promoteur: body.promoteur?.trim() ? body.promoteur.trim() : null,
+      bureauEtude: body.bureauEtude?.trim() ? body.bureauEtude.trim() : null,
 
-      latitude: body.latitude,
-      longitude: body.longitude,
+      bureauControle: String(body.bureauControle || "").trim(),
 
-      localisationCommentaire: body.localisationCommentaire || null,
+      adresse: body.adresse?.trim() ? body.adresse.trim() : null,
 
-      entrepriseFluide: body.entrepriseFluide || null,
-      entrepriseElectricite: body.entrepriseElectricite || null,
+      latitude: lat,
+      longitude: lng,
+
+      localisationCommentaire: body.localisationCommentaire?.trim()
+        ? body.localisationCommentaire.trim()
+        : null,
+
+      entrepriseFluide: body.entrepriseFluide?.trim() ? body.entrepriseFluide.trim() : null,
+      entrepriseElectricite: body.entrepriseElectricite?.trim() ? body.entrepriseElectricite.trim() : null,
 
       pourcentageReussite: body.pourcentageReussite ?? null,
       validationStatut: body.validationStatut ?? "Non validé",
-      typeProjet: body.typeProjet ?? null,
+      typeProjet: body.typeProjet?.trim() ? body.typeProjet.trim() : null,
       surfaceProspectee: body.surfaceProspectee ?? null,
     });
 
@@ -872,7 +920,6 @@ router.post("/", authRequired, async (req, res) => {
     return res.status(500).json({ message: e.message || "Server error" });
   }
 });
-
 // ---------------- LIST ----------------
 router.get("/", authRequired, async (req, res) => {
   try {
