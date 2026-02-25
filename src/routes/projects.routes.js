@@ -8,6 +8,7 @@ const path = require("path");
 const fs = require("fs");
 const multer = require("multer");
 const ProjectDevis = require("../models/ProjectDevis"); // adapte selon ton export
+const ProjectBonDeCommande = require("../models/ProjectBonDeCommande");
 const router = express.Router();
 
 // ---------------- Helpers ----------------
@@ -1489,6 +1490,166 @@ router.delete("/:id/devis/:devisId", authRequired, async (req, res) => {
     return res.json({ ok: true });
   } catch (e) {
     console.error("PROJECT_DEVIS_DELETE_ERROR:", e);
+    return res.status(500).json({ message: e.message || "Server error" });
+  }
+});
+// =======================
+// ✅ BON DE COMMANDE ROUTES (UPLOAD/LIST/UPDATE/MULTI/DELETE)
+// =======================
+
+const BDC_UPLOAD_DIR = path.join(process.cwd(), "uploads", "bondecommande");
+fs.mkdirSync(BDC_UPLOAD_DIR, { recursive: true });
+
+const bdcStorage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, BDC_UPLOAD_DIR),
+  filename: (req, file, cb) => {
+    const ext = path.extname(file.originalname || "");
+    const safe = `${Date.now()}-${Math.round(Math.random() * 1e9)}${ext}`;
+    cb(null, safe);
+  },
+});
+
+const bdcFileFilter = (req, file, cb) => {
+  const ok = ["application/pdf", "image/png", "image/jpeg"].includes(file.mimetype);
+  cb(ok ? null : new Error("FORMAT_NOT_ALLOWED"), ok);
+};
+
+const bdcUpload = multer({
+  storage: bdcStorage,
+  fileFilter: bdcFileFilter,
+  limits: { fileSize: 10 * 1024 * 1024 },
+});
+router.get("/:id/bondecommande", authRequired, async (req, res) => {
+  try {
+    const projectId = req.params.id;
+    if (!isUUID(projectId)) return res.status(400).json({ message: "Invalid project id" });
+
+    const rows = await ProjectBonDeCommande.findAll({
+      where: { projectId },
+      order: [["createdAt", "DESC"]],
+    });
+
+    return res.json(rows);
+  } catch (e) {
+    return res.status(500).json({ message: e.message || "Server error" });
+  }
+});
+router.get("/:id/bondecommande", authRequired, async (req, res) => {
+  try {
+    const projectId = req.params.id;
+    if (!isUUID(projectId)) return res.status(400).json({ message: "Invalid project id" });
+
+    const rows = await ProjectBonDeCommande.findAll({
+      where: { projectId },
+      order: [["createdAt", "DESC"]],
+    });
+
+    return res.json(rows);
+  } catch (e) {
+    return res.status(500).json({ message: e.message || "Server error" });
+  }
+});
+router.post("/:id/bondecommande", authRequired, bdcUpload.array("files", 10), async (req, res) => {
+  try {
+    const projectId = req.params.id;
+    if (!isUUID(projectId)) return res.status(400).json({ message: "Invalid project id (UUID required)" });
+
+    const nomBonDeCommande = String(req.body?.nomBonDeCommande || "").trim();
+    if (!nomBonDeCommande) return res.status(400).json({ message: "nomBonDeCommande est obligatoire" });
+
+    const files = req.files || [];
+    if (!files.length) return res.status(400).json({ message: "Fichier est obligatoire" });
+
+    const permission = await getPermission(req.user, projectId);
+    if (!["admin", "superadmin"].includes(req.user.role) && !["editor", "owner"].includes(permission)) {
+      return res.status(403).json({ message: "Need editor permission" });
+    }
+
+    const rows = await Promise.all(
+      files.map((f) =>
+        ProjectBonDeCommande.create({
+          projectId,
+          nomBonDeCommande,
+          fileUrl: `/uploads/bondecommande/${f.filename}`,
+          mimeType: f.mimetype,
+          originalName: f.originalname,
+        })
+      )
+    );
+
+    return res.status(201).json(rows);
+  } catch (e) {
+    if (e?.message === "FORMAT_NOT_ALLOWED") {
+      return res.status(400).json({ message: "Format interdit (PDF/PNG/JPG seulement)" });
+    }
+    console.error("PROJECT_BDC_UPLOAD_ERROR:", e);
+    return res.status(500).json({ message: e.message || "Server error" });
+  }
+});
+router.put("/:id/bondecommande/:bdcId", authRequired, bdcUpload.single("file"), async (req, res) => {
+  try {
+    const projectId = req.params.id;
+    const bdcId = req.params.bdcId;
+
+    if (!isUUID(projectId)) return res.status(400).json({ message: "Invalid project id (UUID required)" });
+    if (!isUUID(bdcId)) return res.status(400).json({ message: "Invalid bdc id (UUID required)" });
+
+    const permission = await getPermission(req.user, projectId);
+    if (!["admin", "superadmin"].includes(req.user.role) && !["editor", "owner"].includes(permission)) {
+      return res.status(403).json({ message: "Need editor permission" });
+    }
+
+    const row = await ProjectBonDeCommande.findOne({ where: { id: bdcId, projectId } });
+    if (!row) return res.status(404).json({ message: "Bon de commande introuvable" });
+
+    const nomBonDeCommande = (req.body?.nomBonDeCommande ?? "").toString().trim();
+    const up = {};
+    if (nomBonDeCommande) up.nomBonDeCommande = nomBonDeCommande;
+
+    if (req.file) {
+      up.fileUrl = `/uploads/bondecommande/${req.file.filename}`;
+      up.mimeType = req.file.mimetype;
+      up.originalName = req.file.originalname;
+    }
+
+    await row.update(up);
+    return res.json(row);
+  } catch (e) {
+    if (e?.message === "FORMAT_NOT_ALLOWED") {
+      return res.status(400).json({ message: "Format interdit (PDF/PNG/JPG seulement)" });
+    }
+    console.error("PROJECT_BDC_UPDATE_ERROR:", e);
+    return res.status(500).json({ message: e.message || "Server error" });
+  }
+});
+router.delete("/:id/bondecommande/:bdcId", authRequired, async (req, res) => {
+  try {
+    const projectId = req.params.id;
+    const bdcId = req.params.bdcId;
+
+    if (!isUUID(projectId)) return res.status(400).json({ message: "Invalid project id (UUID required)" });
+    if (!isUUID(bdcId)) return res.status(400).json({ message: "Invalid bdc id (UUID required)" });
+
+    const permission = await getPermission(req.user, projectId);
+    if (!["admin", "superadmin"].includes(req.user.role) && !["editor", "owner"].includes(permission)) {
+      return res.status(403).json({ message: "Need editor permission" });
+    }
+
+    const row = await ProjectBonDeCommande.findOne({ where: { id: bdcId, projectId } });
+    if (!row) return res.status(404).json({ message: "Bon de commande introuvable" });
+
+    if (row.fileUrl) {
+      const filename = row.fileUrl.split("/").pop();
+      const full = path.join(BDC_UPLOAD_DIR, filename || "");
+      try {
+        if (filename && fs.existsSync(full)) fs.unlinkSync(full);
+      } catch (_) {}
+    }
+
+    await row.destroy();
+    return res.json({ ok: true });
+  } catch (e) {
+    console.error("PROJECT_BDC_DELETE_ERROR:", e);
     return res.status(500).json({ message: e.message || "Server error" });
   }
 });

@@ -7,6 +7,7 @@ const UserProfile = require("./UserProfile");
 const Notification = require("./Notification");
 const ProjectMember = require("./ProjectMember");
 const ProjectDevis = require("./ProjectDevis");
+const ProjectBonDeCommande = require("./ProjectBonDeCommande");
 User.belongsToMany(Project, {
   through: UserProject,
   foreignKey: "userId",
@@ -42,4 +43,6 @@ ProjectComment.hasMany(ProjectComment, { foreignKey: "parentId", as: "replies" }
 ProjectComment.belongsTo(ProjectComment, { foreignKey: "parentId", as: "parent" });
 Project.hasMany(ProjectDevis, { foreignKey: "projectId", onDelete: "CASCADE" });
 ProjectDevis.belongsTo(Project, { foreignKey: "projectId" });
+Project.hasMany(ProjectBonDeCommande, { foreignKey: "projectId", onDelete: "CASCADE" });
+ProjectBonDeCommande.belongsTo(Project, { foreignKey: "projectId" });
 module.exports = { User, Project, UserProject, ProjectComment, UserProfile , Notification , ProjectDevis };
