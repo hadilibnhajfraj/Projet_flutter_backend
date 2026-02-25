@@ -35,7 +35,7 @@ app.use("/utils", require("./routes/geocode.routes"));
 app.use("/users", require("./routes/users.routes"));
 app.use("/uploads", express.static("uploads"));
 app.use("/users", userProfileRoutes);
-
+app.use("/uploads", express.static("uploads"));
 app.get("/me", authRequired, (req, res) => {
   res.json({ user: req.user });
 });
