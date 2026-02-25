@@ -945,7 +945,19 @@ router.get("/", authRequired, async (req, res) => {
     }
 
     // ✅ safe attrs user
-    const wanted = ["id", "email", "username", "firstname", "lastname", "firstName", "lastName", "prenom", "nom", "name", "fullName"];
+    const wanted = [
+      "id",
+      "email",
+      "username",
+      "firstname",
+      "lastname",
+      "firstName",
+      "lastName",
+      "prenom",
+      "nom",
+      "name",
+      "fullName",
+    ];
     const safeAttrs = wanted.filter((a) => !!User.rawAttributes?.[a]);
     const userAttrs = safeAttrs.length ? safeAttrs : ["id", "email"];
 
@@ -967,6 +979,22 @@ router.get("/", authRequired, async (req, res) => {
               `(SELECT COUNT(*) FROM project_comments pc WHERE pc."projectId" = "Project"."id")`
             ),
             "commentCount",
+          ],
+
+          // ✅ NEW: devisCount
+          [
+            sequelize.literal(
+              `(SELECT COUNT(*) FROM project_devis d WHERE d."projectId" = "Project"."id")`
+            ),
+            "devisCount",
+          ],
+
+          // ✅ NEW: bonCommandeCount (⚠️ change table name if needed)
+          [
+            sequelize.literal(
+              `(SELECT COUNT(*) FROM project_bon_de_commande bc WHERE bc."projectId" = "Project"."id")`
+            ),
+            "bonCommandeCount",
           ],
         ],
       },
@@ -990,7 +1018,9 @@ router.get("/", authRequired, async (req, res) => {
 
       // ✅ permission utilisateur connecté
       const meLink = (json.UserProjects || []).find((up) => up.userId === req.user.sub);
-      const perm = ["admin", "superadmin"].includes(req.user.role) ? "owner" : (meLink?.permission || "viewer");
+      const perm = ["admin", "superadmin"].includes(req.user.role)
+        ? "owner"
+        : (meLink?.permission || "viewer");
 
       // ✅ owner (créateur) = permission owner
       const ownerLink = (json.UserProjects || []).find((up) => up.permission === "owner");
@@ -1001,7 +1031,11 @@ router.get("/", authRequired, async (req, res) => {
       return {
         ...json,
         permission: perm,
-        ownerName, // ✅ important pour Flutter
+        ownerName,
+
+        // ✅ ensure numbers (sometimes literal returns string)
+        devisCount: Number(json.devisCount || 0),
+        bonCommandeCount: Number(json.bonCommandeCount || 0),
       };
     });
 
