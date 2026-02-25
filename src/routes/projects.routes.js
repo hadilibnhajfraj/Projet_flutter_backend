@@ -1287,6 +1287,10 @@ router.delete("/:id/comments/:commentId", authRequired, async (req, res) => {
     return res.status(500).json({ message: e.message || "Server error" });
   }
 });
+// =======================
+// ✅ DEVIS ROUTES (UPLOAD/LIST/UPDATE/MULTI)
+// =======================
+
 const UPLOAD_DIR = path.join(process.cwd(), "uploads", "devis");
 fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
@@ -1300,16 +1304,39 @@ const storage = multer.diskStorage({
 });
 
 const fileFilter = (req, file, cb) => {
-  const ok = [
-    "application/pdf",
-    "image/png",
-    "image/jpeg", // jpg/jpeg
-  ].includes(file.mimetype);
+  const ok = ["application/pdf", "image/png", "image/jpeg"].includes(file.mimetype);
   cb(ok ? null : new Error("FORMAT_NOT_ALLOWED"), ok);
 };
 
-const upload = multer({ storage, fileFilter, limits: { fileSize: 10 * 1024 * 1024 } }); // 10MB
-router.post("/:id/devis", authRequired, upload.single("file"), async (req, res) => {
+// ✅ support single + multiple in same endpoint
+const upload = multer({
+  storage,
+  fileFilter,
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
+});
+
+router.get("/:id/devis", authRequired, async (req, res) => {
+  try {
+    const projectId = req.params.id;
+    if (!isUUID(projectId)) return res.status(400).json({ message: "Invalid project id" });
+
+    const rows = await ProjectDevis.findAll({
+      where: { projectId },
+      order: [["createdAt", "DESC"]],
+    });
+
+    return res.json(rows); // [] si aucun devis
+  } catch (e) {
+    return res.status(500).json({ message: e.message || "Server error" });
+  }
+});
+
+// ✅ POST upload (single OR multi)
+// Fields accepted:
+// - nomDevis (string) required
+// - file (single) OR files[] (multi)
+// ⚠️ remplace upload.single("file") par upload.array("files", 10)
+router.post("/:id/devis", authRequired, upload.array("files", 10), async (req, res) => {
   try {
     const projectId = req.params.id;
     if (!isUUID(projectId)) return res.status(400).json({ message: "Invalid project id (UUID required)" });
@@ -1317,25 +1344,27 @@ router.post("/:id/devis", authRequired, upload.single("file"), async (req, res) 
     const nomDevis = String(req.body?.nomDevis || "").trim();
     if (!nomDevis) return res.status(400).json({ message: "nomDevis est obligatoire" });
 
-    if (!req.file) return res.status(400).json({ message: "Fichier est obligatoire" });
+    const files = req.files || [];
+    if (!files.length) return res.status(400).json({ message: "Fichier est obligatoire" });
 
-    // ✅ (optionnel) vérifier permission editor/owner
     const permission = await getPermission(req.user, projectId);
     if (!["admin", "superadmin"].includes(req.user.role) && !["editor", "owner"].includes(permission)) {
       return res.status(403).json({ message: "Need editor permission" });
     }
 
-    const fileUrl = `/uploads/devis/${req.file.filename}`;
+    const rows = await Promise.all(
+      files.map((f) =>
+        ProjectDevis.create({
+          projectId,
+          nomDevis, // même nom pour tous (ou tu peux gérer nomDevis[] plus tard)
+          fileUrl: `/uploads/devis/${f.filename}`,
+          mimeType: f.mimetype,
+          originalName: f.originalname,
+        })
+      )
+    );
 
-    const row = await ProjectDevis.create({
-      projectId,
-      nomDevis,
-      fileUrl,
-      mimeType: req.file.mimetype,
-      originalName: req.file.originalname,
-    });
-
-    return res.status(201).json(row);
+    return res.status(201).json(rows);
   } catch (e) {
     if (e?.message === "FORMAT_NOT_ALLOWED") {
       return res.status(400).json({ message: "Format interdit (PDF/PNG/JPG seulement)" });
@@ -1344,85 +1373,90 @@ router.post("/:id/devis", authRequired, upload.single("file"), async (req, res) 
     return res.status(500).json({ message: e.message || "Server error" });
   }
 });
-// ===================== DEVIS: GET + UPDATE =====================
 
-// ✅ GET devis by project (dernier devis)
-router.get("/:id/devis", authRequired, async (req, res) => {
-  try {
-    const projectId = req.params.id;
-    if (!isUUID(projectId)) {
-      return res.status(400).json({ message: "Invalid project id (UUID required)" });
+// ✅ PUT update devis by devisId (optional file)
+router.put(
+  "/:id/devis/:devisId",
+  authRequired,
+  upload.single("file"),
+  async (req, res) => {
+    try {
+      const projectId = req.params.id;
+      const devisId = req.params.devisId;
+
+      if (!isUUID(projectId)) return res.status(400).json({ message: "Invalid project id (UUID required)" });
+      if (!isUUID(devisId)) return res.status(400).json({ message: "Invalid devis id (UUID required)" });
+
+      const permission = await getPermission(req.user, projectId);
+      if (!["admin", "superadmin"].includes(req.user.role) && !["editor", "owner"].includes(permission)) {
+        return res.status(403).json({ message: "Need editor permission" });
+      }
+
+      const row = await ProjectDevis.findOne({ where: { id: devisId, projectId } });
+      if (!row) return res.status(404).json({ message: "Devis introuvable" });
+
+      const nomDevis = (req.body?.nomDevis ?? "").toString().trim();
+      const up = {};
+      if (nomDevis) up.nomDevis = nomDevis;
+
+      if (req.file) {
+        up.fileUrl = `/uploads/devis/${req.file.filename}`;
+        up.mimeType = req.file.mimetype;
+        up.originalName = req.file.originalname;
+      }
+
+      await row.update(up);
+      return res.json(row);
+    } catch (e) {
+      if (e?.message === "FORMAT_NOT_ALLOWED") {
+        return res.status(400).json({ message: "Format interdit (PDF/PNG/JPG seulement)" });
+      }
+      console.error("PROJECT_DEVIS_UPDATE_ERROR:", e);
+      return res.status(500).json({ message: e.message || "Server error" });
     }
-
-    const row = await ProjectDevis.findOne({
-      where: { projectId },
-      order: [["createdAt", "DESC"]],
-    });
-
-    // ✅ IMPORTANT: on renvoie null si aucun devis (comme tu veux côté Flutter)
-    return res.json(row ? row.toJSON() : null);
-  } catch (e) {
-    console.error("PROJECT_DEVIS_GET_ERROR:", e);
-    return res.status(500).json({ message: e.message || "Server error" });
   }
-});
+);
+// ✅ PUT update devis by devisId (optional file + optional nomDevis)
+router.put(
+  "/:id/devis/:devisId",
+  authRequired,
+  upload.single("file"),
+  async (req, res) => {
+    try {
+      const projectId = req.params.id;
+      const devisId = req.params.devisId;
 
-// ✅ PUT devis (update) : update nom + (optionnel) nouveau fichier
-router.put("/:id/devis", authRequired, upload.single("file"), async (req, res) => {
-  try {
-    const projectId = req.params.id;
-    if (!isUUID(projectId)) {
-      return res.status(400).json({ message: "Invalid project id (UUID required)" });
+      if (!isUUID(projectId)) return res.status(400).json({ message: "Invalid project id (UUID required)" });
+      if (!isUUID(devisId)) return res.status(400).json({ message: "Invalid devis id (UUID required)" });
+
+      const permission = await getPermission(req.user, projectId);
+      if (!["admin", "superadmin"].includes(req.user.role) && !["editor", "owner"].includes(permission)) {
+        return res.status(403).json({ message: "Need editor permission" });
+      }
+
+      const row = await ProjectDevis.findOne({ where: { id: devisId, projectId } });
+      if (!row) return res.status(404).json({ message: "Devis introuvable" });
+
+      const nomDevis = (req.body?.nomDevis ?? "").toString().trim();
+      const up = {};
+
+      if (nomDevis) up.nomDevis = nomDevis;
+
+      if (req.file) {
+        up.fileUrl = `/uploads/devis/${req.file.filename}`;
+        up.mimeType = req.file.mimetype;
+        up.originalName = req.file.originalname;
+      }
+
+      await row.update(up);
+      return res.json(row);
+    } catch (e) {
+      if (e?.message === "FORMAT_NOT_ALLOWED") {
+        return res.status(400).json({ message: "Format interdit (PDF/PNG/JPG seulement)" });
+      }
+      console.error("PROJECT_DEVIS_UPDATE_ERROR:", e);
+      return res.status(500).json({ message: e.message || "Server error" });
     }
-
-    // ✅ permission editor/owner
-    const permission = await getPermission(req.user, projectId);
-    if (!["admin", "superadmin"].includes(req.user.role) && !["editor", "owner"].includes(permission)) {
-      return res.status(403).json({ message: "Need editor permission" });
-    }
-
-    const nomDevis = String(req.body?.nomDevis || "").trim();
-    if (!nomDevis) return res.status(400).json({ message: "nomDevis est obligatoire" });
-
-    const existing = await ProjectDevis.findOne({
-      where: { projectId },
-      order: [["createdAt", "DESC"]],
-    });
-
-    // ✅ si aucun devis => on peut créer un nouveau (ou renvoyer 404 si tu veux)
-    if (!existing) {
-      if (!req.file) return res.status(404).json({ message: "Aucun devis pour ce projet" });
-
-      const fileUrl = `/uploads/devis/${req.file.filename}`;
-      const created = await ProjectDevis.create({
-        projectId,
-        nomDevis,
-        fileUrl,
-        mimeType: req.file.mimetype,
-        originalName: req.file.originalname,
-      });
-      return res.json(created);
-    }
-
-    const patch = { nomDevis };
-
-    // ✅ si nouveau fichier fourni => update file
-    if (req.file) {
-      patch.fileUrl = `/uploads/devis/${req.file.filename}`;
-      patch.mimeType = req.file.mimetype;
-      patch.originalName = req.file.originalname;
-    }
-
-    await existing.update(patch);
-    return res.json(existing);
-  } catch (e) {
-    if (e?.message === "FORMAT_NOT_ALLOWED") {
-      return res.status(400).json({ message: "Format interdit (PDF/PNG/JPG seulement)" });
-    }
-    console.error("PROJECT_DEVIS_PUT_ERROR:", e);
-    return res.status(500).json({ message: e.message || "Server error" });
   }
-});
-
-
+);
 module.exports = router;
