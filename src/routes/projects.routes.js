@@ -1460,4 +1460,36 @@ router.put(
     }
   }
 );
+router.delete("/:id/devis/:devisId", authRequired, async (req, res) => {
+  try {
+    const projectId = req.params.id;
+    const devisId = req.params.devisId;
+
+    if (!isUUID(projectId)) return res.status(400).json({ message: "Invalid project id (UUID required)" });
+    if (!isUUID(devisId)) return res.status(400).json({ message: "Invalid devis id (UUID required)" });
+
+    const permission = await getPermission(req.user, projectId);
+    if (!["admin", "superadmin"].includes(req.user.role) && !["editor", "owner"].includes(permission)) {
+      return res.status(403).json({ message: "Need editor permission" });
+    }
+
+    const row = await ProjectDevis.findOne({ where: { id: devisId, projectId } });
+    if (!row) return res.status(404).json({ message: "Devis introuvable" });
+
+    // ✅ supprimer le fichier physique si existe
+    if (row.fileUrl) {
+      const filename = row.fileUrl.split("/").pop(); // uploads/devis/<name>
+      const full = path.join(UPLOAD_DIR, filename || "");
+      try {
+        if (filename && fs.existsSync(full)) fs.unlinkSync(full);
+      } catch (_) {}
+    }
+
+    await row.destroy();
+    return res.json({ ok: true });
+  } catch (e) {
+    console.error("PROJECT_DEVIS_DELETE_ERROR:", e);
+    return res.status(500).json({ message: e.message || "Server error" });
+  }
+});
 module.exports = router;
