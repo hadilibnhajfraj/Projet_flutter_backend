@@ -8,6 +8,7 @@ const Notification = require("./Notification");
 const ProjectMember = require("./ProjectMember");
 const ProjectDevis = require("./ProjectDevis");
 const ProjectBonDeCommande = require("./ProjectBonDeCommande");
+const Task = require("./Task");
 User.belongsToMany(Project, {
   through: UserProject,
   foreignKey: "userId",
@@ -45,4 +46,6 @@ Project.hasMany(ProjectDevis, { foreignKey: "projectId", onDelete: "CASCADE" });
 ProjectDevis.belongsTo(Project, { foreignKey: "projectId" });
 Project.hasMany(ProjectBonDeCommande, { foreignKey: "projectId", onDelete: "CASCADE" });
 ProjectBonDeCommande.belongsTo(Project, { foreignKey: "projectId" });
+User.hasMany(Task, { foreignKey: "createdBy", as: "tasks", onDelete: "CASCADE" });
+Task.belongsTo(User, { foreignKey: "createdBy", as: "creator" });
 module.exports = { User, Project, UserProject, ProjectComment, UserProfile , Notification , ProjectDevis };

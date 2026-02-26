@@ -13,6 +13,7 @@ const { authRequired } = require("./middleware/auth.middleware");
 const projectRoutes = require("./routes/projects.routes");
 const adminRoutes = require("./routes/admin"); // ✅ NEW
 const userProfileRoutes = require("./routes/userProfile.routes");
+const taskRoutes = require("./routes/tasks.routes");
 const app = express();
 
 app.use(helmet());
@@ -31,6 +32,7 @@ app.get("/", (req, res) => res.json({ ok: true }));
 app.use("/projects", projectRoutes);
 app.use("/auth", authRoutes);
 app.use("/admin", adminRoutes); // ✅ NEW
+app.use("/tasks", taskRoutes);
 app.use("/utils", require("./routes/geocode.routes"));
 app.use("/users", require("./routes/users.routes"));
 app.use("/uploads", express.static("uploads"));
