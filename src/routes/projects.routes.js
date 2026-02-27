@@ -166,7 +166,29 @@ function validatePayload(body, isUpdate = false) {
 
   return errors;
 }
+function isGlobalKpiUser(user) {
+  return ["admin", "superadmin"].includes(user?.role);
+}
 
+async function getAccessibleProjectIds(user) {
+  if (isGlobalKpiUser(user)) return null; // null => pas de filtre
+
+  const links = await UserProject.findAll({
+    where: { userId: user.sub },
+    attributes: ["projectId"],
+    raw: true,
+  });
+
+  return links.map(l => l.projectId).filter(Boolean);
+}
+
+function buildProjectWhere(accessibleIds) {
+  // si accessibleIds === null => global
+  if (accessibleIds === null) return {};
+  // si user n’a aucun projet => retourne un where impossible
+  if (!accessibleIds.length) return { id: { [Op.in]: [-1] } };
+  return { id: { [Op.in]: accessibleIds } };
+}
 // ✅ permission helper
 async function getPermission(user, projectId) {
   if (["admin", "superadmin"].includes(user.role)) return "owner";
@@ -235,8 +257,13 @@ router.get("/user-kpi", authRequired, async (req, res) => {
 
 router.get("/kpi/validation-summary", authRequired, async (req, res) => {
   try {
-    const totalProjects = await Project.count();
-    const validatedProjects = await Project.count({ where: { validationStatut: "Validé" } });
+    const accessibleIds = await getAccessibleProjectIds(req.user);
+    const where = buildProjectWhere(accessibleIds);
+
+    const totalProjects = await Project.count({ where });
+    const validatedProjects = await Project.count({
+      where: { ...where, validationStatut: "Validé" },
+    });
 
     const validatedPercentage =
       totalProjects === 0 ? 0 : Number(((validatedProjects / totalProjects) * 100).toFixed(2));
@@ -249,22 +276,16 @@ router.get("/kpi/validation-summary", authRequired, async (req, res) => {
 
 router.get("/kpi/validation-by-surface", authRequired, async (req, res) => {
   try {
+    const accessibleIds = await getAccessibleProjectIds(req.user);
+    const where = buildProjectWhere(accessibleIds);
+
     const rows = await Project.findAll({
+      where,
       attributes: [
         "surfaceProspectee",
         [sequelize.fn("COUNT", sequelize.col("id")), "totalProjects"],
-        [
-          sequelize.fn(
-            "SUM",
-            sequelize.literal(`CASE WHEN "validationStatut" = 'Validé' THEN 1 ELSE 0 END`)
-          ),
-          "validatedProjects",
-        ],
-        // ✅ moyenne du pourcentage de réussite
-        [
-          sequelize.fn("AVG", sequelize.cast(sequelize.col("pourcentageReussite"), "float")),
-          "avgReussite",
-        ],
+        [sequelize.fn("SUM", sequelize.literal(`CASE WHEN "validationStatut" = 'Validé' THEN 1 ELSE 0 END`)), "validatedProjects"],
+        [sequelize.fn("AVG", sequelize.cast(sequelize.col("pourcentageReussite"), "float")), "avgReussite"],
       ],
       group: ["surfaceProspectee"],
       order: [[sequelize.col("surfaceProspectee"), "ASC"]],
@@ -275,16 +296,11 @@ router.get("/kpi/validation-by-surface", authRequired, async (req, res) => {
       const total = Number(r.totalProjects || 0);
       const validated = Number(r.validatedProjects || 0);
       const avgReussite = r.avgReussite == null ? null : Number(Number(r.avgReussite).toFixed(2));
-
       return {
         surfaceProspectee: r.surfaceProspectee,
         totalProjects: total,
         validatedProjects: validated,
-
-        // ✅ ton ancien % (validationStatut)
         validatedPercentage: total === 0 ? 0 : Number(((validated / total) * 100).toFixed(2)),
-
-        // ✅ le vrai % que tu veux (pourcentageReussite)
         avgReussite,
       };
     });
@@ -294,7 +310,6 @@ router.get("/kpi/validation-by-surface", authRequired, async (req, res) => {
     res.status(500).json({ error: "KPI_VALIDATION_BY_SURFACE_ERROR", details: err.message });
   }
 });
-
 
 router.get("/kpi/validation-by-location", authRequired, async (req, res) => {
   try {
@@ -353,8 +368,6 @@ router.get("/kpi/validation-by-location", authRequired, async (req, res) => {
     res.status(500).json({ error: "KPI_VALIDATION_BY_LOCATION_ERROR", details: err.message });
   }
 });
-
-
 router.get("/kpi/validation-status-count", authRequired, async (req, res) => {
   try {
     const rows = await Project.findAll({
@@ -378,41 +391,30 @@ router.get("/kpi/validation-status-count", authRequired, async (req, res) => {
 });
 router.get("/kpi/dashboard", authRequired, async (req, res) => {
   try {
-    const totalProjects = await Project.count();
-    const validatedProjects = await Project.count({
-      where: { validationStatut: "Validé" },
-    });
+    const accessibleIds = await getAccessibleProjectIds(req.user);
+    const where = buildProjectWhere(accessibleIds);
+    const global = isGlobalKpiUser(req.user);
+
+    const totalProjects = await Project.count({ where });
+    const validatedProjects = await Project.count({ where: { ...where, validationStatut: "Validé" } });
     const nonValidatedProjects = totalProjects - validatedProjects;
 
     const validatedPercentage =
-      totalProjects === 0
-        ? 0
-        : Number(((validatedProjects / totalProjects) * 100).toFixed(2));
+      totalProjects === 0 ? 0 : Number(((validatedProjects / totalProjects) * 100).toFixed(2));
 
-    // ✅ Validation status count
     const validationStatusCount = await Project.findAll({
-      attributes: [
-        "validationStatut",
-        [sequelize.fn("COUNT", sequelize.col("id")), "projectCount"],
-      ],
+      where,
+      attributes: ["validationStatut", [sequelize.fn("COUNT", sequelize.col("id")), "projectCount"]],
       group: ["validationStatut"],
       raw: true,
     });
 
-    // ✅ Validation by surface
     const bySurfaceRows = await Project.findAll({
+      where,
       attributes: [
         "surfaceProspectee",
         [sequelize.fn("COUNT", sequelize.col("id")), "totalProjects"],
-        [
-          sequelize.fn(
-            "SUM",
-            sequelize.literal(
-              `CASE WHEN "validationStatut" = 'Validé' THEN 1 ELSE 0 END`
-            )
-          ),
-          "validatedProjects",
-        ],
+        [sequelize.fn("SUM", sequelize.literal(`CASE WHEN "validationStatut" = 'Validé' THEN 1 ELSE 0 END`)), "validatedProjects"],
       ],
       group: ["surfaceProspectee"],
       order: [[sequelize.col("surfaceProspectee"), "ASC"]],
@@ -426,119 +428,57 @@ router.get("/kpi/dashboard", authRequired, async (req, res) => {
         surfaceProspectee: r.surfaceProspectee,
         totalProjects: total,
         validatedProjects: validated,
-        validatedPercentage:
-          total === 0 ? 0 : Number(((validated / total) * 100).toFixed(2)),
+        validatedPercentage: total === 0 ? 0 : Number(((validated / total) * 100).toFixed(2)),
       };
     });
 
-    // ✅ Map projects
     const mapProjects = await Project.findAll({
-      attributes: [
-        "id",
-        "nomProjet",
-        "latitude",
-        "longitude",
-        "validationStatut",
-        "statut",
-        "adresse",
-        "localisationCommentaire",
-        "createdAt",
-      ],
       where: {
+        ...where,
         latitude: { [Op.ne]: null },
         longitude: { [Op.ne]: null },
       },
+      attributes: ["id","nomProjet","latitude","longitude","validationStatut","statut","adresse","localisationCommentaire","createdAt"],
       order: [["createdAt", "DESC"]],
       limit: 200,
       raw: true,
     });
 
-    // ✅ Projects per user
-    const projectsPerUser = await UserProject.findAll({
-      attributes: [
-        "userId",
-        [sequelize.fn("COUNT", sequelize.col("projectId")), "projectsCount"],
-      ],
-      group: ["userId"],
-      raw: true,
-    });
+    // ✅ topUsers : global => vrai top 5 ; non-global => seulement user connecté
+    let topUsers = [];
+    if (global) {
+      const projectsPerUser = await UserProject.findAll({
+        attributes: ["userId", [sequelize.fn("COUNT", sequelize.col("projectId")), "projectsCount"]],
+        group: ["userId"],
+        raw: true,
+      });
 
-    const userIds = projectsPerUser.map((x) => x.userId).filter(Boolean);
+      const userIds = projectsPerUser.map((x) => x.userId).filter(Boolean);
 
-    // ✅ IMPORTANT: sélectionner uniquement les colonnes existantes dans User
-    const wanted = [
-      "id",
-      "email",
-      "username",
-      "firstname",
-      "lastname",
-      "firstName",
-      "lastName",
-      "prenom",
-      "nom",
-      "name",
-      "fullName",
-    ];
-    const safeAttrs = wanted.filter((a) => !!User.rawAttributes?.[a]);
+      const users = userIds.length
+        ? await User.findAll({ where: { id: userIds }, attributes: ["id", "email", "username"], raw: true })
+        : [];
 
-    const users = userIds.length
-      ? await User.findAll({
-          where: { id: userIds },
-          attributes: safeAttrs.length ? safeAttrs : ["id"], // fallback
-          raw: true,
-        })
-      : [];
+      const userMap = new Map(users.map((u) => [u.id, u]));
+      topUsers = projectsPerUser
+        .map((x) => ({ userId: x.userId, projectsCount: Number(x.projectsCount || 0), user: userMap.get(x.userId) || null }))
+        .sort((a, b) => b.projectsCount - a.projectsCount)
+        .slice(0, 5);
+    } else {
+      const myCount = await UserProject.count({ where: { userId: req.user.sub } });
+      topUsers = [{ userId: req.user.sub, projectsCount: myCount, user: { id: req.user.sub } }];
+    }
 
-    const userMap = new Map(users.map((u) => [u.id, u]));
-
-    const displayName = (u) =>
-      u.firstname ||
-      u.firstName ||
-      u.prenom ||
-      u.lastname ||
-      u.lastName ||
-      u.nom ||
-      u.username ||
-      u.name ||
-      u.fullName ||
-      u.email ||
-      "Inconnu";
-
-    const topUsers = projectsPerUser
-      .map((x) => {
-        const u = userMap.get(x.userId);
-        return {
-          userId: x.userId,
-          projectsCount: Number(x.projectsCount || 0),
-          user: u ? { ...u, displayName: displayName(u) } : null,
-        };
-      })
-      .sort((a, b) => b.projectsCount - a.projectsCount)
-      .slice(0, 5);
-
-    // ✅ latest projects
     const latestProjects = await Project.findAll({
+      where,
       order: [["createdAt", "DESC"]],
       limit: 5,
-      attributes: [
-        "id",
-        "nomProjet",
-        "validationStatut",
-        "statut",
-        "createdAt",
-        "latitude",
-        "longitude",
-      ],
+      attributes: ["id", "nomProjet", "validationStatut", "statut", "createdAt", "latitude", "longitude"],
       raw: true,
     });
 
     return res.json({
-      summary: {
-        totalProjects,
-        validatedProjects,
-        nonValidatedProjects,
-        validatedPercentage,
-      },
+      summary: { totalProjects, validatedProjects, nonValidatedProjects, validatedPercentage },
       validationStatusCount: validationStatusCount.map((r) => ({
         validationStatut: r.validationStatut ?? "Non défini",
         projectCount: Number(r.projectCount || 0),
@@ -547,12 +487,11 @@ router.get("/kpi/dashboard", authRequired, async (req, res) => {
       mapProjects,
       topUsers,
       latestProjects,
+      scope: global ? "GLOBAL" : "USER_ONLY", // (optionnel) utile pour debug frontend
     });
   } catch (err) {
     console.error("KPI_DASHBOARD_ERROR:", err);
-    return res
-      .status(500)
-      .json({ error: "KPI_DASHBOARD_ERROR", details: err.message });
+    return res.status(500).json({ error: "KPI_DASHBOARD_ERROR", details: err.message });
   }
 });
 
@@ -925,7 +864,7 @@ router.post("/", authRequired, async (req, res) => {
     return res.status(500).json({ message: e.message || "Server error" });
   }
 });
-// ---------------- LIST ----------------
+
 // ---------------- LIST ----------------
 router.get("/", authRequired, async (req, res) => {
   try {
@@ -1032,7 +971,7 @@ router.get("/", authRequired, async (req, res) => {
         ...json,
         permission: perm,
         ownerName,
-  commentCount: Number(json.commentCount || 0),
+
         // ✅ ensure numbers (sometimes literal returns string)
         devisCount: Number(json.devisCount || 0),
         bonCommandeCount: Number(json.bonCommandeCount || 0),
