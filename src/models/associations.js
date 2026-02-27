@@ -46,6 +46,7 @@ Project.hasMany(ProjectDevis, { foreignKey: "projectId", onDelete: "CASCADE" });
 ProjectDevis.belongsTo(Project, { foreignKey: "projectId" });
 Project.hasMany(ProjectBonDeCommande, { foreignKey: "projectId", onDelete: "CASCADE" });
 ProjectBonDeCommande.belongsTo(Project, { foreignKey: "projectId" });
-User.hasMany(Task, { foreignKey: "createdBy", as: "tasks", onDelete: "CASCADE" });
+//User.hasMany(Task, { foreignKey: "createdBy", as: "tasks", onDelete: "CASCADE" });
 Task.belongsTo(User, { foreignKey: "createdBy", as: "creator" });
+User.hasMany(Task, { foreignKey: "createdBy", as: "tasks" });
 module.exports = { User, Project, UserProject, ProjectComment, UserProfile , Notification , ProjectDevis };

@@ -1,15 +1,16 @@
 const router = require("express").Router();
 const { Op } = require("sequelize");
 const Task = require("../models/Task"); // ✅ CORRECT (pas {Task})
+const User = require("../models/User");
 const { authRequired } = require("../middleware/auth.middleware");
 
 // ✅ LIST ?from=2026-02-01&to=2026-02-28
+// ✅ LIST
 router.get("/", authRequired, async (req, res) => {
   try {
     const where = {};
 
-    // admin/superadmin => tout
-    // sinon => seulement ses tâches
+    // user => seulement ses tasks
     if (!["admin", "superadmin"].includes(req.user.role)) {
       where.createdBy = req.user.sub;
     }
@@ -21,7 +22,22 @@ router.get("/", authRequired, async (req, res) => {
       if (to) where.startAt[Op.lte] = new Date(to);
     }
 
-    const items = await Task.findAll({ where, order: [["startAt", "ASC"]] });
+    const include = [];
+    // ✅ admin/superadmin => join creator pour afficher qui a créé
+    if (["admin", "superadmin"].includes(req.user.role)) {
+      include.push({
+        model: User,
+        as: "creator",
+        attributes: ["id", "email"], // ✅ PAS name
+      });
+    }
+
+    const items = await Task.findAll({
+      where,
+      include,
+      order: [["startAt", "ASC"]],
+    });
+
     return res.json(items);
   } catch (e) {
     return res.status(500).json({ message: e.message || "Server error" });
