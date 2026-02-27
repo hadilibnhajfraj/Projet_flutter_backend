@@ -1032,7 +1032,7 @@ router.get("/", authRequired, async (req, res) => {
         ...json,
         permission: perm,
         ownerName,
-
+  commentCount: Number(json.commentCount || 0),
         // ✅ ensure numbers (sometimes literal returns string)
         devisCount: Number(json.devisCount || 0),
         bonCommandeCount: Number(json.bonCommandeCount || 0),
