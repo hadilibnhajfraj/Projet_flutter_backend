@@ -10,7 +10,7 @@ router.get("/", authRequired, async (req, res) => {
   try {
     const where = {};
 
-    // user => seulement ses tasks
+    // admin/superadmin => tout
     if (!["admin", "superadmin"].includes(req.user.role)) {
       where.createdBy = req.user.sub;
     }
@@ -22,23 +22,28 @@ router.get("/", authRequired, async (req, res) => {
       if (to) where.startAt[Op.lte] = new Date(to);
     }
 
-    const include = [];
-    // ✅ admin/superadmin => join creator pour afficher qui a créé
-    if (["admin", "superadmin"].includes(req.user.role)) {
-      include.push({
-        model: User,
-        as: "creator",
-        attributes: ["id", "email"], // ✅ PAS name
-      });
-    }
-
     const items = await Task.findAll({
       where,
-      include,
       order: [["startAt", "ASC"]],
+      include: [
+        {
+          model: User,
+          as: "creator",
+          attributes: ["id", "email"], // ✅ pas "name"
+        },
+      ],
     });
 
-    return res.json(items);
+    // ✅ option: aplatir creatorEmail pour simplifier Flutter
+    const out = items.map((t) => {
+      const json = t.toJSON();
+      return {
+        ...json,
+        creatorEmail: json.creator?.email ?? null,
+      };
+    });
+
+    return res.json(out);
   } catch (e) {
     return res.status(500).json({ message: e.message || "Server error" });
   }
