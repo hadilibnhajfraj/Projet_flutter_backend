@@ -1,6 +1,6 @@
 // routes/projects.routes.js
 const express = require("express");
-const { Op, fn, col, where } = require("sequelize");
+const { Op, fn, col, where, literal } = require("sequelize");
 const { User, Project, UserProject, ProjectComment } = require("../models/associations");
 const { authRequired } = require("../middleware/auth.middleware");
 const { sequelize } = require("../db");
@@ -198,6 +198,12 @@ async function getPermission(user, projectId) {
   });
 
   return link?.permission || "viewer";
+}
+// ✅ middleware admin (si tu as déjà isAdminRole utilise-le)
+function adminOnly(req, res, next) {
+  const role = (req.user?.role || "").toLowerCase();
+  if (role === "admin" || role === "superadmin") return next();
+  return res.status(403).json({ message: "Forbidden" });
 }
 // routes/projects.routes.js (or equivalent file where routes are defined)
 
@@ -757,7 +763,139 @@ router.get("/projectsusers", authRequired, async (req, res) => {
     return res.status(500).json({ message: e.message || "Server error" });
   }
 });
+router.get("/admin/users-projects-count", authRequired, adminOnly, async (req, res) => {
+  try {
+    // ✅ safe attrs (comme tu as fait)
+    const wanted = ["id","email","username","firstname","lastname","firstName","lastName","prenom","nom","name","fullName"];
+    const safeAttrs = wanted.filter((a) => !!User.rawAttributes?.[a]);
+    const userAttrs = safeAttrs.length ? safeAttrs : ["id", "email"];
 
+    const rows = await UserProject.findAll({
+      attributes: [
+        "userId",
+        [fn("COUNT", col("projectId")), "projectsCount"],
+      ],
+      include: [
+        {
+          model: User,
+          attributes: userAttrs,
+          required: true,
+        },
+      ],
+      group: ["userId", ...userAttrs.map((a) => col(`User.${a}`))], // Sequelize OK
+      order: [[literal('"projectsCount"'), "DESC"]],
+      raw: false,
+    });
+
+    const displayName = (u) =>
+      u?.firstname ||
+      u?.firstName ||
+      u?.prenom ||
+      u?.lastname ||
+      u?.lastName ||
+      u?.nom ||
+      u?.username ||
+      u?.name ||
+      u?.fullName ||
+      u?.email ||
+      "Inconnu";
+
+    const out = rows.map((r) => ({
+      userId: r.userId,
+      projectsCount: Number(r.get("projectsCount") || 0),
+      email: r.User?.email || "",
+      displayName: displayName(r.User),
+    }));
+
+    return res.json(out);
+  } catch (e) {
+    console.error("ADMIN_USERS_PROJECTS_COUNT_ERROR:", e);
+    return res.status(500).json({ message: e.message || "Server error" });
+  }
+});
+router.get("/admin/user/:userId/projects", authRequired, adminOnly, async (req, res) => {
+  try {
+    // ✅ UUID/string (NE PAS Number)
+    const userId = (req.params.userId || "").toString().trim();
+    if (!userId) return res.status(400).json({ message: "Invalid userId" });
+
+    const { q } = req.query;
+    const where = {};
+
+    if (typeof q === "string" && q.trim()) {
+      const s = q.trim();
+      where[Op.or] = [
+        { nomProjet: { [Op.iLike]: `%${s}%` } },
+        { entreprise: { [Op.iLike]: `%${s}%` } },
+        { promoteur: { [Op.iLike]: `%${s}%` } },
+        { adresse: { [Op.iLike]: `%${s}%` } },
+        { typeProjet: { [Op.iLike]: `%${s}%` } },
+        { validationStatut: { [Op.iLike]: `%${s}%` } },
+      ];
+    }
+
+    // ✅ safe user attrs
+    const wanted = ["id","email","username","firstname","lastname","firstName","lastName","prenom","nom","name","fullName"];
+    const safeAttrs = wanted.filter((a) => !!User.rawAttributes?.[a]);
+    const userAttrs = safeAttrs.length ? safeAttrs : ["id", "email"];
+
+    const items = await Project.findAll({
+      where,
+      include: [
+        {
+          model: UserProject,
+          required: true,
+          where: { userId }, // ✅ string UUID OK
+          attributes: ["id", "userId", "projectId", "permission", "createdAt"],
+          include: [{ model: User, attributes: userAttrs }],
+        },
+      ],
+      order: [["createdAt", "DESC"]],
+    });
+
+    const displayName = (u) =>
+      u?.firstname ||
+      u?.firstName ||
+      u?.prenom ||
+      u?.lastname ||
+      u?.lastName ||
+      u?.nom ||
+      u?.username ||
+      u?.name ||
+      u?.fullName ||
+      u?.email ||
+      "Inconnu";
+
+    const out = items.map((p) => {
+      const json = p.toJSON();
+
+      const members =
+        (json.UserProjects || [])
+          .map((up) => ({
+            userId: up.userId,
+            permission: up.permission,
+            user: up.User
+              ? { id: up.User.id, email: up.User.email, displayName: displayName(up.User) }
+              : null,
+          }))
+          .filter((x) => x.user) || [];
+
+      const owner = members.find((m) => m.permission === "owner") || null;
+      delete json.UserProjects;
+
+      return {
+        ...json,
+        owner: owner ? owner.user : null,
+        members: members.map((m) => ({ permission: m.permission, ...m.user })),
+      };
+    });
+
+    return res.json(out);
+  } catch (e) {
+    console.error("ADMIN_USER_PROJECTS_LIST_ERROR:", e);
+    return res.status(500).json({ message: e.message || "Server error" });
+  }
+});
 /* ============================================================
    ✅ CRUD ROUTES
    ============================================================ */
