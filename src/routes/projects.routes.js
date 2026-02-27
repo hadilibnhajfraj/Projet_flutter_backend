@@ -456,7 +456,7 @@ router.get("/kpi/dashboard", authRequired, async (req, res) => {
       const userIds = projectsPerUser.map((x) => x.userId).filter(Boolean);
 
       const users = userIds.length
-        ? await User.findAll({ where: { id: userIds }, attributes: ["id", "email", "username"], raw: true })
+        ? await User.findAll({ where: { id: userIds }, attributes: ["id", "email"], raw: true })
         : [];
 
       const userMap = new Map(users.map((u) => [u.id, u]));
