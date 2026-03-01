@@ -1124,6 +1124,7 @@ router.get("/", authRequired, async (req, res) => {
 });
 
 // ---------------- GET BY ID ----------------
+// ---------------- GET BY ID ----------------
 router.get("/:id", authRequired, async (req, res) => {
   try {
     if (!isUUID(req.params.id)) {
@@ -1136,9 +1137,36 @@ router.get("/:id", authRequired, async (req, res) => {
           model: UserProject,
           required: false,
           attributes: ["permission", "userId", "createdAt"],
-          include: [{ model: User, attributes: ["id", "email", ...(User.rawAttributes?.username ? ["username"] : [])] }],
+          include: [
+            {
+              model: User,
+              attributes: ["id", "email", ...(User.rawAttributes?.username ? ["username"] : [])],
+            },
+          ],
         },
       ],
+      attributes: {
+        include: [
+          [
+            sequelize.literal(
+              `(SELECT COUNT(*) FROM project_comments pc WHERE pc."projectId" = "Project"."id")`
+            ),
+            "commentCount",
+          ],
+          [
+            sequelize.literal(
+              `(SELECT COUNT(*) FROM project_devis d WHERE d."projectId" = "Project"."id")`
+            ),
+            "devisCount",
+          ],
+          [
+            sequelize.literal(
+              `(SELECT COUNT(*) FROM project_bon_de_commande bc WHERE bc."projectId" = "Project"."id")`
+            ),
+            "bonCommandeCount",
+          ],
+        ],
+      },
     });
 
     if (!item) return res.status(404).json({ message: "Not found" });
@@ -1147,14 +1175,17 @@ router.get("/:id", authRequired, async (req, res) => {
     const permission = await getPermission(req.user, req.params.id);
 
     const ownerLink = (json.UserProjects || []).find((up) => up.permission === "owner");
-    const ownerName =
-      ownerLink?.User?.username ||
-      ownerLink?.User?.email ||
-      "";
+    const ownerName = ownerLink?.User?.username || ownerLink?.User?.email || "";
 
     delete json.UserProjects;
 
-    return res.json({ ...json, permission, ownerName });
+    return res.json({
+      ...json,
+      permission,
+      ownerName,
+      devisCount: Number(json.devisCount || 0),
+      bonCommandeCount: Number(json.bonCommandeCount || 0),
+    });
   } catch (e) {
     console.error("PROJECT_GET_ERROR:", e);
     return res.status(500).json({ message: e.message || "Server error" });
@@ -1213,7 +1244,19 @@ router.put("/:id", authRequired, async (req, res) => {
     }
 
     await item.update(up);
-    return res.json({ ...item.toJSON(), permission });
+
+    // ✅ NEW: counts for card colors
+    const [devisCount, bonCommandeCount] = await Promise.all([
+      ProjectDevis.count({ where: { projectId: item.id } }),
+      ProjectBonDeCommande.count({ where: { projectId: item.id } }),
+    ]);
+
+    return res.json({
+      ...item.toJSON(),
+      permission,
+      devisCount,
+      bonCommandeCount,
+    });
   } catch (e) {
     console.error("PROJECT_UPDATE_ERROR:", e);
     return res.status(500).json({ message: e.message || "Server error" });
