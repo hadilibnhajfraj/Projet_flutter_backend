@@ -1,5 +1,5 @@
+// routes/utils.routes.js
 const express = require("express");
-
 const router = express.Router();
 
 router.get("/expand-maps", async (req, res) => {
@@ -7,21 +7,14 @@ router.get("/expand-maps", async (req, res) => {
     const { url } = req.query;
     if (!url) return res.status(400).json({ error: "url is required" });
 
-    // Node 22 => fetch global OK
     const r = await fetch(url, { redirect: "follow" });
     const finalUrl = r.url || "";
 
     const m1 = finalUrl.match(/@(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)/);
-    if (m1) {
-      return res.json({ lat: Number(m1[1]), lng: Number(m1[2]), finalUrl });
-    }
+    if (m1) return res.json({ lat: Number(m1[1]), lng: Number(m1[2]), finalUrl });
 
-    const m2 = finalUrl.match(
-      /(?:query=|q=)(-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?)/
-    );
-    if (m2) {
-      return res.json({ lat: Number(m2[1]), lng: Number(m2[2]), finalUrl });
-    }
+    const m2 = finalUrl.match(/(?:query=|q=)(-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?)/);
+    if (m2) return res.json({ lat: Number(m2[1]), lng: Number(m2[2]), finalUrl });
 
     return res.status(422).json({ error: "No coordinates found", finalUrl });
   } catch (e) {
