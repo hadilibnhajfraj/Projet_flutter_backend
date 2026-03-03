@@ -1,24 +1,24 @@
-import express from "express";
+const express = require("express");
 
 const router = express.Router();
 
-router.get("/utils/expand-maps", async (req, res) => {
+router.get("/expand-maps", async (req, res) => {
   try {
     const { url } = req.query;
     if (!url) return res.status(400).json({ error: "url is required" });
 
-    // 1) follow redirects
+    // Node 22 => fetch global OK
     const r = await fetch(url, { redirect: "follow" });
     const finalUrl = r.url || "";
 
-    // 2) extract @lat,lng
     const m1 = finalUrl.match(/@(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)/);
     if (m1) {
       return res.json({ lat: Number(m1[1]), lng: Number(m1[2]), finalUrl });
     }
 
-    // 3) extract q=lat,lng or query=lat,lng
-    const m2 = finalUrl.match(/(?:query=|q=)(-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?)/);
+    const m2 = finalUrl.match(
+      /(?:query=|q=)(-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?)/
+    );
     if (m2) {
       return res.json({ lat: Number(m2[1]), lng: Number(m2[2]), finalUrl });
     }
@@ -29,4 +29,4 @@ router.get("/utils/expand-maps", async (req, res) => {
   }
 });
 
-export default router;
+module.exports = router;
