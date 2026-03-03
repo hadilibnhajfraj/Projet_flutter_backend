@@ -14,6 +14,7 @@ const projectRoutes = require("./routes/projects.routes");
 const adminRoutes = require("./routes/admin"); // ✅ NEW
 const userProfileRoutes = require("./routes/userProfile.routes");
 const taskRoutes = require("./routes/tasks.routes");
+const utilsRoutes  = require("./routes/utilsRoutes");
 const app = express();
 
 app.use(helmet());
@@ -38,6 +39,7 @@ app.use("/users", require("./routes/users.routes"));
 app.use("/uploads", express.static("uploads"));
 app.use("/users", userProfileRoutes);
 app.use("/uploads", express.static("uploads"));
+app.use(utilsRoutes);
 app.get("/me", authRequired, (req, res) => {
   res.json({ user: req.user });
 });
