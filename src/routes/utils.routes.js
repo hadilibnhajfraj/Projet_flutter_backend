@@ -1,23 +1,21 @@
-// routes/utils.routes.js
+// src/routes/utils.routes.js
 const express = require("express");
 const router = express.Router();
 
 /**
- * Extract coordinates from Google Maps URL or short share URL.
+ * GET /utils/expand-maps?url=<maps share url>
  * Supports:
  * - @lat,lng
  * - q=lat,lng / query=lat,lng
  * - ll=lat,lng
- * - pb=...!3dLAT!4dLNG...
- * - place/<NAME>/  => fallback via /utils/geocode?q=<NAME>
+ * - pb=...!3dLAT!4dLNG... or !4dLNG!3dLAT
+ * - /maps/place/<NAME>/  => fallback via Nominatim (OSM)
  */
-
 router.get("/expand-maps", async (req, res) => {
   try {
     const url = String(req.query.url || "").trim();
     if (!url) return res.status(400).json({ error: "url is required" });
 
-    // follow redirects
     const r = await fetch(url, {
       redirect: "follow",
       headers: {
@@ -34,10 +32,8 @@ router.get("/expand-maps", async (req, res) => {
     const ok = (lat, lng) =>
       Number.isFinite(lat) &&
       Number.isFinite(lng) &&
-      lat >= -90 &&
-      lat <= 90 &&
-      lng >= -180 &&
-      lng <= 180;
+      lat >= -90 && lat <= 90 &&
+      lng >= -180 && lng <= 180;
 
     let m;
 
@@ -69,46 +65,50 @@ router.get("/expand-maps", async (req, res) => {
       if (ok(lat, lng)) return res.json({ lat, lng, finalUrl, method: "pb_3d4d" });
     }
 
-    // 5) sometimes inverted
+    // 5) sometimes inverted pb: !4dLNG!3dLAT
     m = finalUrl.match(/!4d(-?\d+(?:\.\d+)?)!3d(-?\d+(?:\.\d+)?)/);
     if (m) {
       const lng = Number(m[1]), lat = Number(m[2]);
       if (ok(lat, lng)) return res.json({ lat, lng, finalUrl, method: "pb_4d3d" });
     }
 
-    // ✅ 6) FALLBACK: extract place name and geocode it
+    // ✅ 6) FALLBACK: /maps/place/<NAME>/ => Nominatim
     // example: https://www.google.com/maps/place/Mahdia/data=...
-    const pm = finalUrl.match(/\/maps\/place\/([^\/\?]+)\//);
+    const pm = finalUrl.match(/\/maps\/place\/([^\/\?]+)(?:\/|\?|$)/);
     if (pm && pm[1]) {
-      const place = decodeURIComponent(pm[1]).replace(/\+/g, " ").trim();
+      const placeRaw = decodeURIComponent(pm[1]).replace(/\+/g, " ").trim();
 
-      // call your own geocode route (same server) => /utils/geocode?q=place
-      const base = `${req.protocol}://${req.get("host")}`;
-      const geoUrl = `${base}/utils/geocode?q=${encodeURIComponent(place)}`;
+      // Better query for Tunisia
+      const query = `${placeRaw}, Tunisia`;
 
-      try {
-        const gr = await fetch(geoUrl, { headers: { "Accept": "application/json" } });
-        if (gr.ok) {
-          const list = await gr.json();
-          if (Array.isArray(list) && list.length > 0) {
-            const best = list[0];
-            const lat = Number(best.lat);
-            const lng = Number(best.lon ?? best.lng);
+      const nomUrl =
+        "https://nominatim.openstreetmap.org/search?format=json&limit=1&q=" +
+        encodeURIComponent(query);
 
-            if (ok(lat, lng)) {
-              return res.json({
-                lat,
-                lng,
-                finalUrl,
-                method: "fallback_geocode",
-                place,
-                geocodeUrl: geoUrl,
-              });
-            }
+      const nr = await fetch(nomUrl, {
+        headers: {
+          // Nominatim asks for a real UA / contact
+          "User-Agent": "CRMProbar/1.0 (contact@cbi-tunisia.com)",
+          "Accept": "application/json",
+        },
+      });
+
+      if (nr.ok) {
+        const list = await nr.json();
+        if (Array.isArray(list) && list.length > 0) {
+          const lat = Number(list[0].lat);
+          const lng = Number(list[0].lon);
+          if (ok(lat, lng)) {
+            return res.json({
+              lat,
+              lng,
+              finalUrl,
+              method: "fallback_nominatim",
+              place: placeRaw,
+              nominatimQuery: query,
+            });
           }
         }
-      } catch (_) {
-        // ignore
       }
     }
 
