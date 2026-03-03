@@ -3,27 +3,26 @@ const express = require("express");
 const router = express.Router();
 
 /**
- * GET /utils/expand-maps?url=<google_maps_share_url>
- * - Follows redirects (maps.app.goo.gl / goo.gl/maps)
- * - Extracts coordinates from multiple final URL formats:
- *   1) .../@lat,lng,zoom
- *   2) ...?q=lat,lng or ...?query=lat,lng
- *   3) ...?ll=lat,lng
- *   4) ...pb=...!3dLAT!4dLNG... (very common from mobile share)
- *   5) fallback: extract first pair of numbers that look like lat/lng (safe-ish)
+ * Extract coordinates from Google Maps URL or short share URL.
+ * Supports:
+ * - @lat,lng
+ * - q=lat,lng / query=lat,lng
+ * - ll=lat,lng
+ * - pb=...!3dLAT!4dLNG...
+ * - place/<NAME>/  => fallback via /utils/geocode?q=<NAME>
  */
+
 router.get("/expand-maps", async (req, res) => {
   try {
     const url = String(req.query.url || "").trim();
     if (!url) return res.status(400).json({ error: "url is required" });
 
-    // ✅ Follow redirects
+    // follow redirects
     const r = await fetch(url, {
       redirect: "follow",
       headers: {
-        // helps some google responses
         "User-Agent": "Mozilla/5.0 (compatible; CRMProbarBot/1.0)",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept": "text/html,*/*",
       },
     });
 
@@ -32,7 +31,6 @@ router.get("/expand-maps", async (req, res) => {
       return res.status(422).json({ error: "Could not resolve finalUrl", finalUrl: "" });
     }
 
-    // Helper: validate lat/lng ranges
     const ok = (lat, lng) =>
       Number.isFinite(lat) &&
       Number.isFinite(lng) &&
@@ -41,56 +39,77 @@ router.get("/expand-maps", async (req, res) => {
       lng >= -180 &&
       lng <= 180;
 
-    // Try patterns in order
     let m;
 
     // 1) .../@lat,lng
     m = finalUrl.match(/@(-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?)/);
     if (m) {
-      const lat = Number(m[1]);
-      const lng = Number(m[2]);
-      if (ok(lat, lng)) return res.json({ lat, lng, finalUrl });
+      const lat = Number(m[1]), lng = Number(m[2]);
+      if (ok(lat, lng)) return res.json({ lat, lng, finalUrl, method: "at" });
     }
 
-    // 2) ...?q=lat,lng  or  ...?query=lat,lng
+    // 2) ...?q=lat,lng or query=lat,lng
     m = finalUrl.match(/(?:[?&](?:q|query)=)(-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?)/);
     if (m) {
-      const lat = Number(m[1]);
-      const lng = Number(m[2]);
-      if (ok(lat, lng)) return res.json({ lat, lng, finalUrl });
+      const lat = Number(m[1]), lng = Number(m[2]);
+      if (ok(lat, lng)) return res.json({ lat, lng, finalUrl, method: "q" });
     }
 
     // 3) ...?ll=lat,lng
     m = finalUrl.match(/(?:[?&]ll=)(-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?)/);
     if (m) {
-      const lat = Number(m[1]);
-      const lng = Number(m[2]);
-      if (ok(lat, lng)) return res.json({ lat, lng, finalUrl });
+      const lat = Number(m[1]), lng = Number(m[2]);
+      if (ok(lat, lng)) return res.json({ lat, lng, finalUrl, method: "ll" });
     }
 
-    // 4) pb=...!3dLAT!4dLNG...  (mobile share often)
+    // 4) pb=...!3dLAT!4dLNG...
     m = finalUrl.match(/!3d(-?\d+(?:\.\d+)?)!4d(-?\d+(?:\.\d+)?)/);
     if (m) {
-      const lat = Number(m[1]);
-      const lng = Number(m[2]);
-      if (ok(lat, lng)) return res.json({ lat, lng, finalUrl });
+      const lat = Number(m[1]), lng = Number(m[2]);
+      if (ok(lat, lng)) return res.json({ lat, lng, finalUrl, method: "pb_3d4d" });
     }
 
-    // 5) Sometimes inverted order exists: !4dLNG!3dLAT
+    // 5) sometimes inverted
     m = finalUrl.match(/!4d(-?\d+(?:\.\d+)?)!3d(-?\d+(?:\.\d+)?)/);
     if (m) {
-      const lng = Number(m[1]);
-      const lat = Number(m[2]);
-      if (ok(lat, lng)) return res.json({ lat, lng, finalUrl });
+      const lng = Number(m[1]), lat = Number(m[2]);
+      if (ok(lat, lng)) return res.json({ lat, lng, finalUrl, method: "pb_4d3d" });
     }
 
-    // 6) Fallback: find first plausible lat,lng pair in URL (conservative)
-    // looks for "...<lat>,<lng>..." anywhere
-    m = finalUrl.match(/(-?\d{1,2}\.\d+),\s*(-?\d{1,3}\.\d+)/);
-    if (m) {
-      const lat = Number(m[1]);
-      const lng = Number(m[2]);
-      if (ok(lat, lng)) return res.json({ lat, lng, finalUrl });
+    // ✅ 6) FALLBACK: extract place name and geocode it
+    // example: https://www.google.com/maps/place/Mahdia/data=...
+    const pm = finalUrl.match(/\/maps\/place\/([^\/\?]+)\//);
+    if (pm && pm[1]) {
+      const place = decodeURIComponent(pm[1]).replace(/\+/g, " ").trim();
+
+      // call your own geocode route (same server) => /utils/geocode?q=place
+      const base = `${req.protocol}://${req.get("host")}`;
+      const geoUrl = `${base}/utils/geocode?q=${encodeURIComponent(place)}`;
+
+      try {
+        const gr = await fetch(geoUrl, { headers: { "Accept": "application/json" } });
+        if (gr.ok) {
+          const list = await gr.json();
+          if (Array.isArray(list) && list.length > 0) {
+            const best = list[0];
+            const lat = Number(best.lat);
+            const lng = Number(best.lon ?? best.lng);
+
+            if (ok(lat, lng)) {
+              return res.json({
+                lat,
+                lng,
+                finalUrl,
+                method: "fallback_geocode",
+                place,
+                geocodeUrl: geoUrl,
+              });
+            }
+          }
+        }
+      } catch (_) {
+        // ignore
+      }
     }
 
     return res.status(422).json({ error: "No coordinates found", finalUrl });
