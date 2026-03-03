@@ -16,6 +16,7 @@ router.get("/expand-maps", async (req, res) => {
     const url = String(req.query.url || "").trim();
     if (!url) return res.status(400).json({ error: "url is required" });
 
+    // Follow redirects
     const r = await fetch(url, {
       redirect: "follow",
       headers: {
@@ -72,32 +73,45 @@ router.get("/expand-maps", async (req, res) => {
       if (ok(lat, lng)) return res.json({ lat, lng, finalUrl, method: "pb_4d3d" });
     }
 
-    // ✅ 6) FALLBACK: /maps/place/<NAME>/ => Nominatim
-    // example: https://www.google.com/maps/place/Mahdia/data=...
+    // ✅ 6) FALLBACK: /maps/place/<NAME>/ => Nominatim (try 2 queries)
     const pm = finalUrl.match(/\/maps\/place\/([^\/\?]+)(?:\/|\?|$)/);
     if (pm && pm[1]) {
       const placeRaw = decodeURIComponent(pm[1]).replace(/\+/g, " ").trim();
 
-      // Better query for Tunisia
-      const query = `${placeRaw}, Tunisia`;
+      const tryQueries = [
+        `${placeRaw}, Tunisia`, // ex: Mahdia, Tunisia
+        `${placeRaw}`,          // ex: Rue Slimane El Hrairi, Tunis
+      ];
 
-      const nomUrl =
-        "https://nominatim.openstreetmap.org/search?format=json&limit=1&q=" +
-        encodeURIComponent(query);
+      for (const q of tryQueries) {
+        const nomUrl =
+          "https://nominatim.openstreetmap.org/search?format=json&limit=1&q=" +
+          encodeURIComponent(q);
 
-      const nr = await fetch(nomUrl, {
-        headers: {
-          // Nominatim asks for a real UA / contact
-          "User-Agent": "CRMProbar/1.0 (contact@cbi-tunisia.com)",
-          "Accept": "application/json",
-        },
-      });
+        const nr = await fetch(nomUrl, {
+          headers: {
+            "User-Agent": "CRMProbar/1.0 (contact@cbi-tunisia.com)",
+            "Accept": "application/json",
+          },
+        });
 
-      if (nr.ok) {
+        if (nr.status === 429) {
+          return res.status(503).json({
+            error: "Nominatim rate limited (429). Retry later.",
+            finalUrl,
+            method: "fallback_nominatim_429",
+            place: placeRaw,
+            triedQuery: q,
+          });
+        }
+
+        if (!nr.ok) continue;
+
         const list = await nr.json();
         if (Array.isArray(list) && list.length > 0) {
           const lat = Number(list[0].lat);
           const lng = Number(list[0].lon);
+
           if (ok(lat, lng)) {
             return res.json({
               lat,
@@ -105,13 +119,14 @@ router.get("/expand-maps", async (req, res) => {
               finalUrl,
               method: "fallback_nominatim",
               place: placeRaw,
-              nominatimQuery: query,
+              nominatimQuery: q,
             });
           }
         }
       }
     }
 
+    // If nothing matched
     return res.status(422).json({ error: "No coordinates found", finalUrl });
   } catch (e) {
     return res.status(500).json({ error: "expand failed", details: String(e) });
