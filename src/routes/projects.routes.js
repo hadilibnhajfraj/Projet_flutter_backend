@@ -1057,7 +1057,12 @@ router.get("/", authRequired, async (req, res) => {
             ),
             "commentCount",
           ],
-
+[
+  sequelize.literal(
+    `(SELECT COUNT(*) FROM tasks t WHERE t."projectId" = "Project"."id")`
+  ),
+  "taskCount",
+],
           // ✅ NEW: devisCount
           [
             sequelize.literal(
@@ -1113,6 +1118,7 @@ router.get("/", authRequired, async (req, res) => {
         // ✅ ensure numbers (sometimes literal returns string)
         devisCount: Number(json.devisCount || 0),
         bonCommandeCount: Number(json.bonCommandeCount || 0),
+        taskCount: Number(json.taskCount || 0),
       };
     });
 
