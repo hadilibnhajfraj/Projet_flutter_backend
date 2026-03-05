@@ -17,7 +17,8 @@ const Task = sequelize.define(
 
     // ✅ qui a créé (commercial)
     createdBy: { type: DataTypes.UUID, allowNull: false },
-
+  // ✅ NEW: task liée à un projet
+    projectId: { type: DataTypes.UUID, allowNull: true }, // TEMPORAIRE
     // optionnel : état
     status: {
       type: DataTypes.ENUM("planned", "done", "canceled"),
