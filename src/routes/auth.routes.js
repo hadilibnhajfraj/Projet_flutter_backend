@@ -160,47 +160,67 @@ router.post("/signup", async (req, res) => {
   try {
     const { email, password } = req.body || {};
 
-    if (!isValidEmail(email)) return res.status(400).json({ message: "Invalid email" });
-    if (!isStrongPassword(password)) return res.status(400).json({ message: "Weak password (min 8 chars)" });
+    if (!isValidEmail(email)) {
+      return res.status(400).json({ message: "Invalid email" });
+    }
 
-    const cleanEmail = email.toLowerCase().trim();
+    if (!isStrongPassword(password)) {
+      return res.status(400).json({ message: "Weak password (min 8 chars)" });
+    }
+
+    const cleanEmail = String(email).toLowerCase().trim();
 
     const exists = await User.findOne({ where: { email: cleanEmail } });
-    if (exists) return res.status(409).json({ message: "Email already used" });
+    if (exists) {
+      return res.status(409).json({ message: "Email already used" });
+    }
 
-    const passwordHash = await bcrypt.hash(password, 12);
+    const passwordHash = await bcrypt.hash(String(password), 12);
+
+    // ✅ rôle auto selon email
+    let role = "user";
+
+    if (cleanEmail === "accueilcbif@gmail.com") {
+      role = "accueil";
+    } else if (cleanEmail.endsWith("@probardistribution.com")) {
+      role = "commercial";
+    }
 
     // ✅ Nouveau user: disabled par défaut
-    // ✅ role forcé "user" (pas de création admin/superadmin via signup)
     const user = await User.create({
       email: cleanEmail,
       passwordHash,
-      isActive: false,   // ✅ disabled par défaut
-      role: "user",
+      isActive: false,
+      role,
     });
+
     await UserProfile.create({
-  userId: user.id,
-  name: null,
-  designation: null,
-  birthday: null,
-  phone: null,
-  country: null,
-  state: null,
-  address: null,
-  about: null,
-  avatarUrl: null,
-});
+      userId: user.id,
+      name: null,
+      designation: null,
+      birthday: null,
+      phone: null,
+      country: null,
+      state: null,
+      address: null,
+      about: null,
+      avatarUrl: null,
+    });
+
     return res.status(201).json({
       message: "Account created. Waiting for admin activation.",
-      user: { id: user.id, email: user.email, role: user.role, isActive: user.isActive },
+      user: {
+        id: user.id,
+        email: user.email,
+        role: user.role,
+        isActive: user.isActive,
+      },
     });
   } catch (e) {
     console.error("SIGNUP_ERROR:", e);
     return res.status(500).json({ message: "Server error" });
   }
 });
-
-
 
 // POST /auth/signin
 router.post("/signin", signinLimiter, async (req, res) => {

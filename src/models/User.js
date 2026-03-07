@@ -12,11 +12,11 @@ const User = sequelize.define(
 
     isActive: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
 
-    role: {
-      type: DataTypes.ENUM("user", "admin", "superadmin"),
-      allowNull: false,
-      defaultValue: "user",
-    },
+   role: {
+  type: DataTypes.ENUM("user", "commercial", "accueil", "admin", "superadmin"),
+  allowNull: false,
+  defaultValue: "user",
+},
 
     // models/User.js (extrait)
 resetPasswordTokenHash: { type: DataTypes.STRING, allowNull: true },

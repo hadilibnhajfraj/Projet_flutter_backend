@@ -9,6 +9,8 @@ const ProjectMember = require("./ProjectMember");
 const ProjectDevis = require("./ProjectDevis");
 const ProjectBonDeCommande = require("./ProjectBonDeCommande");
 const Task = require("./Task");
+const CommercialContact = require("./CommercialContact");
+const CommercialContactProduct = require("./CommercialContactProduct");
 User.belongsToMany(Project, {
   through: UserProject,
   foreignKey: "userId",
@@ -52,4 +54,21 @@ User.hasMany(Task, { as: "tasks", foreignKey: "createdBy" });
 // ✅ NEW
 Task.belongsTo(Project, { as: "project", foreignKey: "projectId" });
 Project.hasMany(Task, { as: "tasks", foreignKey: "projectId", onDelete: "CASCADE" });
-module.exports = { User, Project, UserProject, ProjectComment, UserProfile , Notification , ProjectDevis ,Task};
+// Contact -> Products
+CommercialContact.hasMany(CommercialContactProduct, {
+  as: "produits",
+  foreignKey: "commercialContactId",
+  onDelete: "CASCADE",
+});
+CommercialContactProduct.belongsTo(CommercialContact, {
+  as: "contact",
+  foreignKey: "commercialContactId",
+});
+
+// Contact -> Creator (User)
+CommercialContact.belongsTo(User, { as: "creator", foreignKey: "createdBy" });
+User.hasMany(CommercialContact, { as: "commercialContacts", foreignKey: "createdBy" });
+
+
+module.exports = { User, Project, UserProject, ProjectComment, UserProfile , Notification , ProjectDevis ,Task , CommercialContact,
+  CommercialContactProduct,};

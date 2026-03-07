@@ -15,7 +15,21 @@ const router = express.Router();
 function reqStr(v) {
   return typeof v === "string" ? v.trim() : "";
 }
-
+function getUserDisplayName(u) {
+  return (
+    u?.firstname ||
+    u?.firstName ||
+    u?.prenom ||
+    u?.lastname ||
+    u?.lastName ||
+    u?.nom ||
+    u?.username ||
+    u?.name ||
+    u?.fullName ||
+    u?.email ||
+    "Inconnu"
+  );
+}
 function isValidPhone(v) {
   const s = reqStr(v);
   return s.length >= 6 && s.length <= 30 && /^[0-9+\s\-()]+$/.test(s);
@@ -183,10 +197,14 @@ async function getAccessibleProjectIds(user) {
 }
 
 function buildProjectWhere(accessibleIds) {
-  // si accessibleIds === null => global
   if (accessibleIds === null) return {};
-  // si user n’a aucun projet => retourne un where impossible
-  if (!accessibleIds.length) return { id: { [Op.in]: [-1] } };
+
+  if (!accessibleIds.length) {
+    return {
+      id: { [Op.in]: ["00000000-0000-0000-0000-000000000000"] },
+    };
+  }
+
   return { id: { [Op.in]: accessibleIds } };
 }
 // ✅ permission helper
@@ -1810,6 +1828,313 @@ router.delete("/:id/bondecommande/:bdcId", authRequired, async (req, res) => {
     return res.json({ ok: true });
   } catch (e) {
     console.error("PROJECT_BDC_DELETE_ERROR:", e);
+    return res.status(500).json({ message: e.message || "Server error" });
+  }
+});
+router.get("/kpi/projects-per-user-daily", authRequired, async (req, res) => {
+  try {
+    const wanted = [
+      "id",
+      "email",
+      "username",
+      "firstname",
+      "lastname",
+      "firstName",
+      "lastName",
+      "prenom",
+      "nom",
+      "name",
+      "fullName",
+    ];
+    const safeAttrs = wanted.filter((a) => !!User.rawAttributes?.[a]);
+    const userAttrs = safeAttrs.length ? safeAttrs : ["id", "email"];
+
+    const rows = await UserProject.findAll({
+      where: { permission: "owner" },
+      attributes: [
+        "userId",
+        [sequelize.fn("DATE", sequelize.col("Project.createdAt")), "day"],
+        [sequelize.fn("COUNT", sequelize.col("Project.id")), "projectsCount"],
+      ],
+      include: [
+        {
+          model: User,
+          attributes: userAttrs,
+          required: true,
+        },
+        {
+          model: Project,
+          attributes: [],
+          required: true,
+        },
+      ],
+      group: [
+        "userId",
+        sequelize.fn("DATE", sequelize.col("Project.createdAt")),
+        ...userAttrs.map((a) => col(`User.${a}`)),
+      ],
+      order: [
+        [sequelize.fn("DATE", sequelize.col("Project.createdAt")), "DESC"],
+        [literal('"projectsCount"'), "DESC"],
+      ],
+      raw: false,
+    });
+
+    const result = rows.map((r) => ({
+      userId: r.userId,
+      email: r.User?.email || "",
+      displayName: getUserDisplayName(r.User),
+      day: r.get("day"), // ex: 2026-03-06
+      projectsCount: Number(r.get("projectsCount") || 0),
+    }));
+
+    return res.json(result);
+  } catch (e) {
+    console.error("KPI_PROJECTS_PER_USER_DAILY_ERROR:", e);
+    return res.status(500).json({ message: e.message || "Server error" });
+  }
+});
+router.get("/kpi/projects-per-user-weekly", authRequired, async (req, res) => {
+  try {
+    const wanted = [
+      "id",
+      "email",
+      "username",
+      "firstname",
+      "lastname",
+      "firstName",
+      "lastName",
+      "prenom",
+      "nom",
+      "name",
+      "fullName",
+    ];
+    const safeAttrs = wanted.filter((a) => !!User.rawAttributes?.[a]);
+    const userAttrs = safeAttrs.length ? safeAttrs : ["id", "email"];
+
+    const weekExpr = sequelize.literal(`DATE_TRUNC('week', "Project"."createdAt")::date`);
+
+    const rows = await UserProject.findAll({
+      where: { permission: "owner" },
+      attributes: [
+        "userId",
+        [weekExpr, "weekStart"],
+        [sequelize.fn("COUNT", sequelize.col("Project.id")), "projectsCount"],
+      ],
+      include: [
+        {
+          model: User,
+          attributes: userAttrs,
+          required: true,
+        },
+        {
+          model: Project,
+          attributes: [],
+          required: true,
+        },
+      ],
+      group: [
+        "userId",
+        weekExpr,
+        ...userAttrs.map((a) => col(`User.${a}`)),
+      ],
+      order: [
+        [weekExpr, "DESC"],
+        [literal('"projectsCount"'), "DESC"],
+      ],
+      raw: false,
+    });
+
+    const result = rows.map((r) => ({
+      userId: r.userId,
+      email: r.User?.email || "",
+      displayName: getUserDisplayName(r.User),
+      weekStart: r.get("weekStart"), // ex: 2026-03-02
+      projectsCount: Number(r.get("projectsCount") || 0),
+    }));
+
+    return res.json(result);
+  } catch (e) {
+    console.error("KPI_PROJECTS_PER_USER_WEEKLY_ERROR:", e);
+    return res.status(500).json({ message: e.message || "Server error" });
+  }
+});
+router.get("/kpi/projects-per-user-monthly", authRequired, async (req, res) => {
+  try {
+    const wanted = [
+      "id",
+      "email",
+      "username",
+      "firstname",
+      "lastname",
+      "firstName",
+      "lastName",
+      "prenom",
+      "nom",
+      "name",
+      "fullName",
+    ];
+    const safeAttrs = wanted.filter((a) => !!User.rawAttributes?.[a]);
+    const userAttrs = safeAttrs.length ? safeAttrs : ["id", "email"];
+
+    const monthExpr = sequelize.fn("to_char", sequelize.col("Project.createdAt"), "YYYY-MM");
+
+    const rows = await UserProject.findAll({
+      where: { permission: "owner" },
+      attributes: [
+        "userId",
+        [monthExpr, "month"],
+        [sequelize.fn("COUNT", sequelize.col("Project.id")), "projectsCount"],
+      ],
+      include: [
+        {
+          model: User,
+          attributes: userAttrs,
+          required: true,
+        },
+        {
+          model: Project,
+          attributes: [],
+          required: true,
+        },
+      ],
+      group: [
+        "userId",
+        monthExpr,
+        ...userAttrs.map((a) => col(`User.${a}`)),
+      ],
+      order: [
+        [monthExpr, "DESC"],
+        [literal('"projectsCount"'), "DESC"],
+      ],
+      raw: false,
+    });
+
+    const result = rows.map((r) => ({
+      userId: r.userId,
+      email: r.User?.email || "",
+      displayName: getUserDisplayName(r.User),
+      month: r.get("month"), // ex: 2026-03
+      projectsCount: Number(r.get("projectsCount") || 0),
+    }));
+
+    return res.json(result);
+  } catch (e) {
+    console.error("KPI_PROJECTS_PER_USER_MONTHLY_ERROR:", e);
+    return res.status(500).json({ message: e.message || "Server error" });
+  }
+});
+router.get("/kpi/projects-per-user-summary", authRequired, async (req, res) => {
+  try {
+    const wanted = [
+      "id",
+      "email",
+      "username",
+      "firstname",
+      "lastname",
+      "firstName",
+      "lastName",
+      "prenom",
+      "nom",
+      "name",
+      "fullName",
+    ];
+    const safeAttrs = wanted.filter((a) => !!User.rawAttributes?.[a]);
+    const userAttrs = safeAttrs.length ? safeAttrs : ["id", "email"];
+
+    const users = await User.findAll({
+      attributes: userAttrs,
+      raw: true,
+    });
+
+    const dailyRows = await UserProject.findAll({
+      where: { permission: "owner" },
+      attributes: [
+        "userId",
+        [sequelize.fn("DATE", sequelize.col("Project.createdAt")), "period"],
+        [sequelize.fn("COUNT", sequelize.col("Project.id")), "projectsCount"],
+      ],
+      include: [{ model: Project, attributes: [], required: true }],
+      group: ["userId", sequelize.fn("DATE", sequelize.col("Project.createdAt"))],
+      raw: true,
+    });
+
+    const weeklyRows = await UserProject.findAll({
+      where: { permission: "owner" },
+      attributes: [
+        "userId",
+        [sequelize.literal(`DATE_TRUNC('week', "Project"."createdAt")::date`), "period"],
+        [sequelize.fn("COUNT", sequelize.col("Project.id")), "projectsCount"],
+      ],
+      include: [{ model: Project, attributes: [], required: true }],
+      group: ["userId", sequelize.literal(`DATE_TRUNC('week', "Project"."createdAt")::date`)],
+      raw: true,
+    });
+
+    const monthlyRows = await UserProject.findAll({
+      where: { permission: "owner" },
+      attributes: [
+        "userId",
+        [sequelize.fn("to_char", sequelize.col("Project.createdAt"), "YYYY-MM"), "period"],
+        [sequelize.fn("COUNT", sequelize.col("Project.id")), "projectsCount"],
+      ],
+      include: [{ model: Project, attributes: [], required: true }],
+      group: ["userId", sequelize.fn("to_char", sequelize.col("Project.createdAt"), "YYYY-MM")],
+      raw: true,
+    });
+
+    const totalRows = await UserProject.findAll({
+      where: { permission: "owner" },
+      attributes: [
+        "userId",
+        [sequelize.fn("COUNT", sequelize.col("projectId")), "projectsCount"],
+      ],
+      group: ["userId"],
+      raw: true,
+    });
+
+    const totalMap = new Map(totalRows.map((r) => [r.userId, Number(r.projectsCount || 0)]));
+    const dailyMap = new Map();
+    const weeklyMap = new Map();
+    const monthlyMap = new Map();
+
+    for (const r of dailyRows) {
+      if (!dailyMap.has(r.userId)) dailyMap.set(r.userId, []);
+      dailyMap.get(r.userId).push({
+        day: r.period,
+        projectsCount: Number(r.projectsCount || 0),
+      });
+    }
+
+    for (const r of weeklyRows) {
+      if (!weeklyMap.has(r.userId)) weeklyMap.set(r.userId, []);
+      weeklyMap.get(r.userId).push({
+        weekStart: r.period,
+        projectsCount: Number(r.projectsCount || 0),
+      });
+    }
+
+    for (const r of monthlyRows) {
+      if (!monthlyMap.has(r.userId)) monthlyMap.set(r.userId, []);
+      monthlyMap.get(r.userId).push({
+        month: r.period,
+        projectsCount: Number(r.projectsCount || 0),
+      });
+    }
+
+    const result = users.map((u) => ({
+      userId: u.id,
+      email: u.email || "",
+      displayName: getUserDisplayName(u),
+      totalProjects: totalMap.get(u.id) || 0,
+      daily: dailyMap.get(u.id) || [],
+      weekly: weeklyMap.get(u.id) || [],
+      monthly: monthlyMap.get(u.id) || [],
+    }));
+
+    return res.json(result);
+  } catch (e) {
+    console.error("KPI_PROJECTS_PER_USER_SUMMARY_ERROR:", e);
     return res.status(500).json({ message: e.message || "Server error" });
   }
 });
