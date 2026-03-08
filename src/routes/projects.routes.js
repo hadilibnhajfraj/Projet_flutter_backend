@@ -1146,7 +1146,139 @@ router.get("/", authRequired, async (req, res) => {
     return res.status(500).json({ message: e.message || "Server error" });
   }
 });
+router.get("/my-projects", authRequired, async (req, res) => {
+  try {
+    const {
+      architecte,
+      promoteur,
+      ingenieur,
+      societe,
+      entreprise,
+      page = 1,
+      limit = 10,
+      q,
+    } = req.query;
 
+    const currentPage = Math.max(parseInt(page, 10) || 1, 1);
+    const currentLimit = Math.max(parseInt(limit, 10) || 10, 1);
+    const offset = (currentPage - 1) * currentLimit;
+
+    const role = (req.user?.role || "").toLowerCase();
+
+    const where = {};
+
+    // ✅ filtre libre global
+    if (typeof q === "string" && q.trim()) {
+      const s = q.trim();
+      where[Op.or] = [
+        { nomProjet: { [Op.iLike]: `%${s}%` } },
+        { architecte: { [Op.iLike]: `%${s}%` } },
+        { promoteur: { [Op.iLike]: `%${s}%` } },
+        { ingenieurResponsable: { [Op.iLike]: `%${s}%` } },
+        { entreprise: { [Op.iLike]: `%${s}%` } },
+        { bureauControle: { [Op.iLike]: `%${s}%` } },
+        { adresse: { [Op.iLike]: `%${s}%` } },
+      ];
+    }
+
+    // ✅ filtres précis
+    if (typeof architecte === "string" && architecte.trim()) {
+      where.architecte = { [Op.iLike]: `%${architecte.trim()}%` };
+    }
+
+    if (typeof promoteur === "string" && promoteur.trim()) {
+      where.promoteur = { [Op.iLike]: `%${promoteur.trim()}%` };
+    }
+
+    if (typeof ingenieur === "string" && ingenieur.trim()) {
+      where.ingenieurResponsable = { [Op.iLike]: `%${ingenieur.trim()}%` };
+    }
+
+    const societeValue =
+      typeof societe === "string" && societe.trim()
+        ? societe.trim()
+        : typeof entreprise === "string" && entreprise.trim()
+            ? entreprise.trim()
+            : null;
+
+    if (societeValue) {
+      where.entreprise = { [Op.iLike]: `%${societeValue}%` };
+    }
+
+    // ✅ admin/superadmin => tous les projets
+    if (role === "admin" || role === "superadmin") {
+      const { count, rows } = await Project.findAndCountAll({
+        where,
+        order: [["createdAt", "DESC"]],
+        limit: currentLimit,
+        offset,
+        include: [
+          {
+            model: UserProject,
+            required: false,
+            attributes: ["userId", "permission"],
+            include: [
+              {
+                model: User,
+                attributes: ["id", "email", "role"],
+              },
+            ],
+          },
+        ],
+      });
+
+      return res.json({
+        total: count,
+        page: currentPage,
+        limit: currentLimit,
+        totalPages: Math.ceil(count / currentLimit),
+        filters: {
+          architecte: architecte || null,
+          promoteur: promoteur || null,
+          ingenieur: ingenieur || null,
+          societe: societeValue || null,
+          q: q || null,
+        },
+        items: rows,
+      });
+    }
+
+    // ✅ autres rôles => seulement projets liés au user connecté
+    const { count, rows } = await Project.findAndCountAll({
+      where,
+      order: [["createdAt", "DESC"]],
+      limit: currentLimit,
+      offset,
+      include: [
+        {
+          model: UserProject,
+          required: true,
+          where: { userId: req.user.sub },
+          attributes: ["userId", "permission"],
+        },
+      ],
+      distinct: true,
+    });
+
+    return res.json({
+      total: count,
+      page: currentPage,
+      limit: currentLimit,
+      totalPages: Math.ceil(count / currentLimit),
+      filters: {
+        architecte: architecte || null,
+        promoteur: promoteur || null,
+        ingenieur: ingenieur || null,
+        societe: societeValue || null,
+        q: q || null,
+      },
+      items: rows,
+    });
+  } catch (e) {
+    console.error("MY_PROJECTS_FILTER_ERROR:", e);
+    return res.status(500).json({ message: e.message || "Server error" });
+  }
+});
 // ---------------- GET BY ID ----------------
 // ---------------- GET BY ID ----------------
 router.get("/:id", authRequired, async (req, res) => {
@@ -2138,4 +2270,5 @@ router.get("/kpi/projects-per-user-summary", authRequired, async (req, res) => {
     return res.status(500).json({ message: e.message || "Server error" });
   }
 });
+
 module.exports = router;
