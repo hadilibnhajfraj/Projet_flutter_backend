@@ -15,6 +15,7 @@ const adminRoutes = require("./routes/admin"); // ✅ NEW
 const userProfileRoutes = require("./routes/userProfile.routes");
 const taskRoutes = require("./routes/tasks.routes");
 const commercialRoutes = require("./routes/commercial_contacts.routes");
+const clientRoutes = require("./routes/client.routes");
 const app = express();
 
 app.use(helmet());
@@ -39,6 +40,7 @@ app.use("/users", require("./routes/users.routes"));
 app.use("/utils", require("./routes/utils.routes"));
 app.use("/uploads", express.static("uploads"));
 app.use("/users", userProfileRoutes);
+app.use("/api/clients", clientRoutes);
 app.use("/commercial-contacts", commercialRoutes);
 app.use("/uploads", express.static("uploads"));
 
