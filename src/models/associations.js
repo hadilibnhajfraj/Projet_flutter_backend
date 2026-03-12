@@ -11,6 +11,11 @@ const ProjectBonDeCommande = require("./ProjectBonDeCommande");
 const Task = require("./Task");
 const CommercialContact = require("./CommercialContact");
 const CommercialContactProduct = require("./CommercialContactProduct");
+const CommercialContactRelance = require("./CommercialContactRelance");
+
+// =========================
+// User <-> Project
+// =========================
 User.belongsToMany(Project, {
   through: UserProject,
   foreignKey: "userId",
@@ -23,37 +28,93 @@ Project.belongsToMany(User, {
   otherKey: "userId",
 });
 
-// (optionnel) accès direct aux liens
+// accès direct aux liens
 User.hasMany(UserProject, { foreignKey: "userId" });
 Project.hasMany(UserProject, { foreignKey: "projectId" });
 UserProject.belongsTo(User, { foreignKey: "userId" });
 UserProject.belongsTo(Project, { foreignKey: "projectId" });
-Project.hasMany(ProjectComment, { foreignKey: "projectId" });
+
+// =========================
+// Project Comments
+// =========================
+Project.hasMany(ProjectComment, { foreignKey: "projectId", onDelete: "CASCADE" });
 ProjectComment.belongsTo(Project, { foreignKey: "projectId" });
-Notification.belongsTo(User, { as: "user", foreignKey: "userId" });
 
 User.hasMany(ProjectComment, { foreignKey: "authorId" });
 ProjectComment.belongsTo(User, { foreignKey: "authorId" });
-User.hasOne(UserProfile, { foreignKey: "userId", as: "profile", onDelete: "CASCADE" });
-UserProfile.belongsTo(User, { foreignKey: "userId", as: "user" });
-// Members (optionnel mais recommandé)
+
+// replies
+ProjectComment.hasMany(ProjectComment, {
+  foreignKey: "parentId",
+  as: "replies",
+});
+ProjectComment.belongsTo(ProjectComment, {
+  foreignKey: "parentId",
+  as: "parent",
+});
+
+// =========================
+// Notification
+// =========================
+Notification.belongsTo(User, { as: "user", foreignKey: "userId" });
+User.hasMany(Notification, { as: "notifications", foreignKey: "userId" });
+
+// =========================
+// User Profile
+// =========================
+User.hasOne(UserProfile, {
+  foreignKey: "userId",
+  as: "profile",
+  onDelete: "CASCADE",
+});
+UserProfile.belongsTo(User, {
+  foreignKey: "userId",
+  as: "user",
+});
+
+// =========================
+// Project Members
+// =========================
 ProjectMember.belongsTo(Project, { foreignKey: "projectId" });
 ProjectMember.belongsTo(User, { foreignKey: "userId" });
 Project.hasMany(ProjectMember, { foreignKey: "projectId" });
 User.hasMany(ProjectMember, { foreignKey: "userId" });
-// replies
-ProjectComment.hasMany(ProjectComment, { foreignKey: "parentId", as: "replies" });
-ProjectComment.belongsTo(ProjectComment, { foreignKey: "parentId", as: "parent" });
-Project.hasMany(ProjectDevis, { foreignKey: "projectId", onDelete: "CASCADE" });
+
+// =========================
+// Project Devis
+// =========================
+Project.hasMany(ProjectDevis, {
+  foreignKey: "projectId",
+  onDelete: "CASCADE",
+});
 ProjectDevis.belongsTo(Project, { foreignKey: "projectId" });
-Project.hasMany(ProjectBonDeCommande, { foreignKey: "projectId", onDelete: "CASCADE" });
+
+// =========================
+// Project Bons de commande
+// =========================
+Project.hasMany(ProjectBonDeCommande, {
+  foreignKey: "projectId",
+  onDelete: "CASCADE",
+});
 ProjectBonDeCommande.belongsTo(Project, { foreignKey: "projectId" });
-//User.hasMany(Task, { foreignKey: "createdBy", as: "tasks", onDelete: "CASCADE" });
+
+// =========================
+// Tasks
+// =========================
 Task.belongsTo(User, { as: "creator", foreignKey: "createdBy" });
 User.hasMany(Task, { as: "tasks", foreignKey: "createdBy" });
-// ✅ NEW
+
 Task.belongsTo(Project, { as: "project", foreignKey: "projectId" });
-Project.hasMany(Task, { as: "tasks", foreignKey: "projectId", onDelete: "CASCADE" });
+Project.hasMany(Task, {
+  as: "tasks",
+  foreignKey: "projectId",
+  onDelete: "CASCADE",
+});
+
+// =========================
+// Commercial Contacts
+// =========================
+
 // Contact -> Products
 CommercialContact.hasMany(CommercialContactProduct, {
   as: "produits",
@@ -65,10 +126,49 @@ CommercialContactProduct.belongsTo(CommercialContact, {
   foreignKey: "commercialContactId",
 });
 
-// Contact -> Creator (User)
-CommercialContact.belongsTo(User, { as: "creator", foreignKey: "createdBy" });
-User.hasMany(CommercialContact, { as: "commercialContacts", foreignKey: "createdBy" });
+// Contact -> Relances
+CommercialContact.hasMany(CommercialContactRelance, {
+  as: "relances",
+  foreignKey: "commercialContactId",
+  onDelete: "CASCADE",
+});
+CommercialContactRelance.belongsTo(CommercialContact, {
+  as: "contact",
+  foreignKey: "commercialContactId",
+});
 
+// Contact -> Creator
+CommercialContact.belongsTo(User, {
+  as: "creator",
+  foreignKey: "createdBy",
+});
+User.hasMany(CommercialContact, {
+  as: "commercialContacts",
+  foreignKey: "createdBy",
+});
 
-module.exports = { User, Project, UserProject, ProjectComment, UserProfile , Notification , ProjectDevis ,Task , CommercialContact,
-  CommercialContactProduct,};
+// Relance -> Creator
+CommercialContactRelance.belongsTo(User, {
+  as: "creator",
+  foreignKey: "createdBy",
+});
+User.hasMany(CommercialContactRelance, {
+  as: "commercialContactRelances",
+  foreignKey: "createdBy",
+});
+
+module.exports = {
+  User,
+  Project,
+  UserProject,
+  ProjectComment,
+  UserProfile,
+  Notification,
+  ProjectMember,
+  ProjectDevis,
+  ProjectBonDeCommande,
+  Task,
+  CommercialContact,
+  CommercialContactProduct,
+  CommercialContactRelance,
+};
