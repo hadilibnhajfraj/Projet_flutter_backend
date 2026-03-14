@@ -16,6 +16,7 @@ const userProfileRoutes = require("./routes/userProfile.routes");
 const taskRoutes = require("./routes/tasks.routes");
 const commercialRoutes = require("./routes/commercial_contacts.routes");
 const clientRoutes = require("./routes/client.routes");
+const projectActionRoutes = require("./routes/projectActions.routes");
 const app = express();
 
 app.use(helmet());
@@ -42,6 +43,7 @@ app.use("/uploads", express.static("uploads"));
 app.use("/users", userProfileRoutes);
 app.use("/api/clients", clientRoutes);
 app.use("/commercial-contacts", commercialRoutes);
+app.use("/projetactions", projectActionRoutes);
 app.use("/uploads", express.static("uploads"));
 
 app.get("/me", authRequired, (req, res) => {

@@ -12,17 +12,37 @@ const Project = sequelize.define(
     },
 
     nomProjet: { type: DataTypes.STRING(200), allowNull: false },
+
     dateDemarrage: { type: DataTypes.DATEONLY, allowNull: false },
+
+    // ✅ NOUVEAU
+    dateProspection: {
+      type: DataTypes.DATEONLY,
+      allowNull: true,
+    },
+
     typeAdresseChantier: { type: DataTypes.STRING(255), allowNull: false },
 
     ingenieurResponsable: { type: DataTypes.STRING(200), allowNull: false },
     telephoneIngenieur: { type: DataTypes.STRING(30), allowNull: false },
 
-    // ✅ deviennent optionnels côté front, donc on les rend optionnels ici aussi
+    // ✅ NOUVEAU EMAIL INGENIEUR
+    emailIngenieur: {
+      type: DataTypes.STRING(200),
+      allowNull: true,
+      validate: { isEmail: true },
+    },
+
     architecte: { type: DataTypes.STRING(200), allowNull: true },
     telephoneArchitecte: { type: DataTypes.STRING(30), allowNull: true },
 
-    // ✅ NOUVEAU : Matricule fiscale (optionnel)
+    // ✅ NOUVEAU EMAIL ARCHITECTE
+    emailArchitecte: {
+      type: DataTypes.STRING(200),
+      allowNull: true,
+      validate: { isEmail: true },
+    },
+
     matriculeFiscale: {
       type: DataTypes.STRING(60),
       allowNull: true,
@@ -30,8 +50,8 @@ const Project = sequelize.define(
 
     entreprise: { type: DataTypes.STRING(200), allowNull: false },
 
-    // ✅ deviennent optionnels côté front, donc allowNull true
     promoteur: { type: DataTypes.STRING(200), allowNull: true },
+
     bureauEtude: { type: DataTypes.STRING(200), allowNull: true },
 
     bureauControle: { type: DataTypes.STRING(200), allowNull: false },
@@ -40,6 +60,7 @@ const Project = sequelize.define(
 
     latitude: { type: DataTypes.DECIMAL(10, 7), allowNull: false },
     longitude: { type: DataTypes.DECIMAL(10, 7), allowNull: false },
+
     localisationCommentaire: { type: DataTypes.TEXT, allowNull: true },
 
     statut: {
@@ -48,9 +69,9 @@ const Project = sequelize.define(
     },
 
     entrepriseFluide: { type: DataTypes.STRING(200), allowNull: true },
+
     entrepriseElectricite: { type: DataTypes.STRING(200), allowNull: true },
 
-    // ✅ NOUVEAUX CHAMPS
     pourcentageReussite: {
       type: DataTypes.DECIMAL(5, 2),
       allowNull: true,
@@ -67,7 +88,18 @@ const Project = sequelize.define(
       type: DataTypes.STRING(120),
       allowNull: true,
     },
-
+pipelineStage: {
+  type: DataTypes.ENUM(
+    "Prospect",
+    "Contacté",
+    "Visite",
+    "Devis envoyé",
+    "Negociation",
+    "Gagné",
+    "Perdu"
+  ),
+  defaultValue: "Prospect",
+},
     surfaceProspectee: {
       type: DataTypes.DECIMAL(12, 2),
       allowNull: true,

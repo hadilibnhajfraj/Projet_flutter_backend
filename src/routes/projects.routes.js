@@ -9,6 +9,8 @@ const fs = require("fs");
 const multer = require("multer");
 const ProjectDevis = require("../models/ProjectDevis"); // adapte selon ton export
 const ProjectBonDeCommande = require("../models/ProjectBonDeCommande");
+const ProjectAction = require("../models/ProjectAction");
+const ProjectReminder = require("../models/ProjectReminder");
 const router = express.Router();
 
 // ---------------- Helpers ----------------
@@ -924,7 +926,8 @@ router.post("/", authRequired, async (req, res) => {
     const body = normalizePayload(req.body);
 
     const errors = validatePayload(body, false);
-    if (errors.length) return res.status(400).json({ message: "Validation error", errors });
+    if (errors.length)
+      return res.status(400).json({ message: "Validation error", errors });
 
     const lat =
       body?.location?.lat ??
@@ -947,11 +950,15 @@ router.post("/", authRequired, async (req, res) => {
     }
 
     const nomProjet = String(body.nomProjet || "").trim();
+
     if (!nomProjet) {
-      return res.status(400).json({ message: "Validation error", errors: ["nomProjet est obligatoire"] });
+      return res.status(400).json({
+        message: "Validation error",
+        errors: ["nomProjet est obligatoire"],
+      });
     }
 
-    // ✅ Unicité (par user) case-insensitive : on vérifie via la table pivot
+    // ✅ Vérifier unicité projet par utilisateur
     const exists = await UserProject.findOne({
       where: { userId: req.user.sub },
       include: [
@@ -959,7 +966,10 @@ router.post("/", authRequired, async (req, res) => {
           model: Project,
           required: true,
           attributes: ["id", "nomProjet"],
-          where: where(fn("lower", col("Project.nomProjet")), nomProjet.toLowerCase()),
+          where: where(
+            fn("lower", col("Project.nomProjet")),
+            nomProjet.toLowerCase()
+          ),
         },
       ],
     });
@@ -971,22 +981,46 @@ router.post("/", authRequired, async (req, res) => {
       });
     }
 
+    // ✅ Création projet
     const p = await Project.create({
       nomProjet,
       dateDemarrage: body.dateDemarrage,
+
+      // ✅ DATE VISITE CRM
+      dateProspection: body.dateProspection ?? null,
+
       statut: body.statut || null,
+
       typeAdresseChantier: String(body.typeAdresseChantier || "").trim(),
 
       ingenieurResponsable: String(body.ingenieurResponsable || "").trim(),
+
       telephoneIngenieur: String(body.telephoneIngenieur || "").trim(),
 
-      architecte: body.architecte?.trim() ? body.architecte.trim() : null,
-      telephoneArchitecte: body.telephoneArchitecte?.trim() ? body.telephoneArchitecte.trim() : null,
+      // ✅ EMAIL INGENIEUR
+      emailIngenieur: body.emailIngenieur?.trim()
+        ? body.emailIngenieur.trim()
+        : null,
 
-      matriculeFiscale: body.matriculeFiscale?.trim() ? body.matriculeFiscale.trim() : null,
+      architecte: body.architecte?.trim() ? body.architecte.trim() : null,
+
+      telephoneArchitecte: body.telephoneArchitecte?.trim()
+        ? body.telephoneArchitecte.trim()
+        : null,
+
+      // ✅ EMAIL ARCHITECTE
+      emailArchitecte: body.emailArchitecte?.trim()
+        ? body.emailArchitecte.trim()
+        : null,
+
+      matriculeFiscale: body.matriculeFiscale?.trim()
+        ? body.matriculeFiscale.trim()
+        : null,
 
       entreprise: String(body.entreprise || "").trim(),
+
       promoteur: body.promoteur?.trim() ? body.promoteur.trim() : null,
+
       bureauEtude: body.bureauEtude?.trim() ? body.bureauEtude.trim() : null,
 
       bureauControle: String(body.bureauControle || "").trim(),
@@ -996,28 +1030,63 @@ router.post("/", authRequired, async (req, res) => {
       latitude: lat,
       longitude: lng,
 
-      localisationCommentaire: body.localisationCommentaire?.trim()
-        ? body.localisationCommentaire.trim()
+      localisationCommentaire: body.localisationCommentaire ?? "",
+
+      entrepriseFluide: body.entrepriseFluide?.trim()
+        ? body.entrepriseFluide.trim()
         : null,
 
-      entrepriseFluide: body.entrepriseFluide?.trim() ? body.entrepriseFluide.trim() : null,
-      entrepriseElectricite: body.entrepriseElectricite?.trim() ? body.entrepriseElectricite.trim() : null,
+      entrepriseElectricite: body.entrepriseElectricite?.trim()
+        ? body.entrepriseElectricite.trim()
+        : null,
 
       pourcentageReussite: body.pourcentageReussite ?? null,
-      validationStatut: body.validationStatut ?? "Non validé",
-      typeProjet: body.typeProjet?.trim() ? body.typeProjet.trim() : null,
-      surfaceProspectee: body.surfaceProspectee ?? null,
-    });
 
+      validationStatut: body.validationStatut ?? "Non validé",
+
+      typeProjet: body.typeProjet?.trim() ? body.typeProjet.trim() : null,
+
+      surfaceProspectee: body.surfaceProspectee ?? null,
+
+      // ✅ PIPELINE CRM
+      pipelineStage: body.pipelineStage ?? "Prospect",
+    });
+// ✅ CREER LA PREMIERE ACTION CRM
+if (body.firstAction) {
+
+  await ProjectAction.create({
+
+    projectId: p.id,
+
+    typeAction: body.firstAction,
+
+    commentaire: body.commentaireAction ?? null,
+
+    createdBy: req.user.sub,
+    dateAction: body.dateVisite ?? new Date()
+
+  });
+
+}
+    // ✅ Liaison utilisateur projet
     await UserProject.findOrCreate({
-      where: { userId: req.user.sub, projectId: p.id },
+      where: {
+        userId: req.user.sub,
+        projectId: p.id,
+      },
       defaults: { permission: "owner" },
     });
 
-    return res.status(201).json({ ...p.toJSON(), permission: "owner" });
+    return res.status(201).json({
+      ...p.toJSON(),
+      permission: "owner",
+    });
   } catch (e) {
     console.error("PROJECT_CREATE_ERROR:", e);
-    return res.status(500).json({ message: e.message || "Server error" });
+
+    return res.status(500).json({
+      message: e.message || "Server error",
+    });
   }
 });
 
@@ -1279,6 +1348,73 @@ router.get("/my-projects", authRequired, async (req, res) => {
     return res.status(500).json({ message: e.message || "Server error" });
   }
 });
+// ===============================
+// GET PROJECT CRM ACTIONS
+// ===============================
+
+router.get("/:id/actions", authRequired, async (req, res) => {
+
+  try {
+
+    const actions = await ProjectAction.findAll({
+
+      where: { projectId: req.params.id },
+
+      include: [
+        {
+          model: ProjectReminder,
+          as: "reminders"
+        }
+      ],
+
+      order: [["dateAction", "DESC"]]
+
+    });
+
+    res.json(actions);
+
+  } catch (err) {
+
+    console.error("PROJECT_ACTIONS_ERROR:", err);
+
+    res.status(500).json({
+      message: "Server error",
+    });
+
+  }
+
+});
+// ===============================
+// ADD CRM ACTION
+// ===============================
+router.post("/:id/actions", authRequired, async (req, res) => {
+
+  try {
+
+    const action = await ProjectAction.create({
+
+      projectId: req.params.id,
+
+      typeAction: req.body.typeAction,
+
+      commentaire: req.body.commentaire ?? null,
+
+      createdBy: req.user.sub,
+      dateAction: req.body.dateVisite ?? new Date()
+
+    });
+
+    res.json(action);
+
+  } catch (err) {
+
+    console.error(err);
+
+    res.status(500).json({ message: "Server error" });
+
+  }
+
+});
 // ---------------- GET BY ID ----------------
 // ---------------- GET BY ID ----------------
 router.get("/:id", authRequired, async (req, res) => {
@@ -1334,13 +1470,26 @@ router.get("/:id", authRequired, async (req, res) => {
     const ownerName = ownerLink?.User?.username || ownerLink?.User?.email || "";
 
     delete json.UserProjects;
+// =========================
+// LAST ACTION (for edit)
+// =========================
 
+const lastAction = await ProjectAction.findOne({
+  where: { projectId: item.id },
+  order: [["dateAction", "DESC"]],
+});
     return res.json({
       ...json,
       permission,
       ownerName,
       devisCount: Number(json.devisCount || 0),
       bonCommandeCount: Number(json.bonCommandeCount || 0),
+       // CRM fields
+  dateVisite: lastAction?.dateAction ?? null,
+
+  nextAction: lastAction?.typeAction ?? null,
+
+  commentaireAction: lastAction?.commentaire ?? null
     });
   } catch (e) {
     console.error("PROJECT_GET_ERROR:", e);
@@ -1350,73 +1499,154 @@ router.get("/:id", authRequired, async (req, res) => {
 
 // ---------------- UPDATE ----------------
 router.put("/:id", authRequired, async (req, res) => {
+
   try {
+
     if (!isUUID(req.params.id)) {
       return res.status(400).json({ message: "Invalid project id (UUID required)" });
     }
 
     const permission = await getPermission(req.user, req.params.id);
 
-    if (!["admin", "superadmin"].includes(req.user.role) && !["editor", "owner"].includes(permission)) {
+    if (
+      !["admin","superadmin"].includes(req.user.role) &&
+      !["editor","owner"].includes(permission)
+    ) {
       return res.status(403).json({ message: "Need editor permission" });
     }
 
     const body = normalizePayload(req.body);
+
     const errors = validatePayload(body, true);
-    if (errors.length) return res.status(400).json({ message: "Validation error", errors });
+    if (errors.length) {
+      return res.status(400).json({ message: "Validation error", errors });
+    }
 
     const item = await Project.findByPk(req.params.id);
-    if (!item) return res.status(404).json({ message: "Not found" });
+
+    if (!item) {
+      return res.status(404).json({ message: "Project not found" });
+    }
 
     const fields = [
+
       "nomProjet",
       "dateDemarrage",
+      "dateProspection",
       "statut",
       "typeAdresseChantier",
+
       "ingenieurResponsable",
       "telephoneIngenieur",
+      "emailIngenieur",
+
       "architecte",
       "telephoneArchitecte",
+      "emailArchitecte",
+
       "entreprise",
       "promoteur",
       "bureauEtude",
       "bureauControle",
+
       "adresse",
       "latitude",
       "longitude",
       "localisationCommentaire",
+
       "entrepriseFluide",
       "entrepriseElectricite",
+
       "pourcentageReussite",
       "validationStatut",
+
       "typeProjet",
       "matriculeFiscale",
+
       "surfaceProspectee",
+      "pipelineStage"
     ];
 
     const up = {};
+
     for (const f of fields) {
-      if (body[f] !== undefined) up[f] = body[f];
+      if (body[f] !== undefined) {
+        up[f] = body[f];
+      }
     }
 
     await item.update(up);
 
-    // ✅ NEW: counts for card colors
+    // =========================
+    // CRM ACTION CREATION
+    // =========================
+
+    if (body.firstAction && body.firstAction.trim() !== "") {
+
+      await ProjectAction.create({
+
+        projectId: item.id,
+        typeAction: body.firstAction,
+        commentaire: body.commentaireAction ?? null,
+        createdBy: req.user.sub,
+        dateAction: body.dateVisite ?? new Date()
+
+      });
+
+    }
+
+    // =========================
+    // LAST ACTION (for edition)
+    // =========================
+
+    const lastAction = await ProjectAction.findOne({
+
+      where: { projectId: item.id },
+
+      order: [["dateAction", "DESC"]]
+
+    });
+
+    // =========================
+    // COUNTS
+    // =========================
+
     const [devisCount, bonCommandeCount] = await Promise.all([
       ProjectDevis.count({ where: { projectId: item.id } }),
       ProjectBonDeCommande.count({ where: { projectId: item.id } }),
     ]);
 
+    // =========================
+    // RESPONSE
+    // =========================
+
     return res.json({
+
       ...item.toJSON(),
+
       permission,
+
       devisCount,
+
       bonCommandeCount,
+
+      // CRM fields for edit form
+      dateVisite: lastAction?.dateAction ?? null,
+      nextAction: lastAction?.typeAction ?? null,
+      commentaireAction: lastAction?.commentaire ?? null
+
     });
+
   } catch (e) {
+
     console.error("PROJECT_UPDATE_ERROR:", e);
-    return res.status(500).json({ message: e.message || "Server error" });
+
+    return res.status(500).json({
+      message: e.message || "Server error"
+    });
+
   }
+
 });
 
 // ---------------- DELETE ----------------
@@ -1445,7 +1675,35 @@ router.delete("/:id", authRequired, async (req, res) => {
     return res.status(500).json({ message: e.message || "Server error" });
   }
 });
+router.post("/:id/reminders", authRequired, async (req, res) => {
 
+  try {
+
+    const { actionId, dateRelance, message } = req.body;
+
+    const reminder = await ProjectReminder.create({
+
+      projectId: req.params.id,
+      actionId,
+      message: message ?? null,
+      dateRelance,
+      createdBy: req.user.sub
+
+    });
+
+    return res.status(201).json(reminder);
+
+  } catch (e) {
+
+    console.error("REMINDER_CREATE_ERROR:", e);
+
+    return res.status(500).json({
+      message: e.message || "Server error"
+    });
+
+  }
+
+});
 // ---------------- COMMENTS ----------------
 router.get("/:id/comments", authRequired, async (req, res) => {
   try {
@@ -2270,5 +2528,20 @@ router.get("/kpi/projects-per-user-summary", authRequired, async (req, res) => {
     return res.status(500).json({ message: e.message || "Server error" });
   }
 });
+exports.updatePipeline = async (req, res) => {
+  try {
+
+    const project = await Project.findByPk(req.params.id);
+
+    project.pipelineStage = req.body.pipelineStage;
+
+    await project.save();
+
+    res.json(project);
+
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
 
 module.exports = router;
