@@ -265,7 +265,33 @@ function getStatusColor(statut, validationStatut) {
   }
   return 'gray'; // Default color for other cases
 }
+function getNextAction(stage) {
 
+  const map = {
+    prospect: "Visite",
+    visite: "Plan technique",
+    plan: "Devis",
+    devis: "Relance",
+    relance: "Commande",
+    commande: "Suivi chantier"
+  };
+
+  return map[stage] || null;
+}
+function getProjectColor(stage){
+
+  const map = {
+
+    prospect: "blue",
+    visite: "orange",
+    devis: "purple",
+    relance: "red",
+    commande: "green"
+
+  };
+
+  return map[stage] || "grey";
+}
 /* ============================================================
    ✅ KPI ROUTES (IMPORTANT: BEFORE "/:id")
    ============================================================ */
@@ -1391,26 +1417,191 @@ router.post("/:id/actions", authRequired, async (req, res) => {
 
   try {
 
+    console.log("📥 CREATE ACTION REQUEST");
+    console.log("Project ID:", req.params.id);
+    console.log("User:", req.user.sub);
+    console.log("Body:", req.body);
+
+    const { typeAction, commentaire, dateRelance } = req.body;
+
+    // =============================
+    // CREATE ACTION
+    // =============================
     const action = await ProjectAction.create({
 
       projectId: req.params.id,
 
-      typeAction: req.body.typeAction,
+      typeAction: typeAction,
 
-      commentaire: req.body.commentaire ?? null,
+      commentaire: commentaire ?? null,
 
-      createdBy: req.user.sub,
-      dateAction: req.body.dateVisite ?? new Date()
+      dateAction: new Date(),
+
+      dateRelance: dateRelance ?? null,
+
+      statut: "A faire",
+
+      createdBy: req.user.sub
 
     });
 
-    res.json(action);
+    console.log("✅ ACTION CREATED:", action.id);
+
+    // =============================
+    // CREATE REMINDER IF EXISTS
+    // =============================
+    if (dateRelance) {
+
+      console.log("⏰ Creating reminder...");
+
+      const reminder = await ProjectReminder.create({
+
+        projectId: req.params.id,
+
+        actionId: action.id,
+
+        message: commentaire ?? "",
+
+        dateRelance: dateRelance,
+
+        createdBy: req.user.sub
+
+      });
+
+      console.log("✅ REMINDER CREATED:", reminder.id);
+
+    } else {
+
+      console.log("ℹ️ No reminder requested");
+
+    }
+
+    // =============================
+    // RETURN FULL ACTION WITH REMINDERS
+    // =============================
+    const result = await ProjectAction.findByPk(action.id, {
+
+      include: [
+        {
+          model: ProjectReminder,
+          as: "reminders"
+        }
+      ],
+
+      order: [["dateRelance", "ASC"]]
+
+    });
+
+    console.log("📤 RESPONSE ACTION:", JSON.stringify(result, null, 2));
+
+    res.status(201).json(result);
+
+  } catch (err) {
+
+    console.error("❌ CREATE ACTION ERROR:", err);
+
+    res.status(500).json({
+      message: "Server error"
+    });
+
+  }
+
+});
+router.delete("/actions/:actionId", authRequired, async (req, res) => {
+
+  try {
+
+    const action = await ProjectAction.findByPk(req.params.actionId);
+
+    if (!action) {
+      return res.status(404).json({ message: "Action not found" });
+    }
+
+    // supprimer les reminders liés
+    await ProjectReminder.destroy({
+      where: { actionId: req.params.actionId }
+    });
+
+    await action.destroy();
+
+    res.json({
+      message: "Action deleted successfully"
+    });
+
+  } catch (err) {
+
+    console.error(err);
+    res.status(500).json({ message: "Server error" });
+
+  }
+
+});
+// ===============================
+// ADD REMINDER
+// ===============================
+router.post("/actions/:actionId/reminders", authRequired, async (req, res) => {
+
+  try {
+
+    const action = await ProjectAction.findByPk(req.params.actionId);
+
+    if (!action) {
+      return res.status(404).json({
+        message: "Action not found"
+      });
+    }
+
+    const reminder = await ProjectReminder.create({
+
+      projectId: action.projectId,
+      actionId: req.params.actionId,
+      message: req.body.message ?? "",
+      dateRelance: req.body.dateRelance,
+      createdBy: req.user.sub
+
+    });
+
+    res.json(reminder);
 
   } catch (err) {
 
     console.error(err);
 
-    res.status(500).json({ message: "Server error" });
+    res.status(500).json({
+      message: "Server error"
+    });
+
+  }
+
+});
+// ===============================
+// DELETE REMINDER
+// ===============================
+router.delete("/reminders/:id", authRequired, async (req, res) => {
+
+  try {
+
+    const reminder = await ProjectReminder.findByPk(req.params.id);
+
+    if (!reminder) {
+      return res.status(404).json({
+        message: "Reminder not found"
+      });
+    }
+
+    await reminder.destroy();
+
+    res.json({
+      message: "Reminder deleted"
+    });
+
+  } catch (err) {
+
+    console.error(err);
+
+    res.status(500).json({
+      message: "Server error"
+    });
 
   }
 
@@ -1489,7 +1680,8 @@ const lastAction = await ProjectAction.findOne({
 
   nextAction: lastAction?.typeAction ?? null,
 
-  commentaireAction: lastAction?.commentaire ?? null
+  commentaireAction: lastAction?.commentaire ?? null,
+   color: getProjectColor(json.pipelineStage)
     });
   } catch (e) {
     console.error("PROJECT_GET_ERROR:", e);
@@ -1576,7 +1768,29 @@ router.put("/:id", authRequired, async (req, res) => {
     }
 
     await item.update(up);
+// =========================
+// NEXT ACTION AUTOMATIQUE
+// =========================
 
+if (body.pipelineStage) {
+
+  const nextAction = getNextAction(body.pipelineStage);
+
+  if (nextAction) {
+
+    await ProjectAction.create({
+
+      projectId: item.id,
+      typeAction: nextAction,
+      commentaire: "Next action automatique",
+      createdBy: req.user.sub,
+      dateAction: new Date()
+
+    });
+
+  }
+
+}
     // =========================
     // CRM ACTION CREATION
     // =========================
@@ -1707,15 +1921,26 @@ router.post("/:id/reminders", authRequired, async (req, res) => {
 // ---------------- COMMENTS ----------------
 router.get("/:id/comments", authRequired, async (req, res) => {
   try {
+
     const projectId = req.params.id;
-    if (!isUUID(projectId)) return res.status(400).json({ message: "Invalid project id (UUID required)" });
+
+    if (!isUUID(projectId))
+      return res.status(400).json({ message: "Invalid project id (UUID required)" });
 
     const project = await Project.findByPk(projectId);
-    if (!project) return res.status(404).json({ message: "Not found" });
+
+    if (!project)
+      return res.status(404).json({ message: "Not found" });
 
     const all = await ProjectComment.findAll({
       where: { projectId },
-      include: [{ model: User, attributes: ["id", "email"] }],
+      include: [
+        {
+          model: User,
+          as: "user",   // ✅ IMPORTANT
+          attributes: ["id", "email"],
+        },
+      ],
       order: [["createdAt", "ASC"]],
     });
 
@@ -1724,7 +1949,12 @@ router.get("/:id/comments", authRequired, async (req, res) => {
 
     const toJson = (c) => {
       const j = c.toJSON();
-      return { ...j, authorName: j.User?.email ?? "Inconnu", replies: [] };
+
+      return {
+        ...j,
+        authorName: j.user?.email ?? "Inconnu", // ⚠️ alias ici aussi
+        replies: [],
+      };
     };
 
     for (const c of all) map.set(c.id, toJson(c));
@@ -1740,6 +1970,7 @@ router.get("/:id/comments", authRequired, async (req, res) => {
     }
 
     return res.json(roots);
+
   } catch (e) {
     console.error("PROJECT_COMMENTS_LIST_ERROR:", e);
     return res.status(500).json({ message: e.message || "Server error" });

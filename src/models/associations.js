@@ -56,11 +56,14 @@ ProjectComment.belongsTo(Project, {
   foreignKey: "projectId",
 });
 
-User.hasMany(ProjectComment, { foreignKey: "authorId" });
-
 ProjectComment.belongsTo(User, {
   foreignKey: "authorId",
-  as: "author",
+  as: "user",
+});
+
+User.hasMany(ProjectComment, {
+  foreignKey: "userId",
+  as: "comments",
 });
 
 // replies
@@ -253,7 +256,10 @@ ProjectReminder.belongsTo(ProjectAction, {
   foreignKey: "actionId",
   as: "action",
 });
-
+ProjectReminder.belongsTo(User,{
+  as:"creator",
+  foreignKey:"createdBy"
+})
 
 // ======================================================
 // PROJECT REMINDERS
