@@ -1241,6 +1241,125 @@ router.get("/", authRequired, async (req, res) => {
     return res.status(500).json({ message: e.message || "Server error" });
   }
 });
+// =======================================================
+// DASHBOARD COMMERCIAL
+// =======================================================
+
+router.get("/dashboard/commercial", authRequired, async (req,res)=>{
+
+  try{
+
+    const users = await User.findAll({
+
+      attributes:["id","email"],
+
+      include:[
+        {
+          model:Project,
+          attributes:[
+            "id",
+            "nomProjet",
+            "pipelineStage",
+            "surfaceProspectee",
+            "entreprise"
+          ],
+          through:{attributes:[]}
+        }
+      ]
+
+    });
+
+    const result = users.map(user=>{
+
+      const projects = user.Projects;
+
+      const totalProjects = projects.length;
+
+      const totalSurface =
+        projects.reduce((sum,p)=>sum+(Number(p.surfaceProspectee)||0),0);
+
+      const won =
+        projects.filter(p=>p.pipelineStage==="Gagné").length;
+
+      const lost =
+        projects.filter(p=>p.pipelineStage==="Perdu").length;
+
+      return {
+
+        id:user.id,
+        name:user.name,
+        email:user.email,
+
+        totalProjects,
+        totalSurface,
+        won,
+        lost,
+
+        projects
+
+      };
+
+    });
+
+    res.json(result);
+
+  }
+  catch(err){
+
+    console.error(err);
+
+    res.status(500).json({message:"Server error"});
+
+  }
+
+});
+
+
+// =======================================================
+// PROJETS PAR USER
+// =======================================================
+
+router.get("/:id/projects", authRequired, async (req,res)=>{
+
+  try{
+
+    const user = await User.findByPk(req.params.id,{
+
+      attributes:["id","email"],
+
+      include:[
+        {
+          model:Project,
+          attributes:[
+            "id",
+            "nomProjet",
+            "entreprise",
+            "pipelineStage"
+          ],
+          through:{attributes:[]}
+        }
+      ]
+
+    });
+
+    res.json({
+
+      user,
+      totalProjects:user.Projects.length,
+      projects:user.Projects
+
+    });
+
+  }
+  catch(err){
+
+    console.error(err);
+
+    res.status(500).json({message:"Server error"});
+
+  }
+
+});
 router.get("/my-projects", authRequired, async (req, res) => {
   try {
     const {
