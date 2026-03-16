@@ -4,9 +4,8 @@ const helmet = require("helmet");
 const cors = require("cors");
 const cookieParser = require("cookie-parser");
 const { sequelize } = require("./db");
+require("./services/scheduler");
 
-// ✅ IMPORTANT: charger modèles + associations AVANT sync
-require("./models/associations");
 
 const authRoutes = require("./routes/auth.routes");
 const { authRequired } = require("./middleware/auth.middleware");
