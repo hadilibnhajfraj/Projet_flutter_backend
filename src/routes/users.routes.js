@@ -2,7 +2,7 @@
 const express = require("express");
 const { authRequired } = require("../middleware/auth.middleware");
 const UserProfile = require("../models/UserProfile");
-
+const User = require("../models/User");
 const router = express.Router();
 
 // GET /users/me/profile  ✅ récupérer profil du user connecté
@@ -53,5 +53,41 @@ router.put("/me/profile", authRequired, async (req, res) => {
     return res.status(500).json({ message: e.message || "Server error" });
   }
 });
+router.get("/", authRequired, async (req, res) => {
+  try {
+    console.log("USER CONNECTED:", req.user);
 
+    const role = (req.user?.role || "").toLowerCase();
+
+    // 🔒 sécurité : seul admin/superadmin peut voir la liste
+    if (!["admin", "superadmin"].includes(role)) {
+      return res.status(403).json({
+        message: "Access denied",
+      });
+    }
+
+    // 🔥 option filtre par role (ex: ?role=user)
+    const { role: roleFilter } = req.query;
+
+    const where = {};
+
+    if (roleFilter) {
+      where.role = roleFilter.toLowerCase();
+    }
+
+    const users = await User.findAll({
+      where,
+      attributes: ["id", "email", "role"],
+      order: [["email", "ASC"]],
+    });
+
+    res.json(users);
+
+  } catch (err) {
+    console.error("USERS ERROR:", err);
+    res.status(500).json({
+      message: err.message || "Server error",
+    });
+  }
+});
 module.exports = router;

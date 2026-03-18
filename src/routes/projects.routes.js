@@ -1368,6 +1368,7 @@ router.get("/my-projects", authRequired, async (req, res) => {
       ingenieur,
       societe,
       entreprise,
+      createdBy, // 🔥 AJOUT
       page = 1,
       limit = 10,
       q,
@@ -1381,7 +1382,7 @@ router.get("/my-projects", authRequired, async (req, res) => {
 
     const where = {};
 
-    // ✅ filtre libre global
+    // 🔍 recherche globale
     if (typeof q === "string" && q.trim()) {
       const s = q.trim();
       where[Op.or] = [
@@ -1395,50 +1396,62 @@ router.get("/my-projects", authRequired, async (req, res) => {
       ];
     }
 
-    // ✅ filtres précis
-    if (typeof architecte === "string" && architecte.trim()) {
+    // 🔍 filtres précis
+    if (architecte?.trim()) {
       where.architecte = { [Op.iLike]: `%${architecte.trim()}%` };
     }
 
-    if (typeof promoteur === "string" && promoteur.trim()) {
+    if (promoteur?.trim()) {
       where.promoteur = { [Op.iLike]: `%${promoteur.trim()}%` };
     }
 
-    if (typeof ingenieur === "string" && ingenieur.trim()) {
-      where.ingenieurResponsable = { [Op.iLike]: `%${ingenieur.trim()}%` };
+    if (ingenieur?.trim()) {
+      where.ingenieurResponsable = {
+        [Op.iLike]: `%${ingenieur.trim()}%`,
+      };
     }
 
     const societeValue =
-      typeof societe === "string" && societe.trim()
-        ? societe.trim()
-        : typeof entreprise === "string" && entreprise.trim()
-            ? entreprise.trim()
-            : null;
+      societe?.trim() || entreprise?.trim() || null;
 
     if (societeValue) {
       where.entreprise = { [Op.iLike]: `%${societeValue}%` };
     }
 
-    // ✅ admin/superadmin => tous les projets
+    // =========================
+    // 👑 ADMIN / SUPERADMIN
+    // =========================
     if (role === "admin" || role === "superadmin") {
+
+      const include = [
+        {
+          model: UserProject,
+          required: false,
+          attributes: ["userId", "permission"],
+          include: [
+            {
+              model: User,
+              attributes: ["id", "email", "role"],
+            },
+          ],
+        },
+      ];
+
+      // 🔥 FILTRE PAR USER (dropdown)
+      if (createdBy) {
+        include[0].required = true;
+        include[0].where = {
+          userId: createdBy,
+        };
+      }
+
       const { count, rows } = await Project.findAndCountAll({
         where,
         order: [["createdAt", "DESC"]],
         limit: currentLimit,
         offset,
-        include: [
-          {
-            model: UserProject,
-            required: false,
-            attributes: ["userId", "permission"],
-            include: [
-              {
-                model: User,
-                attributes: ["id", "email", "role"],
-              },
-            ],
-          },
-        ],
+        include,
+        distinct: true,
       });
 
       return res.json({
@@ -1451,13 +1464,16 @@ router.get("/my-projects", authRequired, async (req, res) => {
           promoteur: promoteur || null,
           ingenieur: ingenieur || null,
           societe: societeValue || null,
+          createdBy: createdBy || null, // 🔥 retour
           q: q || null,
         },
         items: rows,
       });
     }
 
-    // ✅ autres rôles => seulement projets liés au user connecté
+    // =========================
+    // 👤 USER NORMAL
+    // =========================
     const { count, rows } = await Project.findAndCountAll({
       where,
       order: [["createdAt", "DESC"]],
@@ -1467,7 +1483,7 @@ router.get("/my-projects", authRequired, async (req, res) => {
         {
           model: UserProject,
           required: true,
-          where: { userId: req.user.sub },
+          where: { userId: req.user.sub }, // 🔥 important
           attributes: ["userId", "permission"],
         },
       ],
@@ -1488,6 +1504,7 @@ router.get("/my-projects", authRequired, async (req, res) => {
       },
       items: rows,
     });
+
   } catch (e) {
     console.error("MY_PROJECTS_FILTER_ERROR:", e);
     return res.status(500).json({ message: e.message || "Server error" });
