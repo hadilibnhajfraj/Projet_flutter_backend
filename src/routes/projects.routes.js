@@ -1834,70 +1834,94 @@ const lastAction = await ProjectAction.findOne({
 
 // ---------------- UPDATE ----------------
 router.put("/:id", authRequired, async (req, res) => {
-
   try {
 
     if (!isUUID(req.params.id)) {
-      return res.status(400).json({ message: "Invalid project id (UUID required)" });
+      return res.status(400).json({
+        message: "Invalid project id (UUID required)"
+      });
     }
+
+    const userRole = (req.user?.role || "").toLowerCase();
 
     const permission = await getPermission(req.user, req.params.id);
 
+    // 🔒 sécurité stricte
     if (
-      !["admin","superadmin"].includes(req.user.role) &&
-      !["editor","owner"].includes(permission)
+      !["admin", "superadmin"].includes(userRole) &&
+      !["editor", "owner"].includes(permission)
     ) {
-      return res.status(403).json({ message: "Need editor permission" });
+      return res.status(403).json({
+        message: "You are not allowed to edit this project"
+      });
     }
 
     const body = normalizePayload(req.body);
 
     const errors = validatePayload(body, true);
     if (errors.length) {
-      return res.status(400).json({ message: "Validation error", errors });
+      return res.status(400).json({
+        message: "Validation error",
+        errors
+      });
     }
 
     const item = await Project.findByPk(req.params.id);
 
     if (!item) {
-      return res.status(404).json({ message: "Project not found" });
+      return res.status(404).json({
+        message: "Project not found"
+      });
     }
 
-    const fields = [
+    // =========================
+    // VALIDATION STATUT
+    // =========================
+    const allowedStatus = [
+      "Identification",
+      "Proposition technique",
+      "Proposition commerciale",
+      "Négociation",
+      "Livraison",
+      "Fidélisation"
+    ];
 
+    if (body.statut && !allowedStatus.includes(body.statut)) {
+      return res.status(400).json({
+        message: "Invalid statut value"
+      });
+    }
+
+    // =========================
+    // PREPARE UPDATE
+    // =========================
+
+    const fields = [
       "nomProjet",
       "dateDemarrage",
       "dateProspection",
       "statut",
       "typeAdresseChantier",
-
       "ingenieurResponsable",
       "telephoneIngenieur",
       "emailIngenieur",
-
       "architecte",
       "telephoneArchitecte",
       "emailArchitecte",
-
       "entreprise",
       "promoteur",
       "bureauEtude",
       "bureauControle",
-
       "adresse",
       "latitude",
       "longitude",
       "localisationCommentaire",
-
       "entrepriseFluide",
       "entrepriseElectricite",
-
       "pourcentageReussite",
       "validationStatut",
-
       "typeProjet",
       "matriculeFiscale",
-
       "surfaceProspectee",
       "pipelineStage"
     ];
@@ -1905,63 +1929,57 @@ router.put("/:id", authRequired, async (req, res) => {
     const up = {};
 
     for (const f of fields) {
-      if (body[f] !== undefined) {
+      if (body[f] !== undefined && body[f] !== null) {
         up[f] = body[f];
       }
     }
 
+    // 🔥 détecter changement pipeline
+    const oldStage = item.pipelineStage;
+    const newStage = body.pipelineStage;
+
     await item.update(up);
-// =========================
-// NEXT ACTION AUTOMATIQUE
-// =========================
 
-if (body.pipelineStage) {
-
-  const nextAction = getNextAction(body.pipelineStage);
-
-  if (nextAction) {
-
-    await ProjectAction.create({
-
-      projectId: item.id,
-      typeAction: nextAction,
-      commentaire: "Next action automatique",
-      createdBy: req.user.sub,
-      dateAction: new Date()
-
-    });
-
-  }
-
-}
     // =========================
-    // CRM ACTION CREATION
+    // NEXT ACTION AUTO (only if changed)
+    // =========================
+
+    if (newStage && newStage !== oldStage) {
+
+      const nextAction = getNextAction(newStage);
+
+      if (nextAction) {
+        await ProjectAction.create({
+          projectId: item.id,
+          typeAction: nextAction,
+          commentaire: "Next action automatique",
+          createdBy: req.user.sub,
+          dateAction: new Date()
+        });
+      }
+    }
+
+    // =========================
+    // MANUAL ACTION
     // =========================
 
     if (body.firstAction && body.firstAction.trim() !== "") {
-
       await ProjectAction.create({
-
         projectId: item.id,
         typeAction: body.firstAction,
         commentaire: body.commentaireAction ?? null,
         createdBy: req.user.sub,
         dateAction: body.dateVisite ?? new Date()
-
       });
-
     }
 
     // =========================
-    // LAST ACTION (for edition)
+    // LAST ACTION
     // =========================
 
     const lastAction = await ProjectAction.findOne({
-
       where: { projectId: item.id },
-
       order: [["dateAction", "DESC"]]
-
     });
 
     // =========================
@@ -1978,20 +1996,13 @@ if (body.pipelineStage) {
     // =========================
 
     return res.json({
-
       ...item.toJSON(),
-
       permission,
-
       devisCount,
-
       bonCommandeCount,
-
-      // CRM fields for edit form
       dateVisite: lastAction?.dateAction ?? null,
       nextAction: lastAction?.typeAction ?? null,
       commentaireAction: lastAction?.commentaire ?? null
-
     });
 
   } catch (e) {
@@ -2001,9 +2012,7 @@ if (body.pipelineStage) {
     return res.status(500).json({
       message: e.message || "Server error"
     });
-
   }
-
 });
 
 // ---------------- DELETE ----------------
