@@ -64,9 +64,17 @@ const Project = sequelize.define(
     localisationCommentaire: { type: DataTypes.TEXT, allowNull: true },
 
     statut: {
-      type: DataTypes.ENUM("En cours", "Préparation", "Terminé"),
-      allowNull: true,
-    },
+  type: DataTypes.ENUM(
+    "Identification",
+    "Proposition technique",
+    "Proposition commerciale",
+    "Négociation",
+    "Livraison",
+    "Fidélisation"
+  ),
+  allowNull: true,
+  defaultValue: "Identification",
+},
 
     entrepriseFluide: { type: DataTypes.STRING(200), allowNull: true },
 

@@ -155,7 +155,14 @@ function validatePayload(body, isUpdate = false) {
   }
 
   if (body.statut !== undefined && body.statut !== null) {
-    const allowed = ["En cours", "Préparation", "Terminé"];
+    const allowed = [
+  "Identification",
+  "Proposition technique",
+  "Proposition commerciale",
+  "Négociation",
+  "Livraison",
+  "Fidélisation"
+];
     if (!allowed.includes(body.statut)) {
       errors.push("statut invalide (En cours | Préparation | Terminé)");
     }
