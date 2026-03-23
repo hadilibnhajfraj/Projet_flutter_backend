@@ -107,7 +107,19 @@ function normalizePayload(body = {}) {
 
   return b;
 }
+const ACTION_TO_STAGE = {
+  "Visite": "Prospect",
+  "Plan technique": "Prospect",        // ✅ IMPORTANT
+  "Echantillonnage": "Prospect",
+  "Devis envoyé": "Devis envoyé",
+  "Negociation": "Negociation",
+  "Commande gagnée": "Commande gagnée",
+  "Commande perdue": "Commande perdue",
+};
 
+function getStageFromAction(action) {
+  return ACTION_TO_STAGE[action] || "Prospect";
+}
 function validatePayload(body, isUpdate = false) {
   const errors = [];
 
@@ -1561,14 +1573,18 @@ router.post("/:id/actions", authRequired, uploads.single("file"), async (req, re
   try {
 
     console.log("📥 CREATE ACTION REQUEST");
-    console.log("Project ID:", req.params.id);
-    console.log("User:", req.user.sub);
-    console.log("Body:", req.body);
 
     const { typeAction, commentaire, dateRelance } = req.body;
+
+    if (!typeAction) {
+      return res.status(400).json({
+        message: "typeAction is required"
+      });
+    }
+
     const fileUrl = req.file
-  ? `/uploads/actions/${req.file.filename}`
-  : null;
+      ? `/uploads/actions/${req.file.filename}`
+      : null;
 
     // =============================
     // CREATE ACTION
@@ -1576,18 +1592,12 @@ router.post("/:id/actions", authRequired, uploads.single("file"), async (req, re
     const action = await ProjectAction.create({
 
       projectId: req.params.id,
-
-      typeAction: typeAction,
-
+      typeAction,
       commentaire: commentaire ?? null,
-
       dateAction: new Date(),
-
       dateRelance: dateRelance ?? null,
-
       statut: "A faire",
-      fileUrl: fileUrl, // ✅ NEW
-
+      fileUrl,
       createdBy: req.user.sub
 
     });
@@ -1595,36 +1605,37 @@ router.post("/:id/actions", authRequired, uploads.single("file"), async (req, re
     console.log("✅ ACTION CREATED:", action.id);
 
     // =============================
+    // 🔥 UPDATE PIPELINE AUTOMATIQUE
+    // =============================
+    const newStage = getStageFromAction(typeAction);
+
+    await Project.update(
+      { pipelineStage: newStage },
+      { where: { id: req.params.id } }
+    );
+
+    console.log("📊 PIPELINE UPDATED:", newStage);
+
+    // =============================
     // CREATE REMINDER IF EXISTS
     // =============================
     if (dateRelance) {
 
-      console.log("⏰ Creating reminder...");
-
       const reminder = await ProjectReminder.create({
 
         projectId: req.params.id,
-
         actionId: action.id,
-
         message: commentaire ?? "",
-
-        dateRelance: dateRelance,
-
+        dateRelance,
         createdBy: req.user.sub
 
       });
 
-      console.log("✅ REMINDER CREATED:", reminder.id);
-
-    } else {
-
-      console.log("ℹ️ No reminder requested");
-
+      console.log("⏰ REMINDER CREATED:", reminder.id);
     }
 
     // =============================
-    // RETURN FULL ACTION WITH REMINDERS
+    // RETURN FULL ACTION
     // =============================
     const result = await ProjectAction.findByPk(action.id, {
 
@@ -1633,13 +1644,9 @@ router.post("/:id/actions", authRequired, uploads.single("file"), async (req, re
           model: ProjectReminder,
           as: "reminders"
         }
-      ],
-
-      order: [["dateRelance", "ASC"]]
+      ]
 
     });
-
-    console.log("📤 RESPONSE ACTION:", JSON.stringify(result, null, 2));
 
     res.status(201).json(result);
 
