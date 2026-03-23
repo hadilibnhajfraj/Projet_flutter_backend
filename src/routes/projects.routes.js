@@ -1529,6 +1529,144 @@ router.get("/my-projects", authRequired, async (req, res) => {
     return res.status(500).json({ message: e.message || "Server error" });
   }
 });
+router.get("/myprojects", authRequired, async (req, res) => {
+  try {
+
+    const {
+      architecte,
+      promoteur,
+      ingenieur,
+      societe,
+      entreprise,
+      createdBy,
+      page = 1,
+      limit = 100, // 🔥 IMPORTANT → 100 pour pipeline
+      q,
+    } = req.query;
+
+    const currentPage = Math.max(parseInt(page, 10) || 1, 1);
+    const currentLimit = Math.max(parseInt(limit, 10) || 100, 1);
+    const offset = (currentPage - 1) * currentLimit;
+
+    const role = (req.user?.role || "").toLowerCase();
+
+    const where = {};
+
+    /// 🔍 SEARCH GLOBAL
+    if (q?.trim()) {
+      where[Op.or] = [
+        { nomProjet: { [Op.iLike]: `%${q}%` } },
+        { architecte: { [Op.iLike]: `%${q}%` } },
+        { promoteur: { [Op.iLike]: `%${q}%` } },
+        { ingenieurResponsable: { [Op.iLike]: `%${q}%` } },
+        { entreprise: { [Op.iLike]: `%${q}%` } },
+        { bureauControle: { [Op.iLike]: `%${q}%` } },
+        { adresse: { [Op.iLike]: `%${q}%` } },
+      ];
+    }
+
+    /// 🔍 FILTERS
+    if (architecte?.trim()) {
+      where.architecte = { [Op.iLike]: `%${architecte}%` };
+    }
+
+    if (promoteur?.trim()) {
+      where.promoteur = { [Op.iLike]: `%${promoteur}%` };
+    }
+
+    if (ingenieur?.trim()) {
+      where.ingenieurResponsable = {
+        [Op.iLike]: `%${ingenieur}%`,
+      };
+    }
+
+    const societeValue =
+      societe?.trim() || entreprise?.trim() || null;
+
+    if (societeValue) {
+      where.entreprise = { [Op.iLike]: `%${societeValue}%` };
+    }
+
+    /// =========================
+    /// 🔥 INCLUDE COMMUN
+    /// =========================
+    const includeBase = [
+
+      {
+        model: UserProject,
+        required: role !== "admin" && role !== "superadmin",
+        where:
+          role === "admin" || role === "superadmin"
+            ? undefined
+            : { userId: req.user.sub },
+        attributes: ["userId", "permission"],
+        include: [
+          {
+            model: User,
+            attributes: ["id", "email", "role"],
+          },
+        ],
+      },
+
+      /// 🔥 IMPORTANT → LAST ACTION
+      {
+        model: ProjectAction,
+        as: "actions",
+        required: false,
+        separate: true,
+        limit: 1,
+        order: [["dateAction", "DESC"]],
+      },
+    ];
+
+    /// 🔥 ADMIN FILTER
+    if ((role === "admin" || role === "superadmin") && createdBy) {
+      includeBase[0].required = true;
+      includeBase[0].where = { userId: createdBy };
+    }
+
+    const { count, rows } = await Project.findAndCountAll({
+      where,
+      order: [["createdAt", "DESC"]],
+      limit: currentLimit,
+      offset,
+      include: includeBase,
+      distinct: true,
+    });
+
+    /// =========================
+    /// 🔥 TRANSFORM LAST ACTION
+    /// =========================
+    const formatted = rows.map((p) => {
+
+      const json = p.toJSON();
+
+      return {
+        ...json,
+
+        /// 🔥 IMPORTANT POUR FLUTTER
+        lastAction: json.actions?.[0] || null,
+        lastActionId: json.actions?.[0]?.id || null,
+      };
+    });
+
+    return res.json({
+      total: count,
+      page: currentPage,
+      limit: currentLimit,
+      totalPages: Math.ceil(count / currentLimit),
+      items: formatted,
+    });
+
+  } catch (e) {
+
+    console.error("MY_PROJECTS_ERROR:", e);
+
+    return res.status(500).json({
+      message: e.message || "Server error",
+    });
+  }
+});
 // ===============================
 // GET PROJECT CRM ACTIONS
 // ===============================
