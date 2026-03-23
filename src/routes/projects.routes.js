@@ -12,7 +12,7 @@ const ProjectBonDeCommande = require("../models/ProjectBonDeCommande");
 const ProjectAction = require("../models/ProjectAction");
 const ProjectReminder = require("../models/ProjectReminder");
 const router = express.Router();
-
+const uploads = require("../middleware/uploads");
 // ---------------- Helpers ----------------
 function reqStr(v) {
   return typeof v === "string" ? v.trim() : "";
@@ -1556,7 +1556,7 @@ router.get("/:id/actions", authRequired, async (req, res) => {
 // ===============================
 // ADD CRM ACTION
 // ===============================
-router.post("/:id/actions", authRequired, async (req, res) => {
+router.post("/:id/actions", authRequired, uploads.single("file"), async (req, res) => {
 
   try {
 
@@ -1566,6 +1566,9 @@ router.post("/:id/actions", authRequired, async (req, res) => {
     console.log("Body:", req.body);
 
     const { typeAction, commentaire, dateRelance } = req.body;
+    const fileUrl = req.file
+  ? `/uploads/actions/${req.file.filename}`
+  : null;
 
     // =============================
     // CREATE ACTION
@@ -1583,6 +1586,7 @@ router.post("/:id/actions", authRequired, async (req, res) => {
       dateRelance: dateRelance ?? null,
 
       statut: "A faire",
+      fileUrl: fileUrl, // ✅ NEW
 
       createdBy: req.user.sub
 

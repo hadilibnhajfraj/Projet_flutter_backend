@@ -16,7 +16,10 @@ const ProjectAction = sequelize.define(
       type: DataTypes.UUID,
       allowNull: false,
     },
-
+fileUrl: {
+  type: DataTypes.STRING,
+  allowNull: true,
+},
     typeAction: {
   type: DataTypes.ENUM(
     "Visite",
