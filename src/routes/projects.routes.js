@@ -1753,6 +1753,41 @@ router.delete("/reminders/:id", authRequired, async (req, res) => {
   }
 
 });
+// ===============================
+// UPDATE ACTION (PIPELINE DRAG)
+// ===============================
+router.put("/actions/:actionId", authRequired, async (req, res) => {
+
+  try {
+
+    const { typeAction } = req.body;
+
+    const action = await ProjectAction.findByPk(req.params.actionId);
+
+    if (!action) {
+      return res.status(404).json({ message: "Action not found" });
+    }
+
+    await action.update({
+      typeAction
+    });
+
+    res.json({
+      message: "Action updated",
+      action
+    });
+
+  } catch (err) {
+
+    console.error("UPDATE ACTION ERROR:", err);
+
+    res.status(500).json({
+      message: "Server error"
+    });
+
+  }
+
+});
 // ---------------- GET BY ID ----------------
 // ---------------- GET BY ID ----------------
 router.get("/:id", authRequired, async (req, res) => {
