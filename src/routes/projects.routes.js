@@ -1485,7 +1485,8 @@ router.get("/my-projects", authRequired, async (req, res) => {
       ingenieur,
       societe,
       entreprise,
-      createdBy, // 🔥 AJOUT
+      createdBy,
+      projectModele, // ✅ NEW
       page = 1,
       limit = 10,
       q,
@@ -1499,7 +1500,9 @@ router.get("/my-projects", authRequired, async (req, res) => {
 
     const where = {};
 
-    // 🔍 recherche globale
+    // =========================
+    // 🔍 GLOBAL SEARCH
+    // =========================
     if (typeof q === "string" && q.trim()) {
       const s = q.trim();
       where[Op.or] = [
@@ -1513,7 +1516,9 @@ router.get("/my-projects", authRequired, async (req, res) => {
       ];
     }
 
-    // 🔍 filtres précis
+    // =========================
+    // 🔍 FILTERS
+    // =========================
     if (architecte?.trim()) {
       where.architecte = { [Op.iLike]: `%${architecte.trim()}%` };
     }
@@ -1536,6 +1541,13 @@ router.get("/my-projects", authRequired, async (req, res) => {
     }
 
     // =========================
+    // ✅ NEW FILTER (PROJECT MODELE)
+    // =========================
+    if (projectModele?.trim()) {
+      where.projectModele = projectModele.trim();
+    }
+
+    // =========================
     // 👑 ADMIN / SUPERADMIN
     // =========================
     if (role === "admin" || role === "superadmin") {
@@ -1554,7 +1566,7 @@ router.get("/my-projects", authRequired, async (req, res) => {
         },
       ];
 
-      // 🔥 FILTRE PAR USER (dropdown)
+      // 🔥 FILTER BY USER
       if (createdBy) {
         include[0].required = true;
         include[0].where = {
@@ -1581,7 +1593,8 @@ router.get("/my-projects", authRequired, async (req, res) => {
           promoteur: promoteur || null,
           ingenieur: ingenieur || null,
           societe: societeValue || null,
-          createdBy: createdBy || null, // 🔥 retour
+          projectModele: projectModele || null, // ✅ NEW
+          createdBy: createdBy || null,
           q: q || null,
         },
         items: rows,
@@ -1600,7 +1613,7 @@ router.get("/my-projects", authRequired, async (req, res) => {
         {
           model: UserProject,
           required: true,
-          where: { userId: req.user.sub }, // 🔥 important
+          where: { userId: req.user.sub },
           attributes: ["userId", "permission"],
         },
       ],
@@ -1617,6 +1630,7 @@ router.get("/my-projects", authRequired, async (req, res) => {
         promoteur: promoteur || null,
         ingenieur: ingenieur || null,
         societe: societeValue || null,
+        projectModele: projectModele || null, // ✅ NEW
         q: q || null,
       },
       items: rows,
