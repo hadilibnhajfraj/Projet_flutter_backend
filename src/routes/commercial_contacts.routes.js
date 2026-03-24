@@ -5,8 +5,37 @@ const { authRequired } = require("../middleware/auth.middleware");
 const CommercialContact = require("../models/CommercialContact");
 const CommercialContactProduct = require("../models/CommercialContactProduct");
 const CommercialContactRelance = require("../models/CommercialContactRelance");
+const CommercialContactAction = require("../models/CommercialContactAction");
+const CommercialContactReminder = require("../models/CommercialContactReminder");
 const User = require("../models/User");
+const uploads = require("../middleware/uploads");
+function mapStageToAction(stage) {
+  switch (stage) {
+    case "Prospect":
+      return "Visite";
 
+    case "Contacté":
+      return "Plan technique";
+
+    case "Visite":
+      return "Visite";
+
+    case "Devis envoyé":
+      return "Devis envoyé";
+
+    case "Negociation":
+      return "Negociation";
+
+    case "Gagné":
+      return "Commande gagnée";
+
+    case "Perdu":
+      return "Commande perdue";
+
+    default:
+      return "Visite";
+  }
+}
 // LIST
 router.get("/", authRequired, async (req, res) => {
   try {
@@ -62,7 +91,135 @@ router.get("/", authRequired, async (req, res) => {
     return res.status(500).json({ message: e.message || "Server error" });
   }
 });
+router.get("/:id/actions", authRequired, async (req, res) => {
+  try {
+    console.log("📥 GET ACTIONS");
+    console.log("👉 Contact ID:", req.params.id);
+    console.log("👉 User:", req.user);
 
+    const actions = await CommercialContactAction.findAll({
+      where: { commercialContactId: req.params.id },
+
+      include: [
+        {
+          model: CommercialContactReminder,
+          as: "reminders",
+        },
+      ],
+
+      order: [["dateAction", "DESC"]],
+    });
+
+    console.log("✅ ACTIONS FOUND:", actions.length);
+
+    res.json(actions);
+
+  } catch (err) {
+    console.error("❌ GET ACTIONS ERROR:", err);
+    res.status(500).json({ message: "Server error", error: err.message });
+  }
+});
+router.post("/:id/actions", authRequired, uploads.single("file"), async (req, res) => {
+  try {
+    console.log("📥 CREATE ACTION REQUEST");
+    console.log("👉 Params ID:", req.params.id);
+    console.log("👉 Body:", req.body);
+    console.log("👉 User:", req.user);
+
+    const { typeAction, commentaire, dateRelance } = req.body;
+
+    // ✅ VALIDATION
+    if (!typeAction) {
+      console.log("❌ typeAction missing");
+      return res.status(400).json({ message: "typeAction is required" });
+    }
+
+    if (!req.user?.sub) {
+      console.log("❌ USER INVALID:", req.user);
+      return res.status(401).json({ message: "Invalid user token" });
+    }
+
+    const fileUrl = req.file
+      ? `/uploads/actions/${req.file.filename}`
+      : null;
+
+    console.log("📎 File:", fileUrl);
+
+    // =============================
+    // CREATE ACTION
+    // =============================
+    const action = await CommercialContactAction.create({
+      commercialContactId: req.params.id,
+      typeAction,
+      commentaire: commentaire ?? null,
+      dateAction: new Date(),
+      dateRelance: dateRelance ?? null,
+      statut: "A faire",
+      fileUrl,
+      createdBy: req.user.sub,
+    });
+
+    console.log("✅ ACTION CREATED:", action.id);
+
+    // =============================
+    // UPDATE PIPELINE
+    // =============================
+    let newStage = "Prospect";
+
+    try {
+      newStage = getStageFromAction(typeAction);
+    } catch (e) {
+      console.log("⚠️ getStageFromAction missing → fallback Prospect");
+    }
+
+    await CommercialContact.update(
+      { pipelineStage: newStage },
+      { where: { id: req.params.id } }
+    );
+
+    console.log("📊 PIPELINE UPDATED:", newStage);
+
+    // =============================
+    // CREATE REMINDER
+    // =============================
+    if (dateRelance) {
+      const reminder = await CommercialContactReminder.create({
+        commercialContactId: req.params.id,
+        actionId: action.id,
+        message: commentaire ?? "",
+        dateRelance,
+        createdBy: req.user.sub,
+      });
+
+      console.log("⏰ REMINDER CREATED:", reminder.id);
+    }
+
+    // =============================
+    // RETURN RESULT
+    // =============================
+    const result = await CommercialContactAction.findByPk(action.id, {
+      include: [
+        {
+          model: CommercialContactReminder,
+          as: "reminders",
+        },
+      ],
+    });
+
+    console.log("📤 RETURN ACTION");
+
+    res.status(201).json(result);
+
+  } catch (err) {
+    console.error("❌ CREATE ACTION ERROR:", err);
+
+    res.status(500).json({
+      message: "Server error",
+      error: err.message,
+      stack: err.stack,
+    });
+  }
+});
 // CALENDRIER DES RELANCES
 router.get("/calendar/relances", authRequired, async (req, res) => {
   try {
@@ -110,32 +267,42 @@ router.get("/calendar/relances", authRequired, async (req, res) => {
 // CREATE CONTACT
 router.post("/", authRequired, async (req, res) => {
   try {
+    console.log("📥 CREATE CONTACT REQUEST");
+    console.log("👉 BODY:", req.body);
+    console.log("👉 USER:", req.user);
+
     const body = req.body || {};
     const produits = Array.isArray(body.produits) ? body.produits : [];
 
+    // =============================
+    // PAYLOAD CONTACT
+    // =============================
     const payload = {
-  typeClient: body.typeClient || "autre",
-  nomSociete: body.nomSociete || null,
-  nom: String(body.nom || "").trim(),
-  prenom: String(body.prenom || "").trim(),
-  localisation: body.localisation ? String(body.localisation).trim() : null,
-  telephone: String(body.telephone || "").trim(),
-  message: body.message ? String(body.message).trim() : null,
-  statut: body.statut || "user_injoignable",
-  nbAppels: Number(body.nbAppels ?? 0) || 0,
-  sujetDiscussion: body.sujetDiscussion
-    ? String(body.sujetDiscussion).trim()
-    : null,
+      typeClient: body.typeClient || "autre",
+      nomSociete: body.nomSociete || null,
+      nom: String(body.nom || "").trim(),
+      prenom: String(body.prenom || "").trim(),
+      localisation: body.localisation
+        ? String(body.localisation).trim()
+        : null,
+      telephone: String(body.telephone || "").trim(),
+      message: body.message ? String(body.message).trim() : null,
+      statut: body.statut || "user_injoignable",
+      nbAppels: Number(body.nbAppels ?? 0) || 0,
+      sujetDiscussion: body.sujetDiscussion
+        ? String(body.sujetDiscussion).trim()
+        : null,
 
-  // ✅ NEW
-  pipelineStage: body.pipelineStage || "Prospect",
+      // CRM
+      pipelineStage: body.pipelineStage || "Prospect",
+      dateAppel: body.dateAppel || new Date(),
 
-  // ✅ NEW
-  dateAppel: body.dateAppel || new Date(),
+      createdBy: req.user.sub,
+    };
 
-  createdBy: req.user.sub,
-};
-
+    // =============================
+    // VALIDATION
+    // =============================
     if (!payload.nom) {
       return res.status(400).json({ message: "nom obligatoire" });
     }
@@ -146,9 +313,20 @@ router.post("/", authRequired, async (req, res) => {
       return res.status(400).json({ message: "telephone obligatoire" });
     }
 
+    // =============================
+    // CREATE CONTACT
+    // =============================
     const contact = await CommercialContact.create(payload);
 
-    const items = (produits.length ? produits : [{ produit: "PROBAR", qte: 1 }])
+    console.log("✅ CONTACT CREATED:", contact.id);
+
+    // =============================
+    // CREATE PRODUITS
+    // =============================
+    const items = (produits.length
+      ? produits
+      : [{ produit: "PROBAR", qte: 1 }]
+    )
       .filter((p) => p)
       .map((p) => ({
         commercialContactId: contact.id,
@@ -158,22 +336,47 @@ router.post("/", authRequired, async (req, res) => {
 
     if (items.length) {
       await CommercialContactProduct.bulkCreate(items);
+      console.log("📦 PRODUITS CREATED:", items.length);
     }
 
+    // =============================
+    // 🔥 CREATE ACTION AUTO (IMPORTANT)
+    // =============================
+    const typeAction = mapStageToAction(payload.pipelineStage);
+
+    const action = await CommercialContactAction.create({
+  commercialContactId: contact.id,
+  typeAction: mapStageToAction(payload.pipelineStage),
+  commentaire: "Création du contact",
+  dateAction: new Date(),
+  statut: "Terminé",
+  createdBy: req.user.sub,
+});
+
+    console.log("🔥 ACTION AUTO CREATED:", action.id);
+
+    // =============================
+    // CREATE RELANCE
+    // =============================
     if (
       ["ok", "rappeler_plus_tard"].includes(payload.statut) &&
       body.dateRelance
     ) {
-      await CommercialContactRelance.create({
+      const relance = await CommercialContactRelance.create({
         commercialContactId: contact.id,
         dateRelance: body.dateRelance,
         heureRelance: body.heureRelance || null,
         commentaire:
-            body.commentaire || body.commentaireRelance || null,
+          body.commentaire || body.commentaireRelance || null,
         createdBy: req.user.sub,
       });
+
+      console.log("⏰ RELANCE CREATED:", relance.id);
     }
 
+    // =============================
+    // RETURN FULL DATA
+    // =============================
     const full = await CommercialContact.findByPk(contact.id, {
       include: [
         { model: CommercialContactProduct, as: "produits" },
@@ -181,9 +384,17 @@ router.post("/", authRequired, async (req, res) => {
       ],
     });
 
+    console.log("📤 CONTACT RESPONSE READY");
+
     return res.status(201).json(full);
+
   } catch (e) {
-    return res.status(500).json({ message: e.message || "Server error" });
+    console.error("❌ CREATE CONTACT ERROR:", e);
+
+    return res.status(500).json({
+      message: e.message || "Server error",
+      stack: e.stack,
+    });
   }
 });
 
