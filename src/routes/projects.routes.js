@@ -123,39 +123,116 @@ function getStageFromAction(action) {
 function validatePayload(body, isUpdate = false) {
   const errors = [];
 
-  const required = [
+  // ✅ DEFAULT MODE
+  const mode = body.projectModele || "project";
+
+  // =========================
+  // BASE REQUIRED
+  // =========================
+  const baseRequired = [
     "nomProjet",
     "dateDemarrage",
     "typeAdresseChantier",
-    "ingenieurResponsable",
-    "telephoneIngenieur",
-
-
     "entreprise",
-
     "bureauControle",
     "latitude",
     "longitude",
   ];
 
   if (!isUpdate) {
-    for (const k of required) {
-      if (body[k] === undefined || body[k] === null || reqStr(String(body[k])) === "") {
+    for (const k of baseRequired) {
+      if (
+        body[k] === undefined ||
+        body[k] === null ||
+        reqStr(String(body[k])) === ""
+      ) {
         errors.push(`${k} est obligatoire`);
       }
     }
   }
 
-  if (body.dateDemarrage !== undefined && body.dateDemarrage !== null && !isValidDateOnly(body.dateDemarrage)) {
+  // =========================
+  // 🔥 MODE-SPECIFIC VALIDATION
+  // =========================
+
+  if (!isUpdate) {
+
+    if (mode === "project") {
+
+      if (!body.ingenieurResponsable) {
+        errors.push("ingenieurResponsable est obligatoire");
+      }
+
+      if (!body.telephoneIngenieur) {
+        errors.push("telephoneIngenieur est obligatoire");
+      }
+
+    }
+
+    if (mode === "revendeur") {
+
+      if (!body.comptoir) {
+        errors.push("comptoir est obligatoire");
+      }
+
+      if (!body.telephoneComptoir) {
+        errors.push("telephoneComptoir est obligatoire");
+      }
+
+    }
+
+    if (mode === "applicateur") {
+
+      if (!body.dallagiste) {
+        errors.push("dallagiste est obligatoire");
+      }
+
+      if (!body.telephoneDallagiste) {
+        errors.push("telephoneDallagiste est obligatoire");
+      }
+
+    }
+
+  }
+
+  // =========================
+  // FORMAT VALIDATION
+  // =========================
+
+  if (
+    body.dateDemarrage !== undefined &&
+    body.dateDemarrage !== null &&
+    !isValidDateOnly(body.dateDemarrage)
+  ) {
     errors.push("dateDemarrage doit être au format YYYY-MM-DD");
   }
 
-  if (body.telephoneIngenieur !== undefined && body.telephoneIngenieur !== null && !isValidPhone(body.telephoneIngenieur)) {
+  if (
+    body.telephoneIngenieur &&
+    !isValidPhone(body.telephoneIngenieur)
+  ) {
     errors.push("telephoneIngenieur invalide");
   }
 
-  if (body.telephoneArchitecte !== undefined && body.telephoneArchitecte !== null && !isValidPhone(body.telephoneArchitecte)) {
+  if (
+    body.telephoneArchitecte &&
+    !isValidPhone(body.telephoneArchitecte)
+  ) {
     errors.push("telephoneArchitecte invalide");
+  }
+
+  if (
+    body.telephoneComptoir &&
+    !isValidPhone(body.telephoneComptoir)
+  ) {
+    errors.push("telephoneComptoir invalide");
+  }
+
+  if (
+    body.telephoneDallagiste &&
+    !isValidPhone(body.telephoneDallagiste)
+  ) {
+    errors.push("telephoneDallagiste invalide");
   }
 
   if (
@@ -168,35 +245,40 @@ function validatePayload(body, isUpdate = false) {
 
   if (body.statut !== undefined && body.statut !== null) {
     const allowed = [
-  "Identification",
-  "Proposition technique",
-  "Proposition commerciale",
-  "Négociation",
-  "Livraison",
-  "Fidélisation"
-];
+      "Identification",
+      "Proposition technique",
+      "Proposition commerciale",
+      "Négociation",
+      "Livraison",
+      "Fidélisation",
+    ];
+
     if (!allowed.includes(body.statut)) {
-      errors.push("statut invalide (En cours | Préparation | Terminé)");
+      errors.push("statut invalide");
     }
   }
 
   if (body.validationStatut !== undefined && body.validationStatut !== null) {
     const allowed = ["Validé", "Non validé"];
     if (!allowed.includes(body.validationStatut)) {
-      errors.push("validationStatut invalide (Validé | Non validé)");
+      errors.push("validationStatut invalide");
     }
   }
 
   if (body.pourcentageReussite !== undefined && body.pourcentageReussite !== null) {
-    if (Number.isNaN(body.pourcentageReussite)) errors.push("pourcentageReussite doit être un nombre");
-    else if (body.pourcentageReussite < 0 || body.pourcentageReussite > 100) {
+    if (Number.isNaN(body.pourcentageReussite)) {
+      errors.push("pourcentageReussite doit être un nombre");
+    } else if (body.pourcentageReussite < 0 || body.pourcentageReussite > 100) {
       errors.push("pourcentageReussite doit être entre 0 et 100");
     }
   }
 
   if (body.surfaceProspectee !== undefined && body.surfaceProspectee !== null) {
-    if (Number.isNaN(body.surfaceProspectee)) errors.push("surfaceProspectee doit être un nombre");
-    else if (body.surfaceProspectee < 0) errors.push("surfaceProspectee doit être >= 0");
+    if (Number.isNaN(body.surfaceProspectee)) {
+      errors.push("surfaceProspectee doit être un nombre");
+    } else if (body.surfaceProspectee < 0) {
+      errors.push("surfaceProspectee doit être >= 0");
+    }
   }
 
   return errors;
@@ -1052,7 +1134,13 @@ router.post("/", authRequired, async (req, res) => {
       telephoneArchitecte: body.telephoneArchitecte?.trim()
         ? body.telephoneArchitecte.trim()
         : null,
+projectModele: body.projectModele || "project",
 
+comptoir: body.comptoir || null,
+telephoneComptoir: body.telephoneComptoir || null,
+
+dallagiste: body.dallagiste || null,
+telephoneDallagiste: body.telephoneDallagiste || null,
       // ✅ EMAIL ARCHITECTE
       emailArchitecte: body.emailArchitecte?.trim()
         ? body.emailArchitecte.trim()
@@ -1098,6 +1186,16 @@ router.post("/", authRequired, async (req, res) => {
     });
 // ✅ CREER LA PREMIERE ACTION CRM
 if (body.firstAction) {
+  // 🔥 LOGIQUE DYNAMIQUE
+if (body.projectModele === "revendeur") {
+  body.ingenieurResponsable = null;
+  body.telephoneIngenieur = null;
+}
+
+if (body.projectModele === "applicateur") {
+  body.ingenieurResponsable = null;
+  body.telephoneIngenieur = null;
+}
 
   await ProjectAction.create({
 
@@ -2107,7 +2205,12 @@ router.put("/:id", authRequired, async (req, res) => {
       "typeProjet",
       "matriculeFiscale",
       "surfaceProspectee",
-      "pipelineStage"
+      "pipelineStage",
+      "projectModele",
+"comptoir",
+"telephoneComptoir",
+"dallagiste",
+"telephoneDallagiste",
     ];
 
     const up = {};

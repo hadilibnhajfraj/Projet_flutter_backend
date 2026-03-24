@@ -108,6 +108,32 @@ pipelineStage: {
   ),
   defaultValue: "Prospect",
 },
+projectModele: {
+  type: DataTypes.ENUM("project", "revendeur", "applicateur"),
+  allowNull: false,
+  defaultValue: "project",
+},
+
+// ✅ nouveaux champs dynamiques
+comptoir: {
+  type: DataTypes.STRING(200),
+  allowNull: true,
+},
+
+telephoneComptoir: {
+  type: DataTypes.STRING(30),
+  allowNull: true,
+},
+
+dallagiste: {
+  type: DataTypes.STRING(200),
+  allowNull: true,
+},
+
+telephoneDallagiste: {
+  type: DataTypes.STRING(30),
+  allowNull: true,
+},
     surfaceProspectee: {
       type: DataTypes.DECIMAL(12, 2),
       allowNull: true,
