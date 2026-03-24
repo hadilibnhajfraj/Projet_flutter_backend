@@ -68,6 +68,28 @@ const CommercialContact = sequelize.define(
       allowNull: true,
     },
 
+    // ✅ NEW
+    pipelineStage: {
+      type: DataTypes.ENUM(
+        "Prospect",
+        "Contacté",
+        "Visite",
+        "Devis envoyé",
+        "Negociation",
+        "Gagné",
+        "Perdu"
+      ),
+      allowNull: false,
+      defaultValue: "Prospect",
+    },
+
+    // ✅ NEW
+   dateAppel: {
+  type: DataTypes.DATE,
+  allowNull: true, // 🔥 IMPORTANT temporaire
+  defaultValue: DataTypes.NOW,
+},
+
     createdBy: {
       type: DataTypes.UUID,
       allowNull: false,
@@ -78,5 +100,4 @@ const CommercialContact = sequelize.define(
     timestamps: true,
   }
 );
-
 module.exports = CommercialContact;

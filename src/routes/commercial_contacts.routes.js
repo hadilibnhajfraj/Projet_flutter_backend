@@ -114,20 +114,27 @@ router.post("/", authRequired, async (req, res) => {
     const produits = Array.isArray(body.produits) ? body.produits : [];
 
     const payload = {
-      typeClient: body.typeClient || "autre",
-      nomSociete: body.nomSociete || null,
-      nom: String(body.nom || "").trim(),
-      prenom: String(body.prenom || "").trim(),
-      localisation: body.localisation ? String(body.localisation).trim() : null,
-      telephone: String(body.telephone || "").trim(),
-      message: body.message ? String(body.message).trim() : null,
-      statut: body.statut || "user_injoignable",
-      nbAppels: Number(body.nbAppels ?? 0) || 0,
-      sujetDiscussion: body.sujetDiscussion
-        ? String(body.sujetDiscussion).trim()
-        : null,
-      createdBy: req.user.sub,
-    };
+  typeClient: body.typeClient || "autre",
+  nomSociete: body.nomSociete || null,
+  nom: String(body.nom || "").trim(),
+  prenom: String(body.prenom || "").trim(),
+  localisation: body.localisation ? String(body.localisation).trim() : null,
+  telephone: String(body.telephone || "").trim(),
+  message: body.message ? String(body.message).trim() : null,
+  statut: body.statut || "user_injoignable",
+  nbAppels: Number(body.nbAppels ?? 0) || 0,
+  sujetDiscussion: body.sujetDiscussion
+    ? String(body.sujetDiscussion).trim()
+    : null,
+
+  // ✅ NEW
+  pipelineStage: body.pipelineStage || "Prospect",
+
+  // ✅ NEW
+  dateAppel: body.dateAppel || new Date(),
+
+  createdBy: req.user.sub,
+};
 
     if (!payload.nom) {
       return res.status(400).json({ message: "nom obligatoire" });
@@ -214,7 +221,13 @@ router.put("/:id", authRequired, async (req, res) => {
     if (body.sujetDiscussion != null) {
       up.sujetDiscussion = String(body.sujetDiscussion).trim() || null;
     }
+    if (body.pipelineStage != null) {
+  up.pipelineStage = String(body.pipelineStage).trim();
+}
 
+if (body.dateAppel != null) {
+  up.dateAppel = body.dateAppel;
+}
     await row.update(up);
 
     if (Array.isArray(body.produits)) {
