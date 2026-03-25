@@ -125,6 +125,7 @@ function isValidEmail(email) {
 
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }
+
 function validatePayload(body, isUpdate = false) {
   const errors = [];
 
@@ -224,12 +225,19 @@ function validatePayload(body, isUpdate = false) {
   // =========================
 // 🔥 CRM REQUIRED
 // =========================
-if (!body.firstAction || reqStr(body.firstAction) === "") {
-  errors.push("firstAction est obligatoire");
-}
+// =========================
+// 🔥 CRM REQUIRED (ONLY CREATE)
+// =========================
+if (!isUpdate) {
 
-if (!body.dateVisite) {
-  errors.push("dateVisite est obligatoire");
+  if (!body.firstAction || reqStr(body.firstAction) === "") {
+    errors.push("firstAction est obligatoire");
+  }
+
+  if (!body.dateVisite) {
+    errors.push("dateVisite est obligatoire");
+  }
+
 }
 
   if (
@@ -315,6 +323,7 @@ if (body.emailDallagiste && !isValidEmail(body.emailDallagiste)) {
 
   return errors;
 }
+
 function isGlobalKpiUser(user) {
   return ["admin", "superadmin"].includes(user?.role);
 }
@@ -386,17 +395,59 @@ router.get("/calendar", authRequired, async (req, res) => {
 });
 
 // Helper function to return color based on project status
-function getStatusColor(statut, validationStatut) {
-  if (statut === 'En cours') {
-    return 'red'; // Red for "En cours"
-  } else if (statut === 'Préparation') {
-    return 'blue'; // Blue for "Préparation"
-  } else if (statut === 'Terminé' && validationStatut === 'Validé') {
-    return 'green'; // Green for "Terminé" and "Validé"
-  } else if (statut === 'Terminé' && validationStatut === 'Non validé') {
-    return 'orange'; // Orange for "Terminé" and "Non validé"
+function getStatusColor(status, validationStatus) {
+
+  const s = (status || "").toLowerCase();
+  const v = (validationStatus || "").toLowerCase();
+
+  // =========================
+  // 🔥 PRIORITY: COMPLETED STATUS
+  // =========================
+  if (s === "completed" || s === "terminé") {
+    if (v === "valid" || v === "validé") return "green";
+    if (v === "not valid" || v === "non validé") return "orange";
+    return "blue"; // completed but no validation
   }
-  return 'gray'; // Default color for other cases
+
+  // =========================
+  // 🔥 PIPELINE STATUS
+  // =========================
+  switch (s) {
+    case "identification":
+      return "blue";
+
+    case "technical proposal":
+    case "proposition technique":
+      return "purple";
+
+    case "commercial proposal":
+    case "proposition commerciale":
+      return "indigo";
+
+    case "negotiation":
+    case "négociation":
+      return "red";
+
+    case "delivery":
+    case "livraison":
+      return "green";
+
+    case "loyalty":
+    case "fidélisation":
+      return "teal";
+
+    // 🔥 legacy statuses (compatibility)
+    case "preparation":
+    case "préparation":
+      return "blue";
+
+    case "in progress":
+    case "en cours":
+      return "orange";
+
+    default:
+      return "gray";
+  }
 }
 function getNextAction(stage) {
 
@@ -2340,7 +2391,10 @@ router.put("/:id", authRequired, async (req, res) => {
 
     const body = normalizePayload(req.body);
 
-    const errors = validatePayload(body, true);
+    // =========================
+    // 🔥 FIX VALIDATION (UPDATE PARTIEL)
+    // =========================
+    const errors = validatePayload(body, true); // true = update
     if (errors.length) {
       return res.status(400).json({
         message: "Validation error",
@@ -2407,7 +2461,7 @@ router.put("/:id", authRequired, async (req, res) => {
       "pipelineStage",
       "projectModele",
 
-      // 🔥 NEW FIELDS
+      // NEW FIELDS
       "comptoir",
       "telephoneComptoir",
       "telephoneComptoir2",
@@ -2452,11 +2506,11 @@ router.put("/:id", authRequired, async (req, res) => {
     }
 
     // =========================
-    // MANUAL ACTION (SAFE)
+    // 🔥 FIX MANUAL ACTION (IMPORTANT)
     // =========================
-    if (body.firstAction) {
+    if (body.firstAction !== undefined) {
 
-      if (reqStr(body.firstAction) === "") {
+      if (!body.firstAction || reqStr(body.firstAction) === "") {
         return res.status(400).json({
           message: "Action invalide"
         });
