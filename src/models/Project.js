@@ -47,7 +47,44 @@ const Project = sequelize.define(
       type: DataTypes.STRING(60),
       allowNull: true,
     },
+// ✅ nouveaux champs dynamiques
+comptoir: {
+  type: DataTypes.STRING(200),
+  allowNull: true,
+},
 
+telephoneComptoir: {
+  type: DataTypes.STRING(30),
+  allowNull: true,
+},
+
+// 🔥 NOUVEAU (revendeur)
+telephoneComptoir2: {
+  type: DataTypes.STRING(30),
+  allowNull: true,
+},
+
+dallagiste: {
+  type: DataTypes.STRING(200),
+  allowNull: true,
+},
+
+telephoneDallagiste: {
+  type: DataTypes.STRING(30),
+  allowNull: true,
+},
+
+// 🔥 NOUVEAU (applicateur)
+emailDallagiste: {
+  type: DataTypes.STRING(200),
+  allowNull: true,
+  validate: { isEmail: true },
+},
+
+serviceTechnique: {
+  type: DataTypes.STRING(200),
+  allowNull: true,
+},
     entreprise: { type: DataTypes.STRING(200), allowNull: false },
 
     promoteur: { type: DataTypes.STRING(200), allowNull: true },

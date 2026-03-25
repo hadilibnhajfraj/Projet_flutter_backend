@@ -120,6 +120,11 @@ const ACTION_TO_STAGE = {
 function getStageFromAction(action) {
   return ACTION_TO_STAGE[action] || "Prospect";
 }
+function isValidEmail(email) {
+  if (!email) return false;
+
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
 function validatePayload(body, isUpdate = false) {
   const errors = [];
 
@@ -169,29 +174,39 @@ function validatePayload(body, isUpdate = false) {
 
     }
 
-    if (mode === "revendeur") {
+   if (mode === "revendeur") {
 
-      if (!body.comptoir) {
-        errors.push("comptoir est obligatoire");
-      }
+  if (!body.comptoir) {
+    errors.push("comptoir est obligatoire");
+  }
 
-      if (!body.telephoneComptoir) {
-        errors.push("telephoneComptoir est obligatoire");
-      }
+  if (!body.telephoneComptoir) {
+    errors.push("telephoneComptoir est obligatoire");
+  }
 
-    }
+  if (!body.telephoneComptoir2) {
+    errors.push("telephoneComptoir2 est obligatoire");
+  }
+}
 
-    if (mode === "applicateur") {
+  if (mode === "applicateur") {
 
-      if (!body.dallagiste) {
-        errors.push("dallagiste est obligatoire");
-      }
+  if (!body.dallagiste) {
+    errors.push("dallagiste est obligatoire");
+  }
 
-      if (!body.telephoneDallagiste) {
-        errors.push("telephoneDallagiste est obligatoire");
-      }
+  if (!body.telephoneDallagiste) {
+    errors.push("telephoneDallagiste est obligatoire");
+  }
 
-    }
+  if (!body.emailDallagiste) {
+    errors.push("emailDallagiste est obligatoire");
+  }
+
+  if (!body.serviceTechnique) {
+    errors.push("serviceTechnique est obligatoire");
+  }
+}
 
   }
 
@@ -206,6 +221,16 @@ function validatePayload(body, isUpdate = false) {
   ) {
     errors.push("dateDemarrage doit être au format YYYY-MM-DD");
   }
+  // =========================
+// 🔥 CRM REQUIRED
+// =========================
+if (!body.firstAction || reqStr(body.firstAction) === "") {
+  errors.push("firstAction est obligatoire");
+}
+
+if (!body.dateVisite) {
+  errors.push("dateVisite est obligatoire");
+}
 
   if (
     body.telephoneIngenieur &&
@@ -234,6 +259,13 @@ function validatePayload(body, isUpdate = false) {
   ) {
     errors.push("telephoneDallagiste invalide");
   }
+  if (body.telephoneComptoir2 && !isValidPhone(body.telephoneComptoir2)) {
+  errors.push("telephoneComptoir2 invalide");
+}
+
+if (body.emailDallagiste && !isValidEmail(body.emailDallagiste)) {
+  errors.push("emailDallagiste invalide");
+}
 
   if (
     (body.latitude !== undefined || body.longitude !== undefined) &&
@@ -801,6 +833,153 @@ router.get("/kpi/latest-projects", authRequired, async (req, res) => {
     res.status(500).json({ error: "KPI_LATEST_PROJECTS_ERROR", details: err.message });
   }
 });
+router.get("/dashboard/kpi", authRequired, async (req, res) => {
+  try {
+
+    const role = (req.user?.role || "").toLowerCase();
+    const selectedUser = req.query.userId;
+
+    let include = [];
+
+    // =========================
+    // 🔒 USER NORMAL
+    // =========================
+    if (role !== "admin" && role !== "superadmin") {
+      include = [
+        {
+          model: UserProject,
+          required: true,
+          where: { userId: req.user.sub },
+          attributes: [],
+        },
+      ];
+    }
+
+    // =========================
+    // 👑 ADMIN CLICK (PIE)
+    // =========================
+    if ((role === "admin" || role === "superadmin") && selectedUser) {
+      include = [
+        {
+          model: UserProject,
+          required: true,
+          where: { userId: selectedUser },
+          attributes: [],
+        },
+      ];
+    }
+
+    // =========================
+    // 🔥 FETCH PROJECTS
+    // =========================
+    const projects = await Project.findAll({
+      attributes: ["id", "statut", "projectModele"],
+      include,
+      raw: true,
+    });
+
+    // =========================
+    // 📊 STATUT
+    // =========================
+    const statutMap = {};
+
+    for (const p of projects) {
+
+      // 🔥 FIX N/A
+      const key = p.statut && p.statut !== "" ? p.statut : "Sans statut";
+
+      statutMap[key] = (statutMap[key] || 0) + 1;
+    }
+
+    const statutStats = Object.entries(statutMap).map(([k, v]) => ({
+      statut: k,
+      count: v,
+    }));
+
+    // =========================
+    // 🥧 PROJECT MODELE
+    // =========================
+    const modelMap = {};
+
+    for (const p of projects) {
+
+      const key = p.projectModele && p.projectModele !== ""
+        ? p.projectModele
+        : "Non défini";
+
+      modelMap[key] = (modelMap[key] || 0) + 1;
+    }
+
+    const modelStats = Object.entries(modelMap).map(([k, v]) => ({
+      projectModele: k,
+      count: v,
+    }));
+
+    // =========================
+    // 👑 ADMIN : USERS
+    // =========================
+    let userStats = [];
+
+    if (role === "admin" || role === "superadmin") {
+
+      const allProjects = await Project.findAll({
+        include: [
+          {
+            model: UserProject,
+            attributes: ["userId"],
+            required: true,
+            include: [
+              {
+                model: User,
+                attributes: ["id", "email"],
+              },
+            ],
+          },
+        ],
+        raw: true,
+      });
+
+      const userMap = {};
+      const userNameMap = {};
+
+      for (const p of allProjects) {
+
+        const uid = p["UserProjects.userId"];
+        const email = p["UserProjects.User.email"] || "Unknown";
+
+        if (!uid) continue;
+
+        if (!userMap[uid]) {
+          userMap[uid] = 0;
+          userNameMap[uid] = email;
+        }
+
+        userMap[uid]++;
+      }
+
+      userStats = Object.keys(userMap).map(uid => ({
+        userId: uid,
+        userName: userNameMap[uid],
+        count: userMap[uid],
+      }));
+    }
+
+    // =========================
+    // RESPONSE
+    // =========================
+    return res.json({
+      statutStats,
+      modelStats,
+      userStats,
+    });
+
+  } catch (e) {
+    console.error("KPI_ERROR:", e);
+    return res.status(500).json({
+      message: e.message || "Server error",
+    });
+  }
+});
 // ---------------- LIST ----------------
 // ✅ LIST projects + users linked (owner + members)
 // GET /projects/projectsusers?q=...
@@ -1141,6 +1320,9 @@ telephoneComptoir: body.telephoneComptoir || null,
 
 dallagiste: body.dallagiste || null,
 telephoneDallagiste: body.telephoneDallagiste || null,
+emailDallagiste: body.emailDallagiste || null,
+serviceTechnique: body.serviceTechnique || null,
+telephoneComptoir2: body.telephoneComptoir2 || null,
       // ✅ EMAIL ARCHITECTE
       emailArchitecte: body.emailArchitecte?.trim()
         ? body.emailArchitecte.trim()
@@ -2132,6 +2314,9 @@ const lastAction = await ProjectAction.findOne({
 router.put("/:id", authRequired, async (req, res) => {
   try {
 
+    // =========================
+    // VALIDATION ID
+    // =========================
     if (!isUUID(req.params.id)) {
       return res.status(400).json({
         message: "Invalid project id (UUID required)"
@@ -2139,10 +2324,11 @@ router.put("/:id", authRequired, async (req, res) => {
     }
 
     const userRole = (req.user?.role || "").toLowerCase();
-
     const permission = await getPermission(req.user, req.params.id);
 
-    // 🔒 sécurité stricte
+    // =========================
+    // 🔒 SECURITY
+    // =========================
     if (
       !["admin", "superadmin"].includes(userRole) &&
       !["editor", "owner"].includes(permission)
@@ -2191,7 +2377,6 @@ router.put("/:id", authRequired, async (req, res) => {
     // =========================
     // PREPARE UPDATE
     // =========================
-
     const fields = [
       "nomProjet",
       "dateDemarrage",
@@ -2221,10 +2406,15 @@ router.put("/:id", authRequired, async (req, res) => {
       "surfaceProspectee",
       "pipelineStage",
       "projectModele",
-"comptoir",
-"telephoneComptoir",
-"dallagiste",
-"telephoneDallagiste",
+
+      // 🔥 NEW FIELDS
+      "comptoir",
+      "telephoneComptoir",
+      "telephoneComptoir2",
+      "dallagiste",
+      "telephoneDallagiste",
+      "emailDallagiste",
+      "serviceTechnique",
     ];
 
     const up = {};
@@ -2235,16 +2425,17 @@ router.put("/:id", authRequired, async (req, res) => {
       }
     }
 
-    // 🔥 détecter changement pipeline
+    // =========================
+    // PIPELINE CHANGE DETECTION
+    // =========================
     const oldStage = item.pipelineStage;
     const newStage = body.pipelineStage;
 
     await item.update(up);
 
     // =========================
-    // NEXT ACTION AUTO (only if changed)
+    // AUTO NEXT ACTION
     // =========================
-
     if (newStage && newStage !== oldStage) {
 
       const nextAction = getNextAction(newStage);
@@ -2261,23 +2452,34 @@ router.put("/:id", authRequired, async (req, res) => {
     }
 
     // =========================
-    // MANUAL ACTION
+    // MANUAL ACTION (SAFE)
     // =========================
+    if (body.firstAction) {
 
-    if (body.firstAction && body.firstAction.trim() !== "") {
+      if (reqStr(body.firstAction) === "") {
+        return res.status(400).json({
+          message: "Action invalide"
+        });
+      }
+
+      if (!body.dateVisite) {
+        return res.status(400).json({
+          message: "dateVisite est obligatoire avec une action"
+        });
+      }
+
       await ProjectAction.create({
         projectId: item.id,
         typeAction: body.firstAction,
         commentaire: body.commentaireAction ?? null,
         createdBy: req.user.sub,
-        dateAction: body.dateVisite ?? new Date()
+        dateAction: body.dateVisite
       });
     }
 
     // =========================
     // LAST ACTION
     // =========================
-
     const lastAction = await ProjectAction.findOne({
       where: { projectId: item.id },
       order: [["dateAction", "DESC"]]
@@ -2286,7 +2488,6 @@ router.put("/:id", authRequired, async (req, res) => {
     // =========================
     // COUNTS
     // =========================
-
     const [devisCount, bonCommandeCount] = await Promise.all([
       ProjectDevis.count({ where: { projectId: item.id } }),
       ProjectBonDeCommande.count({ where: { projectId: item.id } }),
@@ -2295,7 +2496,6 @@ router.put("/:id", authRequired, async (req, res) => {
     // =========================
     // RESPONSE
     // =========================
-
     return res.json({
       ...item.toJSON(),
       permission,
