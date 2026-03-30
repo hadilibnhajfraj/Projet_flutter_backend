@@ -106,13 +106,13 @@ serviceTechnique: {
   type: DataTypes.STRING(200),
   allowNull: true,
 },
-    entreprise: { type: DataTypes.STRING(200), allowNull: false },
+    entreprise: { type: DataTypes.STRING(200), allowNull: true },
 
     promoteur: { type: DataTypes.STRING(200), allowNull: true },
 
     bureauEtude: { type: DataTypes.STRING(200), allowNull: true },
 
-    bureauControle: { type: DataTypes.STRING(200), allowNull: false },
+    bureauControle: { type: DataTypes.STRING(200), allowNull: true },
 
     adresse: { type: DataTypes.STRING(255), allowNull: true },
 
@@ -120,7 +120,10 @@ serviceTechnique: {
     longitude: { type: DataTypes.DECIMAL(10, 7), allowNull: false },
 
     localisationCommentaire: { type: DataTypes.TEXT, allowNull: true },
-
+lastRelanceAt: {
+  type: DataTypes.DATE,
+  allowNull: true,
+},
     statut: {
   type: DataTypes.ENUM(
     "Identification",

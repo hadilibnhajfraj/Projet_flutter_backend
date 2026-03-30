@@ -6,12 +6,12 @@ const nodemailer = require("nodemailer");
 // 🔥 CONFIG SMTP
 // =========================
 const transporter = nodemailer.createTransport({
-  host: process.env.SMTP_HOST || "smtp.gmail.com",
-  port: process.env.SMTP_PORT || 587,
-  secure: false, // true si 465
+  host: process.env.EMAIL_HOST || "smtp.gmail.com",
+  port: process.env.EMAIL_PORT || 587,
+  secure: process.env.EMAIL_SECURE === "true",
   auth: {
-    user: process.env.SMTP_USER, // ex: ton email
-    pass: process.env.SMTP_PASS, // mot de passe ou app password
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASS,
   },
 });
 
@@ -42,12 +42,12 @@ async function sendEmail({ to, subject, text, html }) {
 }
 
 // =========================
-// 🚀 TEMPLATE RELANCE CRM
+// 🚀 TEMPLATE RELANCE INGENIEUR
 // =========================
 async function sendRelanceIngenieurEmail(userEmail, project) {
   return sendEmail({
     to: userEmail,
-    subject: "⚠️ Projet incomplet - Action requise",
+    subject: "⚠️ Projet incomplet - Ingénieur manquant",
     html: `
       <div style="font-family: Arial; padding:20px;">
         <h2 style="color:#d9534f;">⚠️ Action requise</h2>
@@ -65,11 +65,60 @@ async function sendRelanceIngenieurEmail(userEmail, project) {
     `,
   });
 }
+// =========================
+// 🚀 TEMPLATE RELANCE ENTREPRISE
+// =========================
+async function sendRelanceEntrepriseEmail(userEmail, project) {
+  return sendEmail({
+    to: userEmail,
+    subject: "⚠️ Projet incomplet - Entreprise manquante",
+    html: `
+      <div style="font-family: Arial; padding:20px;">
+        <h2 style="color:#f0ad4e;">⚠️ Entreprise manquante</h2>
+        
+        <p>Le projet <strong>${project.nomProjet}</strong> ne contient pas d’entreprise.</p>
 
+        <p>Veuillez compléter les informations dans un délai de <strong>7 jours</strong>.</p>
+
+        <hr/>
+
+        <p style="color:#777;">
+          CRM PROBAR - Suivi automatique
+        </p>
+      </div>
+    `,
+  });
+}
+// =========================
+// 🚀 TEMPLATE RELANCE BUREAU CONTROLE
+// =========================
+async function sendRelanceBureauControleEmail(userEmail, project) {
+  return sendEmail({
+    to: userEmail,
+    subject: "⚠️ Projet incomplet - Bureau de contrôle manquant",
+    html: `
+      <div style="font-family: Arial; padding:20px;">
+        <h2 style="color:#5bc0de;">⚠️ Bureau de contrôle manquant</h2>
+        
+        <p>Le projet <strong>${project.nomProjet}</strong> ne contient pas de bureau de contrôle.</p>
+
+        <p>Merci de compléter ces informations dès que possible.</p>
+
+        <hr/>
+
+        <p style="color:#777;">
+          CRM PROBAR - Notification automatique
+        </p>
+      </div>
+    `,
+  });
+}
 // =========================
 // EXPORTS
 // =========================
 module.exports = {
   sendEmail,
-  sendRelanceIngenieurEmail,
+   sendRelanceIngenieurEmail,
+  sendRelanceEntrepriseEmail,
+  sendRelanceBureauControleEmail,
 };

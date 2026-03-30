@@ -139,8 +139,6 @@ function validatePayload(body, isUpdate = false) {
     "nomProjet",
     "dateDemarrage",
     "typeAdresseChantier",
-    "entreprise",
-    "bureauControle",
     "latitude",
     "longitude",
   ];
@@ -279,7 +277,21 @@ function validatePayload(body, isUpdate = false) {
   ) {
     errors.push("latitude/longitude invalides");
   }
+// =========================
+// OPTIONAL VALIDATION (STRING)
+// =========================
 
+if (body.entreprise !== undefined && body.entreprise !== null) {
+  if (reqStr(body.entreprise) === "") {
+    errors.push("entreprise invalide");
+  }
+}
+
+if (body.bureauControle !== undefined && body.bureauControle !== null) {
+  if (reqStr(body.bureauControle) === "") {
+    errors.push("bureauControle invalide");
+  }
+}
   // =========================
   // ENUM VALIDATION
   // =========================
@@ -1494,6 +1506,13 @@ router.get("/", authRequired, async (req, res) => {
       ];
     }
 
+    // =========================
+    // 🔥 ARCHIVE FILTER
+    // =========================
+    if (!["admin", "superadmin"].includes(req.user.role)) {
+      where.isArchived = false;
+    }
+
     // ✅ safe attrs user
     const wanted = [
       "id",
@@ -1530,21 +1549,18 @@ router.get("/", authRequired, async (req, res) => {
             ),
             "commentCount",
           ],
-[
-  sequelize.literal(
-    `(SELECT COUNT(*) FROM tasks t WHERE t."projectId" = "Project"."id")`
-  ),
-  "taskCount",
-],
-          // ✅ NEW: devisCount
+          [
+            sequelize.literal(
+              `(SELECT COUNT(*) FROM tasks t WHERE t."projectId" = "Project"."id")`
+            ),
+            "taskCount",
+          ],
           [
             sequelize.literal(
               `(SELECT COUNT(*) FROM project_devis d WHERE d."projectId" = "Project"."id")`
             ),
             "devisCount",
           ],
-
-          // ✅ NEW: bonCommandeCount (⚠️ change table name if needed)
           [
             sequelize.literal(
               `(SELECT COUNT(*) FROM project_bon_de_commande bc WHERE bc."projectId" = "Project"."id")`
@@ -1571,15 +1587,21 @@ router.get("/", authRequired, async (req, res) => {
     const out = items.map((p) => {
       const json = p.toJSON();
 
-      // ✅ permission utilisateur connecté
-      const meLink = (json.UserProjects || []).find((up) => up.userId === req.user.sub);
+      const meLink = (json.UserProjects || []).find(
+        (up) => up.userId === req.user.sub
+      );
+
       const perm = ["admin", "superadmin"].includes(req.user.role)
         ? "owner"
-        : (meLink?.permission || "viewer");
+        : meLink?.permission || "viewer";
 
-      // ✅ owner (créateur) = permission owner
-      const ownerLink = (json.UserProjects || []).find((up) => up.permission === "owner");
-      const ownerName = ownerLink?.User ? displayName(ownerLink.User) : "";
+      const ownerLink = (json.UserProjects || []).find(
+        (up) => up.permission === "owner"
+      );
+
+      const ownerName = ownerLink?.User
+        ? displayName(ownerLink.User)
+        : "";
 
       delete json.UserProjects;
 
@@ -1587,8 +1609,6 @@ router.get("/", authRequired, async (req, res) => {
         ...json,
         permission: perm,
         ownerName,
-
-        // ✅ ensure numbers (sometimes literal returns string)
         devisCount: Number(json.devisCount || 0),
         bonCommandeCount: Number(json.bonCommandeCount || 0),
         taskCount: Number(json.taskCount || 0),
@@ -1601,6 +1621,7 @@ router.get("/", authRequired, async (req, res) => {
     return res.status(500).json({ message: e.message || "Server error" });
   }
 });
+
 // =======================================================
 // DASHBOARD COMMERCIAL
 // =======================================================

@@ -14,6 +14,10 @@ const adminRoutes = require("./routes/admin"); // ✅ NEW
 const userProfileRoutes = require("./routes/userProfile.routes");
 const taskRoutes = require("./routes/tasks.routes");
 require("./cron/checkProjects");
+require("./cron/projectCron");
+const { checkProjects } = require("./cron/projectCron");
+
+checkProjects(); // 🔥 test direct au démarrage
 const commercialRoutes = require("./routes/commercial_contacts.routes");
 const clientRoutes = require("./routes/client.routes");
 const projectActionRoutes = require("./routes/projectActions.routes");
