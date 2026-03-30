@@ -163,52 +163,42 @@ function validatePayload(body, isUpdate = false) {
 
   if (!isUpdate) {
 
-    if (mode === "project") {
+    // ❌ SUPPRIMÉ : ingenieur obligatoire
+    // ✔️ maintenant facultatif
 
-      if (!body.ingenieurResponsable) {
-        errors.push("ingenieurResponsable est obligatoire");
+    if (mode === "revendeur") {
+
+      if (!body.comptoir) {
+        errors.push("comptoir est obligatoire");
       }
 
-      if (!body.telephoneIngenieur) {
-        errors.push("telephoneIngenieur est obligatoire");
+      if (!body.telephoneComptoir) {
+        errors.push("telephoneComptoir est obligatoire");
       }
 
+      if (!body.telephoneComptoir2) {
+        errors.push("telephoneComptoir2 est obligatoire");
+      }
     }
 
-   if (mode === "revendeur") {
+    if (mode === "applicateur") {
 
-  if (!body.comptoir) {
-    errors.push("comptoir est obligatoire");
-  }
+      if (!body.dallagiste) {
+        errors.push("dallagiste est obligatoire");
+      }
 
-  if (!body.telephoneComptoir) {
-    errors.push("telephoneComptoir est obligatoire");
-  }
+      if (!body.telephoneDallagiste) {
+        errors.push("telephoneDallagiste est obligatoire");
+      }
 
-  if (!body.telephoneComptoir2) {
-    errors.push("telephoneComptoir2 est obligatoire");
-  }
-}
+      if (!body.emailDallagiste) {
+        errors.push("emailDallagiste est obligatoire");
+      }
 
-  if (mode === "applicateur") {
-
-  if (!body.dallagiste) {
-    errors.push("dallagiste est obligatoire");
-  }
-
-  if (!body.telephoneDallagiste) {
-    errors.push("telephoneDallagiste est obligatoire");
-  }
-
-  if (!body.emailDallagiste) {
-    errors.push("emailDallagiste est obligatoire");
-  }
-
-  if (!body.serviceTechnique) {
-    errors.push("serviceTechnique est obligatoire");
-  }
-}
-
+      if (!body.serviceTechnique) {
+        errors.push("serviceTechnique est obligatoire");
+      }
+    }
   }
 
   // =========================
@@ -222,24 +212,26 @@ function validatePayload(body, isUpdate = false) {
   ) {
     errors.push("dateDemarrage doit être au format YYYY-MM-DD");
   }
+
   // =========================
-// 🔥 CRM REQUIRED
-// =========================
-// =========================
-// 🔥 CRM REQUIRED (ONLY CREATE)
-// =========================
-if (!isUpdate) {
+  // 🔥 CRM REQUIRED (ONLY CREATE)
+  // =========================
+  if (!isUpdate) {
 
-  if (!body.firstAction || reqStr(body.firstAction) === "") {
-    errors.push("firstAction est obligatoire");
+    if (!body.firstAction || reqStr(body.firstAction) === "") {
+      errors.push("firstAction est obligatoire");
+    }
+
+    if (!body.dateVisite) {
+      errors.push("dateVisite est obligatoire");
+    }
   }
 
-  if (!body.dateVisite) {
-    errors.push("dateVisite est obligatoire");
-  }
+  // =========================
+  // VALIDATION CONDITIONNELLE (IMPORTANT)
+  // =========================
 
-}
-
+  // ✔️ Si fourni → vérifier
   if (
     body.telephoneIngenieur &&
     !isValidPhone(body.telephoneIngenieur)
@@ -267,13 +259,18 @@ if (!isUpdate) {
   ) {
     errors.push("telephoneDallagiste invalide");
   }
-  if (body.telephoneComptoir2 && !isValidPhone(body.telephoneComptoir2)) {
-  errors.push("telephoneComptoir2 invalide");
-}
 
-if (body.emailDallagiste && !isValidEmail(body.emailDallagiste)) {
-  errors.push("emailDallagiste invalide");
-}
+  if (body.telephoneComptoir2 && !isValidPhone(body.telephoneComptoir2)) {
+    errors.push("telephoneComptoir2 invalide");
+  }
+
+  if (body.emailDallagiste && !isValidEmail(body.emailDallagiste)) {
+    errors.push("emailDallagiste invalide");
+  }
+
+  // =========================
+  // GEO VALIDATION
+  // =========================
 
   if (
     (body.latitude !== undefined || body.longitude !== undefined) &&
@@ -282,6 +279,10 @@ if (body.emailDallagiste && !isValidEmail(body.emailDallagiste)) {
   ) {
     errors.push("latitude/longitude invalides");
   }
+
+  // =========================
+  // ENUM VALIDATION
+  // =========================
 
   if (body.statut !== undefined && body.statut !== null) {
     const allowed = [
@@ -305,18 +306,24 @@ if (body.emailDallagiste && !isValidEmail(body.emailDallagiste)) {
     }
   }
 
+  // =========================
+  // NUMERIC VALIDATION
+  // =========================
+
   if (body.pourcentageReussite !== undefined && body.pourcentageReussite !== null) {
-    if (Number.isNaN(body.pourcentageReussite)) {
+    const val = Number(body.pourcentageReussite);
+    if (isNaN(val)) {
       errors.push("pourcentageReussite doit être un nombre");
-    } else if (body.pourcentageReussite < 0 || body.pourcentageReussite > 100) {
+    } else if (val < 0 || val > 100) {
       errors.push("pourcentageReussite doit être entre 0 et 100");
     }
   }
 
   if (body.surfaceProspectee !== undefined && body.surfaceProspectee !== null) {
-    if (Number.isNaN(body.surfaceProspectee)) {
+    const val = Number(body.surfaceProspectee);
+    if (isNaN(val)) {
       errors.push("surfaceProspectee doit être un nombre");
-    } else if (body.surfaceProspectee < 0) {
+    } else if (val < 0) {
       errors.push("surfaceProspectee doit être >= 0");
     }
   }
@@ -1283,9 +1290,13 @@ router.post("/", authRequired, async (req, res) => {
     const body = normalizePayload(req.body);
 
     const errors = validatePayload(body, false);
-    if (errors.length)
+    if (errors.length) {
       return res.status(400).json({ message: "Validation error", errors });
+    }
 
+    // =========================
+    // 📍 GEO
+    // =========================
     const lat =
       body?.location?.lat ??
       body?.location?.latitude ??
@@ -1306,7 +1317,15 @@ router.post("/", authRequired, async (req, res) => {
       });
     }
 
-    const nomProjet = String(body.nomProjet || "").trim();
+    // =========================
+    // 🧼 CLEAN DATA
+    // =========================
+    const clean = (val) =>
+      val !== undefined && val !== null && String(val).trim() !== ""
+        ? String(val).trim()
+        : null;
+
+    const nomProjet = clean(body.nomProjet);
 
     if (!nomProjet) {
       return res.status(400).json({
@@ -1315,7 +1334,17 @@ router.post("/", authRequired, async (req, res) => {
       });
     }
 
-    // ✅ Vérifier unicité projet par utilisateur
+    // =========================
+    // 🔥 LOGIQUE MODE AVANT CREATE
+    // =========================
+    if (body.projectModele === "revendeur" || body.projectModele === "applicateur") {
+      body.ingenieurResponsable = null;
+      body.telephoneIngenieur = null;
+    }
+
+    // =========================
+    // 🔁 CHECK DUPLICATE
+    // =========================
     const exists = await UserProject.findOne({
       where: { userId: req.user.sub },
       include: [
@@ -1338,113 +1367,90 @@ router.post("/", authRequired, async (req, res) => {
       });
     }
 
-    // ✅ Création projet
+    // =========================
+    // 📅 DEADLINE CRM (7 jours)
+    // =========================
+    const deadline = new Date();
+    deadline.setDate(deadline.getDate() + 7);
+
+    // =========================
+    // 🚀 CREATE PROJECT
+    // =========================
     const p = await Project.create({
       nomProjet,
       dateDemarrage: body.dateDemarrage,
-
-      // ✅ DATE VISITE CRM
       dateProspection: body.dateProspection ?? null,
 
-      statut: body.statut || null,
+      statut: body.statut || "Identification",
 
-      typeAdresseChantier: String(body.typeAdresseChantier || "").trim(),
+      typeAdresseChantier: clean(body.typeAdresseChantier),
 
-      ingenieurResponsable: String(body.ingenieurResponsable || "").trim(),
+      ingenieurResponsable: clean(body.ingenieurResponsable),
+      telephoneIngenieur: clean(body.telephoneIngenieur),
 
-      telephoneIngenieur: String(body.telephoneIngenieur || "").trim(),
+      emailIngenieur: clean(body.emailIngenieur),
 
-      // ✅ EMAIL INGENIEUR
-      emailIngenieur: body.emailIngenieur?.trim()
-        ? body.emailIngenieur.trim()
-        : null,
+      architecte: clean(body.architecte),
+      telephoneArchitecte: clean(body.telephoneArchitecte),
+      emailArchitecte: clean(body.emailArchitecte),
 
-      architecte: body.architecte?.trim() ? body.architecte.trim() : null,
+      projectModele: body.projectModele || "project",
 
-      telephoneArchitecte: body.telephoneArchitecte?.trim()
-        ? body.telephoneArchitecte.trim()
-        : null,
-projectModele: body.projectModele || "project",
+      comptoir: clean(body.comptoir),
+      telephoneComptoir: clean(body.telephoneComptoir),
+      telephoneComptoir2: clean(body.telephoneComptoir2),
 
-comptoir: body.comptoir || null,
-telephoneComptoir: body.telephoneComptoir || null,
+      dallagiste: clean(body.dallagiste),
+      telephoneDallagiste: clean(body.telephoneDallagiste),
+      emailDallagiste: clean(body.emailDallagiste),
+      serviceTechnique: clean(body.serviceTechnique),
 
-dallagiste: body.dallagiste || null,
-telephoneDallagiste: body.telephoneDallagiste || null,
-emailDallagiste: body.emailDallagiste || null,
-serviceTechnique: body.serviceTechnique || null,
-telephoneComptoir2: body.telephoneComptoir2 || null,
-      // ✅ EMAIL ARCHITECTE
-      emailArchitecte: body.emailArchitecte?.trim()
-        ? body.emailArchitecte.trim()
-        : null,
+      matriculeFiscale: clean(body.matriculeFiscale),
 
-      matriculeFiscale: body.matriculeFiscale?.trim()
-        ? body.matriculeFiscale.trim()
-        : null,
+      entreprise: clean(body.entreprise),
+      promoteur: clean(body.promoteur),
+      bureauEtude: clean(body.bureauEtude),
+      bureauControle: clean(body.bureauControle),
 
-      entreprise: String(body.entreprise || "").trim(),
-
-      promoteur: body.promoteur?.trim() ? body.promoteur.trim() : null,
-
-      bureauEtude: body.bureauEtude?.trim() ? body.bureauEtude.trim() : null,
-
-      bureauControle: String(body.bureauControle || "").trim(),
-
-      adresse: body.adresse?.trim() ? body.adresse.trim() : null,
+      adresse: clean(body.adresse),
 
       latitude: lat,
       longitude: lng,
 
       localisationCommentaire: body.localisationCommentaire ?? "",
 
-      entrepriseFluide: body.entrepriseFluide?.trim()
-        ? body.entrepriseFluide.trim()
-        : null,
-
-      entrepriseElectricite: body.entrepriseElectricite?.trim()
-        ? body.entrepriseElectricite.trim()
-        : null,
+      entrepriseFluide: clean(body.entrepriseFluide),
+      entrepriseElectricite: clean(body.entrepriseElectricite),
 
       pourcentageReussite: body.pourcentageReussite ?? null,
-
       validationStatut: body.validationStatut ?? "Non validé",
 
-      typeProjet: body.typeProjet?.trim() ? body.typeProjet.trim() : null,
-
+      typeProjet: clean(body.typeProjet),
       surfaceProspectee: body.surfaceProspectee ?? null,
 
-      // ✅ PIPELINE CRM
       pipelineStage: body.pipelineStage ?? "Prospect",
+
+      // 🔥 NOUVEAU CRM
+      dateLimiteIngenieur: deadline,
+      isArchived: false,
     });
-// ✅ CREER LA PREMIERE ACTION CRM
-if (body.firstAction) {
-  // 🔥 LOGIQUE DYNAMIQUE
-if (body.projectModele === "revendeur") {
-  body.ingenieurResponsable = null;
-  body.telephoneIngenieur = null;
-}
 
-if (body.projectModele === "applicateur") {
-  body.ingenieurResponsable = null;
-  body.telephoneIngenieur = null;
-}
+    // =========================
+    // 🧠 ACTION CRM
+    // =========================
+    if (body.firstAction) {
+      await ProjectAction.create({
+        projectId: p.id,
+        typeAction: body.firstAction,
+        commentaire: clean(body.commentaireAction),
+        createdBy: req.user.sub,
+        dateAction: body.dateVisite ?? new Date(),
+      });
+    }
 
-  await ProjectAction.create({
-
-    projectId: p.id,
-
-    typeAction: body.firstAction,
-
-    commentaire: body.commentaireAction ?? null,
-
-    createdBy: req.user.sub,
-    dateAction: body.dateVisite ?? new Date()
-
-  });
-
-}
-    // ✅ Liaison utilisateur projet
+    // =========================
+    // 🔗 LINK USER
+    // =========================
     await UserProject.findOrCreate({
       where: {
         userId: req.user.sub,
@@ -1453,10 +1459,14 @@ if (body.projectModele === "applicateur") {
       defaults: { permission: "owner" },
     });
 
+    // =========================
+    // ✅ RESPONSE
+    // =========================
     return res.status(201).json({
       ...p.toJSON(),
       permission: "owner",
     });
+
   } catch (e) {
     console.error("PROJECT_CREATE_ERROR:", e);
 
@@ -2302,29 +2312,23 @@ router.get("/:id", authRequired, async (req, res) => {
       ],
       attributes: {
         include: [
-          [
-            sequelize.literal(
-              `(SELECT COUNT(*) FROM project_comments pc WHERE pc."projectId" = "Project"."id")`
-            ),
-            "commentCount",
-          ],
-          [
-            sequelize.literal(
-              `(SELECT COUNT(*) FROM project_devis d WHERE d."projectId" = "Project"."id")`
-            ),
-            "devisCount",
-          ],
-          [
-            sequelize.literal(
-              `(SELECT COUNT(*) FROM project_bon_de_commande bc WHERE bc."projectId" = "Project"."id")`
-            ),
-            "bonCommandeCount",
-          ],
+          [sequelize.literal(`(SELECT COUNT(*) FROM project_comments pc WHERE pc."projectId" = "Project"."id")`), "commentCount"],
+          [sequelize.literal(`(SELECT COUNT(*) FROM project_devis d WHERE d."projectId" = "Project"."id")`), "devisCount"],
+          [sequelize.literal(`(SELECT COUNT(*) FROM project_bon_de_commande bc WHERE bc."projectId" = "Project"."id")`), "bonCommandeCount"],
         ],
       },
     });
 
     if (!item) return res.status(404).json({ message: "Not found" });
+
+    const userRole = (req.user?.role || "").toLowerCase();
+
+    // 🔥 BLOQUER SI ARCHIVÉ
+    if (item.isArchived && !["admin", "superadmin"].includes(userRole)) {
+      return res.status(403).json({
+        message: "Projet archivé non accessible",
+      });
+    }
 
     const json = item.toJSON();
     const permission = await getPermission(req.user, req.params.id);
@@ -2333,99 +2337,84 @@ router.get("/:id", authRequired, async (req, res) => {
     const ownerName = ownerLink?.User?.username || ownerLink?.User?.email || "";
 
     delete json.UserProjects;
-// =========================
-// LAST ACTION (for edit)
-// =========================
 
-const lastAction = await ProjectAction.findOne({
-  where: { projectId: item.id },
-  order: [["dateAction", "DESC"]],
-});
+    // LAST ACTION
+    const lastAction = await ProjectAction.findOne({
+      where: { projectId: item.id },
+      order: [["dateAction", "DESC"]],
+    });
+
     return res.json({
       ...json,
       permission,
       ownerName,
       devisCount: Number(json.devisCount || 0),
       bonCommandeCount: Number(json.bonCommandeCount || 0),
-       // CRM fields
-  dateVisite: lastAction?.dateAction ?? null,
-
-  nextAction: lastAction?.typeAction ?? null,
-
-  commentaireAction: lastAction?.commentaire ?? null,
-   color: getProjectColor(json.pipelineStage)
+      dateVisite: lastAction?.dateAction ?? null,
+      nextAction: lastAction?.typeAction ?? null,
+      commentaireAction: lastAction?.commentaire ?? null,
+      color: getProjectColor(json.pipelineStage),
     });
+
   } catch (e) {
     console.error("PROJECT_GET_ERROR:", e);
     return res.status(500).json({ message: e.message || "Server error" });
   }
 });
-
 // ---------------- UPDATE ----------------
 router.put("/:id", authRequired, async (req, res) => {
   try {
 
-    // =========================
-    // VALIDATION ID
-    // =========================
     if (!isUUID(req.params.id)) {
-      return res.status(400).json({
-        message: "Invalid project id (UUID required)"
-      });
+      return res.status(400).json({ message: "Invalid project id (UUID required)" });
     }
 
     const userRole = (req.user?.role || "").toLowerCase();
     const permission = await getPermission(req.user, req.params.id);
 
-    // =========================
-    // 🔒 SECURITY
-    // =========================
     if (
       !["admin", "superadmin"].includes(userRole) &&
       !["editor", "owner"].includes(permission)
     ) {
       return res.status(403).json({
-        message: "You are not allowed to edit this project"
-      });
-    }
-
-    const body = normalizePayload(req.body);
-
-    // =========================
-    // 🔥 FIX VALIDATION (UPDATE PARTIEL)
-    // =========================
-    const errors = validatePayload(body, true); // true = update
-    if (errors.length) {
-      return res.status(400).json({
-        message: "Validation error",
-        errors
+        message: "You are not allowed to edit this project",
       });
     }
 
     const item = await Project.findByPk(req.params.id);
 
     if (!item) {
-      return res.status(404).json({
-        message: "Project not found"
+      return res.status(404).json({ message: "Project not found" });
+    }
+
+    // 🔥 BLOQUER SI ARCHIVÉ
+    if (item.isArchived) {
+      return res.status(403).json({
+        message: "Projet archivé, modification interdite",
       });
     }
 
-    // =========================
-    // VALIDATION STATUT
-    // =========================
-    const allowedStatus = [
-      "Identification",
-      "Proposition technique",
-      "Proposition commerciale",
-      "Négociation",
-      "Livraison",
-      "Fidélisation"
-    ];
+    const body = normalizePayload(req.body);
 
-    if (body.statut && !allowedStatus.includes(body.statut)) {
-      return res.status(400).json({
-        message: "Invalid statut value"
-      });
+    const errors = validatePayload(body, true);
+    if (errors.length) {
+      return res.status(400).json({ message: "Validation error", errors });
+    }
+
+    // =========================
+    // 🧼 CLEAN FUNCTION
+    // =========================
+    const clean = (val) =>
+      val !== undefined && val !== null && String(val).trim() !== ""
+        ? String(val).trim()
+        : null;
+
+    // =========================
+    // 🔥 LOGIQUE MODE
+    // =========================
+    if (body.projectModele === "revendeur" || body.projectModele === "applicateur") {
+      body.ingenieurResponsable = null;
+      body.telephoneIngenieur = null;
     }
 
     // =========================
@@ -2460,8 +2449,6 @@ router.put("/:id", authRequired, async (req, res) => {
       "surfaceProspectee",
       "pipelineStage",
       "projectModele",
-
-      // NEW FIELDS
       "comptoir",
       "telephoneComptoir",
       "telephoneComptoir2",
@@ -2474,14 +2461,18 @@ router.put("/:id", authRequired, async (req, res) => {
     const up = {};
 
     for (const f of fields) {
-      if (body[f] !== undefined && body[f] !== null) {
-        up[f] = body[f];
+      if (body[f] !== undefined) {
+        up[f] = clean(body[f]);
       }
     }
 
     // =========================
-    // PIPELINE CHANGE DETECTION
+    // 🔥 RESET DEADLINE SI INGENIEUR AJOUTÉ
     // =========================
+    if (body.ingenieurResponsable) {
+      up.dateLimiteIngenieur = null;
+    }
+
     const oldStage = item.pipelineStage;
     const newStage = body.pipelineStage;
 
@@ -2491,7 +2482,6 @@ router.put("/:id", authRequired, async (req, res) => {
     // AUTO NEXT ACTION
     // =========================
     if (newStage && newStage !== oldStage) {
-
       const nextAction = getNextAction(newStage);
 
       if (nextAction) {
@@ -2500,34 +2490,32 @@ router.put("/:id", authRequired, async (req, res) => {
           typeAction: nextAction,
           commentaire: "Next action automatique",
           createdBy: req.user.sub,
-          dateAction: new Date()
+          dateAction: new Date(),
         });
       }
     }
 
     // =========================
-    // 🔥 FIX MANUAL ACTION (IMPORTANT)
+    // MANUAL ACTION
     // =========================
     if (body.firstAction !== undefined) {
 
       if (!body.firstAction || reqStr(body.firstAction) === "") {
-        return res.status(400).json({
-          message: "Action invalide"
-        });
+        return res.status(400).json({ message: "Action invalide" });
       }
 
       if (!body.dateVisite) {
         return res.status(400).json({
-          message: "dateVisite est obligatoire avec une action"
+          message: "dateVisite est obligatoire avec une action",
         });
       }
 
       await ProjectAction.create({
         projectId: item.id,
         typeAction: body.firstAction,
-        commentaire: body.commentaireAction ?? null,
+        commentaire: clean(body.commentaireAction),
         createdBy: req.user.sub,
-        dateAction: body.dateVisite
+        dateAction: body.dateVisite,
       });
     }
 
@@ -2536,20 +2524,14 @@ router.put("/:id", authRequired, async (req, res) => {
     // =========================
     const lastAction = await ProjectAction.findOne({
       where: { projectId: item.id },
-      order: [["dateAction", "DESC"]]
+      order: [["dateAction", "DESC"]],
     });
 
-    // =========================
-    // COUNTS
-    // =========================
     const [devisCount, bonCommandeCount] = await Promise.all([
       ProjectDevis.count({ where: { projectId: item.id } }),
       ProjectBonDeCommande.count({ where: { projectId: item.id } }),
     ]);
 
-    // =========================
-    // RESPONSE
-    // =========================
     return res.json({
       ...item.toJSON(),
       permission,
@@ -2557,16 +2539,12 @@ router.put("/:id", authRequired, async (req, res) => {
       bonCommandeCount,
       dateVisite: lastAction?.dateAction ?? null,
       nextAction: lastAction?.typeAction ?? null,
-      commentaireAction: lastAction?.commentaire ?? null
+      commentaireAction: lastAction?.commentaire ?? null,
     });
 
   } catch (e) {
-
     console.error("PROJECT_UPDATE_ERROR:", e);
-
-    return res.status(500).json({
-      message: e.message || "Server error"
-    });
+    return res.status(500).json({ message: e.message || "Server error" });
   }
 });
 

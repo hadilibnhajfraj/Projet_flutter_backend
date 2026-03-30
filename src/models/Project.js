@@ -23,8 +23,15 @@ const Project = sequelize.define(
 
     typeAdresseChantier: { type: DataTypes.STRING(255), allowNull: false },
 
-    ingenieurResponsable: { type: DataTypes.STRING(200), allowNull: false },
-    telephoneIngenieur: { type: DataTypes.STRING(30), allowNull: false },
+ ingenieurResponsable: { 
+  type: DataTypes.STRING(200), 
+  allowNull: true 
+},
+
+telephoneIngenieur: { 
+  type: DataTypes.STRING(30), 
+  allowNull: true 
+},
 
     // ✅ NOUVEAU EMAIL INGENIEUR
     emailIngenieur: {
@@ -80,7 +87,21 @@ emailDallagiste: {
   allowNull: true,
   validate: { isEmail: true },
 },
+// 🔥 TRACKING CRM
+dateLimiteIngenieur: {
+  type: DataTypes.DATE,
+  allowNull: true,
+},
 
+isArchived: {
+  type: DataTypes.BOOLEAN,
+  defaultValue: false,
+},
+
+archivedAt: {
+  type: DataTypes.DATE,
+  allowNull: true,
+},
 serviceTechnique: {
   type: DataTypes.STRING(200),
   allowNull: true,
