@@ -13,7 +13,7 @@ const ProjectAction = require("../models/ProjectAction");
 const ProjectReminder = require("../models/ProjectReminder");
 const router = express.Router();
 const uploads = require("../middleware/uploads");
-const { analyzeAndCorrect } = require("../services/aiDataCleaner");
+
 // ---------------- Helpers ----------------
 function reqStr(v) {
   return typeof v === "string" ? v.trim() : "";
@@ -1385,17 +1385,7 @@ router.post("/", authRequired, async (req, res) => {
     // =========================
     const deadline = new Date();
     deadline.setDate(deadline.getDate() + 7);
-    // =========================
-// 🧠 IA ANALYSE + CORRECTION
-// =========================
-const aiResult = analyzeAndCorrect({
-  ...body,
-  latitude: lat,
-  longitude: lng,
-});
 
-// 👉 données corrigées
-const data = aiResult.data;
     // =========================
     // 🚀 CREATE PROJECT
     // =========================
@@ -1486,17 +1476,9 @@ const data = aiResult.data;
     // ✅ RESPONSE
     // =========================
     return res.status(201).json({
-  ...p.toJSON(),
-  permission: "owner",
-
-  /// 🧠 IA REPORT
-  ai: {
-    isValid: aiResult.isValid,
-    score: aiResult.score,
-    issues: aiResult.issues,
-    corrections: aiResult.corrections,
-  },
-});
+      ...p.toJSON(),
+      permission: "owner",
+    });
 
   } catch (e) {
     console.error("PROJECT_CREATE_ERROR:", e);
