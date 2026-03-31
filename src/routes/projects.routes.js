@@ -1752,12 +1752,12 @@ router.get("/my-projects", authRequired, async (req, res) => {
       createdBy,
       projectModele, // ✅ NEW
       page = 1,
-      limit = 10,
+      limit = 100,
       q,
     } = req.query;
 
-    const currentPage = Math.max(parseInt(page, 10) || 1, 1);
-    const currentLimit = Math.max(parseInt(limit, 10) || 10, 1);
+    const currentPage = Math.max(parseInt(page, 100) || 1, 1);
+    const currentLimit = Math.max(parseInt(limit, 100) || 100, 1);
     const offset = (currentPage - 1) * currentLimit;
 
     const role = (req.user?.role || "").toLowerCase();
