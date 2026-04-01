@@ -175,9 +175,7 @@ function validatePayload(body, isUpdate = false) {
         errors.push("telephoneComptoir est obligatoire");
       }
 
-      if (!body.telephoneComptoir2) {
-        errors.push("telephoneComptoir2 est obligatoire");
-      }
+    
     }
 
     if (mode === "applicateur") {
@@ -190,13 +188,7 @@ function validatePayload(body, isUpdate = false) {
         errors.push("telephoneDallagiste est obligatoire");
       }
 
-      if (!body.emailDallagiste) {
-        errors.push("emailDallagiste est obligatoire");
-      }
-
-      if (!body.serviceTechnique) {
-        errors.push("serviceTechnique est obligatoire");
-      }
+     
     }
   }
 
@@ -1753,12 +1745,12 @@ router.get("/my-projects", authRequired, async (req, res) => {
       createdBy,
       projectModele,
       page = 1,
-      limit = 100,
+      limit = 1000,
       q,
     } = req.query;
 
-    const currentPage = Math.max(parseInt(page, 100) || 1, 1);
-    const currentLimit = Math.max(parseInt(limit, 100) || 100, 1);
+    const currentPage = Math.max(parseInt(page, 1000) || 1, 1);
+    const currentLimit = Math.max(parseInt(limit, 1000) || 1000, 1);
     const offset = (currentPage - 1) * currentLimit;
 
     const role = (req.user?.role || "").toLowerCase();
@@ -1892,12 +1884,12 @@ router.get("/myprojects", authRequired, async (req, res) => {
       entreprise,
       createdBy,
       page = 1,
-      limit = 100, // 🔥 IMPORTANT → 100 pour pipeline
+      limit = 1000, // 🔥 IMPORTANT → 100 pour pipeline
       q,
     } = req.query;
 
-    const currentPage = Math.max(parseInt(page, 100) || 1, 1);
-    const currentLimit = Math.max(parseInt(limit, 100) || 100, 1);
+    const currentPage = Math.max(parseInt(page, 1000) || 1, 1);
+    const currentLimit = Math.max(parseInt(limit, 1000) || 1000, 1);
     const offset = (currentPage - 1) * currentLimit;
 
     const role = (req.user?.role || "").toLowerCase();

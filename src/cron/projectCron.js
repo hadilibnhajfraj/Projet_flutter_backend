@@ -11,6 +11,59 @@ const {
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 // =========================
+// 🔥 GET MISSING FIELDS (CORE LOGIC)
+// =========================
+function getMissingFields(p) {
+  const missing = [];
+
+  // =========================
+  // 🔵 MODE PROJECT
+  // =========================
+  if (p.projectModele === "project") {
+    if (!p.ingenieurResponsable) {
+      missing.push("ingenieur");
+    }
+  }
+
+  // =========================
+  // 🟡 MODE REVENDEUR
+  // =========================
+  if (p.projectModele === "revendeur") {
+    if (!p.comptoir) {
+      missing.push("comptoir");
+    }
+    if (!p.telephoneComptoir) {
+      missing.push("tel_comptoir");
+    }
+  }
+
+  // =========================
+  // 🟢 MODE APPLICATEUR
+  // =========================
+  if (p.projectModele === "applicateur") {
+    if (!p.dallagiste) {
+      missing.push("dallagiste");
+    }
+    if (!p.telephoneDallagiste) {
+      missing.push("tel_dallagiste");
+    }
+  }
+
+  // =========================
+  // 🔴 COMMUN (TOUS LES MODES)
+  // =========================
+  if (!p.entreprise) {
+    missing.push("entreprise");
+  }
+
+  if (!p.bureauControle) {
+    missing.push("bureau");
+  }
+
+  return missing;
+}
+
+// =========================
 // 📦 ARCHIVAGE
 // =========================
 async function archiveProjects(projects) {
@@ -23,10 +76,8 @@ async function archiveProjects(projects) {
       const createdAt = new Date(p.createdAt);
       const diffDays = Math.floor((now - createdAt) / DAY_MS);
 
-      const isIncomplete =
-        !p.ingenieurResponsable ||
-        !p.entreprise ||
-        !p.bureauControle;
+      const missingFields = getMissingFields(p);
+      const isIncomplete = missingFields.length > 0;
 
       if (isIncomplete && diffDays >= 7) {
         p.isArchived = true;
@@ -34,7 +85,14 @@ async function archiveProjects(projects) {
 
         await p.save();
 
-        console.log("📦 ARCHIVED:", p.nomProjet, "| Days:", diffDays);
+        console.log(
+          "📦 ARCHIVED:",
+          p.nomProjet,
+          "| Days:",
+          diffDays,
+          "| Missing:",
+          missingFields
+        );
       }
     } catch (e) {
       console.error("❌ ARCHIVE ERROR:", e.message);
@@ -71,23 +129,13 @@ async function checkProjects() {
       const email = owner?.User?.email;
       if (!email) continue;
 
-      // =========================
-      // 🔥 CHAMPS MANQUANTS
-      // =========================
-      const missingFields = [];
-
-     // 🔥 ingenieur seulement pour project
-if (p.projectModele === "project" && !p.ingenieurResponsable) {
-  missingFields.push("ingenieur");
-}
-      if (!p.entreprise) missingFields.push("entreprise");
-      if (!p.bureauControle) missingFields.push("bureau");
+      const missingFields = getMissingFields(p);
 
       const createdAt = new Date(p.createdAt);
       const diffDays = Math.floor((now - createdAt) / DAY_MS);
 
       // =========================
-      // 🚫 PAS DE SPAM (1 fois/jour)
+      // 🚫 PAS DE SPAM
       // =========================
       const last = p.lastRelanceAt ? new Date(p.lastRelanceAt) : null;
 
@@ -99,24 +147,43 @@ if (p.projectModele === "project" && !p.ingenieurResponsable) {
       // =========================
       if (missingFields.length > 0 && !alreadyToday && diffDays < 7) {
 
-        console.log("📧 RELANCE:", p.nomProjet, "| Missing:", missingFields);
+        console.log(
+          `📧 RELANCE ${p.projectModele?.toUpperCase()} | ${p.nomProjet} | Missing:`,
+          missingFields
+        );
 
-       if (
-  p.projectModele === "project" &&
-  missingFields.includes("ingenieur")
-) {
-  await sendRelanceIngenieurEmail(email, p);
-}
+        // 🔵 PROJECT
+        if (missingFields.includes("ingenieur")) {
+          await sendRelanceIngenieurEmail(email, p);
+        }
 
+        // 🟡 REVENDEUR
+        if (
+          missingFields.includes("comptoir") ||
+          missingFields.includes("tel_comptoir")
+        ) {
+          await sendRelanceEntrepriseEmail(email, p);
+        }
+
+        // 🟢 APPLICATEUR
+        if (
+          missingFields.includes("dallagiste") ||
+          missingFields.includes("tel_dallagiste")
+        ) {
+          await sendRelanceEntrepriseEmail(email, p);
+        }
+
+        // 🔴 ENTREPRISE
         if (missingFields.includes("entreprise")) {
           await sendRelanceEntrepriseEmail(email, p);
         }
 
+        // 🟠 BUREAU CONTROLE
         if (missingFields.includes("bureau")) {
           await sendRelanceBureauControleEmail(email, p);
         }
 
-        // 🔥 sauvegarde date relance
+        // 🔥 SAVE LAST RELANCE
         p.lastRelanceAt = now;
         await p.save();
       }
