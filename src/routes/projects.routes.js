@@ -1751,7 +1751,7 @@ router.get("/my-projects", authRequired, async (req, res) => {
       societe,
       entreprise,
       createdBy,
-      projectModele, // ✅ NEW
+      projectModele,
       page = 1,
       limit = 100,
       q,
@@ -1765,124 +1765,96 @@ router.get("/my-projects", authRequired, async (req, res) => {
 
     const where = {};
 
-    // =========================
-    // 🔍 GLOBAL SEARCH
-    // =========================
-    if (typeof q === "string" && q.trim()) {
-      const s = q.trim();
+    /// 🔍 GLOBAL SEARCH
+    if (q?.trim()) {
       where[Op.or] = [
-        { nomProjet: { [Op.iLike]: `%${s}%` } },
-        { architecte: { [Op.iLike]: `%${s}%` } },
-        { promoteur: { [Op.iLike]: `%${s}%` } },
-        { ingenieurResponsable: { [Op.iLike]: `%${s}%` } },
-        { entreprise: { [Op.iLike]: `%${s}%` } },
-        { bureauControle: { [Op.iLike]: `%${s}%` } },
-        { adresse: { [Op.iLike]: `%${s}%` } },
+        { nomProjet: { [Op.iLike]: `%${q}%` } },
+        { architecte: { [Op.iLike]: `%${q}%` } },
+        { promoteur: { [Op.iLike]: `%${q}%` } },
+        { ingenieurResponsable: { [Op.iLike]: `%${q}%` } },
+        { entreprise: { [Op.iLike]: `%${q}%` } },
+        { bureauControle: { [Op.iLike]: `%${q}%` } },
+        { adresse: { [Op.iLike]: `%${q}%` } },
       ];
     }
 
-    // =========================
-    // 🔍 FILTERS
-    // =========================
+    /// 🔍 FILTERS
     if (architecte?.trim()) {
-      where.architecte = { [Op.iLike]: `%${architecte.trim()}%` };
+      where.architecte = { [Op.iLike]: `%${architecte}%` };
     }
 
     if (promoteur?.trim()) {
-      where.promoteur = { [Op.iLike]: `%${promoteur.trim()}%` };
+      where.promoteur = { [Op.iLike]: `%${promoteur}%` };
     }
 
     if (ingenieur?.trim()) {
       where.ingenieurResponsable = {
-        [Op.iLike]: `%${ingenieur.trim()}%`,
+        [Op.iLike]: `%${ingenieur}%`,
       };
     }
 
-    const societeValue =
-      societe?.trim() || entreprise?.trim() || null;
+    const societeValue = societe?.trim() || entreprise?.trim() || null;
 
     if (societeValue) {
       where.entreprise = { [Op.iLike]: `%${societeValue}%` };
     }
 
-    // =========================
-    // ✅ NEW FILTER (PROJECT MODELE)
-    // =========================
     if (projectModele?.trim()) {
       where.projectModele = projectModele.trim();
     }
 
-    // =========================
-    // 👑 ADMIN / SUPERADMIN
-    // =========================
-    if (role === "admin" || role === "superadmin") {
+    /// =========================
+    /// 🔥 INCLUDE COMMUN
+    /// =========================
+    const includeBase = [
+      {
+        model: UserProject,
+        required: role !== "admin" && role !== "superadmin",
+        where:
+          role === "admin" || role === "superadmin"
+            ? undefined
+            : { userId: req.user.sub },
+        attributes: ["userId", "permission"],
+        include: [
+          {
+            model: User,
+            attributes: ["id", "email", "role"],
+          },
+        ],
+      },
+    ];
 
-      const include = [
-        {
-          model: UserProject,
-          required: false,
-          attributes: ["userId", "permission"],
-          include: [
-            {
-              model: User,
-              attributes: ["id", "email", "role"],
-            },
-          ],
-        },
-      ];
-
-      // 🔥 FILTER BY USER
-      if (createdBy) {
-        include[0].required = true;
-        include[0].where = {
-          userId: createdBy,
-        };
-      }
-
-      const { count, rows } = await Project.findAndCountAll({
-        where,
-        order: [["createdAt", "DESC"]],
-        limit: currentLimit,
-        offset,
-        include,
-        distinct: true,
-      });
-
-      return res.json({
-        total: count,
-        page: currentPage,
-        limit: currentLimit,
-        totalPages: Math.ceil(count / currentLimit),
-        filters: {
-          architecte: architecte || null,
-          promoteur: promoteur || null,
-          ingenieur: ingenieur || null,
-          societe: societeValue || null,
-          projectModele: projectModele || null, // ✅ NEW
-          createdBy: createdBy || null,
-          q: q || null,
-        },
-        items: rows,
-      });
+    /// 🔥 ADMIN FILTER BY USER
+    if ((role === "admin" || role === "superadmin") && createdBy) {
+      includeBase[0].required = true;
+      includeBase[0].where = { userId: createdBy };
     }
 
-    // =========================
-    // 👤 USER NORMAL
-    // =========================
     const { count, rows } = await Project.findAndCountAll({
       where,
       order: [["createdAt", "DESC"]],
       limit: currentLimit,
       offset,
-      include: [
-        {
-          model: UserProject,
-          required: true,
-          where: { userId: req.user.sub },
-          attributes: ["userId", "permission"],
-        },
-      ],
+      include: includeBase,
       distinct: true,
+    });
+
+    /// =========================
+    /// 🔥 FORMAT RESULT
+    /// =========================
+    const formatted = rows.map((p) => {
+      const json = p.toJSON();
+
+      return {
+        ...json,
+
+        /// ✅ CREATED BY (IMPORTANT)
+        createdByName:
+          json.UserProjects?.[0]?.User?.email || "-",
+
+        createdById:
+          json.UserProjects?.[0]?.User?.id || null,
+      };
     });
 
     return res.json({
@@ -1895,15 +1867,18 @@ router.get("/my-projects", authRequired, async (req, res) => {
         promoteur: promoteur || null,
         ingenieur: ingenieur || null,
         societe: societeValue || null,
-        projectModele: projectModele || null, // ✅ NEW
+        projectModele: projectModele || null,
+        createdBy: createdBy || null,
         q: q || null,
       },
-      items: rows,
+      items: formatted,
     });
 
   } catch (e) {
     console.error("MY_PROJECTS_FILTER_ERROR:", e);
-    return res.status(500).json({ message: e.message || "Server error" });
+    return res.status(500).json({
+      message: e.message || "Server error",
+    });
   }
 });
 router.get("/myprojects", authRequired, async (req, res) => {
@@ -1921,8 +1896,8 @@ router.get("/myprojects", authRequired, async (req, res) => {
       q,
     } = req.query;
 
-    const currentPage = Math.max(parseInt(page, 10) || 1, 1);
-    const currentLimit = Math.max(parseInt(limit, 10) || 100, 1);
+    const currentPage = Math.max(parseInt(page, 100) || 1, 1);
+    const currentLimit = Math.max(parseInt(limit, 100) || 100, 1);
     const offset = (currentPage - 1) * currentLimit;
 
     const role = (req.user?.role || "").toLowerCase();
