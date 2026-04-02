@@ -13,7 +13,10 @@ const Project = sequelize.define(
 
     nomProjet: { type: DataTypes.STRING(200), allowNull: false },
 
-    dateDemarrage: { type: DataTypes.DATEONLY, allowNull: false },
+   dateDemarrage: { 
+  type: DataTypes.DATEONLY, 
+  allowNull: true 
+},
 
     // ✅ NOUVEAU
     dateProspection: {
@@ -21,7 +24,7 @@ const Project = sequelize.define(
       allowNull: true,
     },
 
-    typeAdresseChantier: { type: DataTypes.STRING(255), allowNull: false },
+    typeAdresseChantier: { type: DataTypes.STRING(255), allowNull: true },
 
  ingenieurResponsable: { 
   type: DataTypes.STRING(200), 
@@ -116,8 +119,8 @@ serviceTechnique: {
 
     adresse: { type: DataTypes.STRING(255), allowNull: true },
 
-    latitude: { type: DataTypes.DECIMAL(10, 7), allowNull: false },
-    longitude: { type: DataTypes.DECIMAL(10, 7), allowNull: false },
+    latitude: { type: DataTypes.DECIMAL(10, 7), allowNull: true },
+    longitude: { type: DataTypes.DECIMAL(10, 7), allowNull: true },
 
     localisationCommentaire: { type: DataTypes.TEXT, allowNull: true },
 lastRelanceAt: {
@@ -180,12 +183,47 @@ comptoir: {
   type: DataTypes.STRING(200),
   allowNull: true,
 },
+registreCommerce: {
+  type: DataTypes.STRING(100),
+  allowNull: true,
+},
 
+fonction: {
+  type: DataTypes.ENUM("achat", "gerant"),
+  allowNull: true,
+},
 telephoneComptoir: {
   type: DataTypes.STRING(30),
   allowNull: true,
 },
+// 🔥 INFOS PERSONNE REVENDEUR
+revendeurNom: {
+  type: DataTypes.STRING(100),
+  allowNull: true,
+},
 
+revendeurPrenom: {
+  type: DataTypes.STRING(100),
+  allowNull: true,
+},
+
+revendeurEmail: {
+  type: DataTypes.STRING(200),
+  allowNull: true,
+  validate: { isEmail: true },
+},
+
+// 🔥 STATUT COMMERCIAL REVENDEUR
+revendeurStatut: {
+  type: DataTypes.ENUM(
+    "prospect",
+    "offre",
+    "actif",
+    "rate"
+  ),
+  allowNull: true,
+  defaultValue: "prospect",
+},
 dallagiste: {
   type: DataTypes.STRING(200),
   allowNull: true,

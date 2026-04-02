@@ -131,42 +131,61 @@ function isValidEmail(email) {
 function validatePayload(body, isUpdate = false) {
   const errors = [];
 
-  // ✅ DEFAULT MODE
   const mode = body.projectModele || "project";
+  const isRevendeur = mode === "revendeur";
 
   // =========================
-  // BASE REQUIRED
+  // 📍 EXTRACTION GEO (IMPORTANT)
   // =========================
-  const baseRequired = [
-    "nomProjet",
-    "dateDemarrage",
-    "typeAdresseChantier",
-    "latitude",
-    "longitude",
-  ];
+  const lat =
+    body?.location?.lat ??
+    body?.location?.latitude ??
+    body?.lat ??
+    body?.latitude;
 
+  const lng =
+    body?.location?.lng ??
+    body?.location?.lon ??
+    body?.location?.longitude ??
+    body?.lng ??
+    body?.longitude;
+
+  // =========================
+  // BASE REQUIRED (DYNAMIQUE)
+  // =========================
   if (!isUpdate) {
-    for (const k of baseRequired) {
-      if (
-        body[k] === undefined ||
-        body[k] === null ||
-        reqStr(String(body[k])) === ""
-      ) {
-        errors.push(`${k} est obligatoire`);
+
+    // 🔥 TOUJOURS
+    if (!body.nomProjet || reqStr(body.nomProjet) === "") {
+      errors.push("nomProjet est obligatoire");
+    }
+
+    // 🔥 UNIQUEMENT SI PAS REVENDEUR
+    if (!isRevendeur) {
+
+      if (!body.dateDemarrage || reqStr(body.dateDemarrage) === "") {
+        errors.push("dateDemarrage est obligatoire");
+      }
+
+      if (!body.typeAdresseChantier || reqStr(body.typeAdresseChantier) === "") {
+        errors.push("typeAdresseChantier est obligatoire");
+      }
+
+      if (lat == null || lng == null) {
+        errors.push("latitude/longitude est obligatoire");
       }
     }
   }
 
   // =========================
-  // 🔥 MODE-SPECIFIC VALIDATION
+  // 🔥 MODE-SPECIFIC
   // =========================
-
   if (!isUpdate) {
 
-    // ❌ SUPPRIMÉ : ingenieur obligatoire
-    // ✔️ maintenant facultatif
-
-    if (mode === "revendeur") {
+    // =========================
+    // 🟠 REVENDEUR
+    // =========================
+    if (isRevendeur) {
 
       if (!body.comptoir) {
         errors.push("comptoir est obligatoire");
@@ -176,9 +195,37 @@ function validatePayload(body, isUpdate = false) {
         errors.push("telephoneComptoir est obligatoire");
       }
 
-    
+      if (!body.fonction) {
+        errors.push("fonction est obligatoire");
+      }
+
+      if (body.fonction && !["achat", "gerant"].includes(body.fonction)) {
+        errors.push("fonction invalide");
+      }
+
+      if (!body.revendeurNom) {
+        errors.push("revendeurNom est obligatoire");
+      }
+
+      if (!body.revendeurPrenom) {
+        errors.push("revendeurPrenom est obligatoire");
+      }
+
+      if (body.revendeurEmail && !isValidEmail(body.revendeurEmail)) {
+        errors.push("revendeurEmail invalide");
+      }
+
+      if (
+        body.revendeurStatut &&
+        !["prospect", "offre", "actif", "rate"].includes(body.revendeurStatut)
+      ) {
+        errors.push("revendeurStatut invalide");
+      }
     }
 
+    // =========================
+    // 🔵 APPLICATEUR
+    // =========================
     if (mode === "applicateur") {
 
       if (!body.dallagiste) {
@@ -188,25 +235,22 @@ function validatePayload(body, isUpdate = false) {
       if (!body.telephoneDallagiste) {
         errors.push("telephoneDallagiste est obligatoire");
       }
-
-     
     }
   }
 
   // =========================
   // FORMAT VALIDATION
   // =========================
-
   if (
-    body.dateDemarrage !== undefined &&
-    body.dateDemarrage !== null &&
+    !isRevendeur &&
+    body.dateDemarrage &&
     !isValidDateOnly(body.dateDemarrage)
   ) {
     errors.push("dateDemarrage doit être au format YYYY-MM-DD");
   }
 
   // =========================
-  // 🔥 CRM REQUIRED (ONLY CREATE)
+  // CRM REQUIRED
   // =========================
   if (!isUpdate) {
 
@@ -220,76 +264,65 @@ function validatePayload(body, isUpdate = false) {
   }
 
   // =========================
-  // VALIDATION CONDITIONNELLE (IMPORTANT)
+  // PHONE VALIDATION
   // =========================
-
-  // ✔️ Si fourni → vérifier
-  if (
-    body.telephoneIngenieur &&
-    !isValidPhone(body.telephoneIngenieur)
-  ) {
+  if (body.telephoneIngenieur && !isValidPhone(body.telephoneIngenieur)) {
     errors.push("telephoneIngenieur invalide");
   }
 
-  if (
-    body.telephoneArchitecte &&
-    !isValidPhone(body.telephoneArchitecte)
-  ) {
+  if (body.telephoneArchitecte && !isValidPhone(body.telephoneArchitecte)) {
     errors.push("telephoneArchitecte invalide");
   }
 
-  if (
-    body.telephoneComptoir &&
-    !isValidPhone(body.telephoneComptoir)
-  ) {
+  if (body.telephoneComptoir && !isValidPhone(body.telephoneComptoir)) {
     errors.push("telephoneComptoir invalide");
-  }
-
-  if (
-    body.telephoneDallagiste &&
-    !isValidPhone(body.telephoneDallagiste)
-  ) {
-    errors.push("telephoneDallagiste invalide");
   }
 
   if (body.telephoneComptoir2 && !isValidPhone(body.telephoneComptoir2)) {
     errors.push("telephoneComptoir2 invalide");
   }
 
+  if (body.telephoneDallagiste && !isValidPhone(body.telephoneDallagiste)) {
+    errors.push("telephoneDallagiste invalide");
+  }
+
+  // =========================
+  // EMAIL VALIDATION
+  // =========================
   if (body.emailDallagiste && !isValidEmail(body.emailDallagiste)) {
     errors.push("emailDallagiste invalide");
   }
 
   // =========================
-  // GEO VALIDATION
+  // GEO VALIDATION (SAFE)
   // =========================
-
   if (
-    (body.latitude !== undefined || body.longitude !== undefined) &&
-    (body.latitude !== null || body.longitude !== null) &&
-    !isValidLatLng(body.latitude, body.longitude)
+    !isRevendeur &&
+    lat != null &&
+    lng != null &&
+    !isValidLatLng(lat, lng)
   ) {
     errors.push("latitude/longitude invalides");
   }
-// =========================
-// OPTIONAL VALIDATION (STRING)
-// =========================
 
-if (body.entreprise !== undefined && body.entreprise !== null) {
-  if (reqStr(body.entreprise) === "") {
-    errors.push("entreprise invalide");
+  // =========================
+  // OPTIONAL STRING VALIDATION
+  // =========================
+  if (body.entreprise !== undefined && body.entreprise !== null) {
+    if (reqStr(body.entreprise) === "") {
+      errors.push("entreprise invalide");
+    }
   }
-}
 
-if (body.bureauControle !== undefined && body.bureauControle !== null) {
-  if (reqStr(body.bureauControle) === "") {
-    errors.push("bureauControle invalide");
+  if (body.bureauControle !== undefined && body.bureauControle !== null) {
+    if (reqStr(body.bureauControle) === "") {
+      errors.push("bureauControle invalide");
+    }
   }
-}
+
   // =========================
   // ENUM VALIDATION
   // =========================
-
   if (body.statut !== undefined && body.statut !== null) {
     const allowed = [
       "Identification",
@@ -315,7 +348,6 @@ if (body.bureauControle !== undefined && body.bureauControle !== null) {
   // =========================
   // NUMERIC VALIDATION
   // =========================
-
   if (body.pourcentageReussite !== undefined && body.pourcentageReussite !== null) {
     const val = Number(body.pourcentageReussite);
     if (isNaN(val)) {
@@ -1316,22 +1348,35 @@ router.post("/", authRequired, async (req, res) => {
       body?.lng ??
       body?.longitude;
 
-    if (lat == null || lng == null) {
-      return res.status(400).json({
-        message: "Validation error",
-        errors: ["latitude/longitude est obligatoire"],
-      });
-    }
+    if (
+  body.projectModele !== "revendeur" &&
+  (lat == null || lng == null)
+) {
+  return res.status(400).json({
+    message: "Validation error",
+    errors: ["latitude/longitude est obligatoire"],
+  });
+}
 
     // =========================
-    // 🧼 CLEAN DATA
+    // 🧼 CLEAN
     // =========================
     const clean = (val) =>
       val !== undefined && val !== null && String(val).trim() !== ""
         ? String(val).trim()
         : null;
 
-    const nomProjet = clean(body.nomProjet);
+    let nomProjet = clean(body.nomProjet);
+
+    // =========================
+    // 🔥 MODE REVENDEUR (IMPORTANT)
+    // =========================
+    if (body.projectModele === "revendeur") {
+      nomProjet =
+        clean(body.comptoir) ||
+        clean(body.ingenieurResponsable) ||
+        nomProjet;
+    }
 
     if (!nomProjet) {
       return res.status(400).json({
@@ -1341,7 +1386,7 @@ router.post("/", authRequired, async (req, res) => {
     }
 
     // =========================
-    // 🔥 LOGIQUE MODE AVANT CREATE
+    // 🔥 RESET INGENIEUR (revendeur/applicateur)
     // =========================
     if (body.projectModele === "revendeur" || body.projectModele === "applicateur") {
       body.ingenieurResponsable = null;
@@ -1349,22 +1394,44 @@ router.post("/", authRequired, async (req, res) => {
     }
 
     // =========================
-    // 🔁 CHECK DUPLICATE
+    // 🔁 CHECK DUPLICATE (CORRIGÉ)
     // =========================
-    const exists = await UserProject.findOne({
-      where: { userId: req.user.sub },
-      include: [
-        {
-          model: Project,
-          required: true,
-          attributes: ["id", "nomProjet"],
-          where: where(
-            fn("lower", col("Project.nomProjet")),
-            nomProjet.toLowerCase()
-          ),
-        },
-      ],
-    });
+   let exists = null;
+
+const normalizedName = nomProjet?.toLowerCase().trim();
+
+if (body.projectModele !== "revendeur") {
+
+  // 🔵 PROJECT / APPLICATEUR → check nomProjet par user
+  exists = await UserProject.findOne({
+    where: {
+      userId: req.user.sub,
+    },
+    include: [
+      {
+        model: Project,
+        required: true,
+        where: sequelize.where(
+          sequelize.fn("lower", sequelize.col("Project.nomProjet")),
+          normalizedName
+        ),
+      },
+    ],
+  });
+
+} else {
+
+  // 🟠 REVENDEUR → PAS DE BLOCAGE PAR NOM
+  exists = null;
+
+}
+
+if (exists) {
+  return res.status(409).json({
+    message: "Project name already exists",
+    errors: ["Un projet avec ce nom existe déjà."],
+  });
+}
 
     if (exists) {
       return res.status(409).json({
@@ -1374,72 +1441,106 @@ router.post("/", authRequired, async (req, res) => {
     }
 
     // =========================
-    // 📅 DEADLINE CRM (7 jours)
+    // 📅 DEADLINE CRM
     // =========================
     const deadline = new Date();
     deadline.setDate(deadline.getDate() + 7);
 
     // =========================
-    // 🚀 CREATE PROJECT
+    // 🚀 CREATE
     // =========================
-    const p = await Project.create({
-      nomProjet,
-      dateDemarrage: body.dateDemarrage,
-      dateProspection: body.dateProspection ?? null,
+    const isRevendeur = body.projectModele === "revendeur";
+const isApplicateur = body.projectModele === "applicateur";
 
-      statut: body.statut || "Identification",
+const p = await Project.create({
+  nomProjet,
 
-      typeAdresseChantier: clean(body.typeAdresseChantier),
+  // 🔥 CHANTIER UNIQUEMENT si PAS revendeur
+  dateDemarrage: isRevendeur ? null : body.dateDemarrage,
+  dateProspection: body.dateProspection ?? null,
 
-      ingenieurResponsable: clean(body.ingenieurResponsable),
-      telephoneIngenieur: clean(body.telephoneIngenieur),
+  statut: isRevendeur ? null : (body.statut || "Identification"),
 
-      emailIngenieur: clean(body.emailIngenieur),
+  typeAdresseChantier: isRevendeur
+    ? null
+    : clean(body.typeAdresseChantier),
 
-      architecte: clean(body.architecte),
-      telephoneArchitecte: clean(body.telephoneArchitecte),
-      emailArchitecte: clean(body.emailArchitecte),
+  // 🔥 INGENIEUR
+  ingenieurResponsable: isRevendeur || isApplicateur
+    ? null
+    : clean(body.ingenieurResponsable),
 
-      projectModele: body.projectModele || "project",
+  telephoneIngenieur: isRevendeur || isApplicateur
+    ? null
+    : clean(body.telephoneIngenieur),
 
-      comptoir: clean(body.comptoir),
-      telephoneComptoir: clean(body.telephoneComptoir),
-      telephoneComptoir2: clean(body.telephoneComptoir2),
+  emailIngenieur: isRevendeur
+    ? null
+    : clean(body.emailIngenieur),
 
-      dallagiste: clean(body.dallagiste),
-      telephoneDallagiste: clean(body.telephoneDallagiste),
-      emailDallagiste: clean(body.emailDallagiste),
-      serviceTechnique: clean(body.serviceTechnique),
+  // 🔥 ARCHITECTE (pas pour revendeur)
+  architecte: isRevendeur ? null : clean(body.architecte),
+  telephoneArchitecte: isRevendeur ? null : clean(body.telephoneArchitecte),
+  emailArchitecte: isRevendeur ? null : clean(body.emailArchitecte),
 
-      matriculeFiscale: clean(body.matriculeFiscale),
+  projectModele: body.projectModele || "project",
 
-      entreprise: clean(body.entreprise),
-      promoteur: clean(body.promoteur),
-      bureauEtude: clean(body.bureauEtude),
-      bureauControle: clean(body.bureauControle),
+  // =========================
+  // 🟠 REVENDEUR
+  // =========================
+  comptoir: isRevendeur ? clean(body.comptoir) : null,
+  telephoneComptoir: isRevendeur ? clean(body.telephoneComptoir) : null,
+  telephoneComptoir2: isRevendeur ? clean(body.telephoneComptoir2) : null,
 
-      adresse: clean(body.adresse),
+  registreCommerce: isRevendeur ? clean(body.registreCommerce) : null,
+  fonction: isRevendeur ? clean(body.fonction) : null,
 
-      latitude: lat,
-      longitude: lng,
+  revendeurNom: isRevendeur ? clean(body.revendeurNom) : null,
+  revendeurPrenom: isRevendeur ? clean(body.revendeurPrenom) : null,
+  revendeurEmail: isRevendeur ? clean(body.revendeurEmail) : null,
+  revendeurStatut: isRevendeur
+    ? (body.revendeurStatut || "prospect")
+    : null,
 
-      localisationCommentaire: body.localisationCommentaire ?? "",
+  // =========================
+  // 🔵 APPLICATEUR
+  // =========================
+  dallagiste: isApplicateur ? clean(body.dallagiste) : null,
+  telephoneDallagiste: isApplicateur ? clean(body.telephoneDallagiste) : null,
+  emailDallagiste: isApplicateur ? clean(body.emailDallagiste) : null,
+  serviceTechnique: isApplicateur ? clean(body.serviceTechnique) : null,
 
-      entrepriseFluide: clean(body.entrepriseFluide),
-      entrepriseElectricite: clean(body.entrepriseElectricite),
+  // =========================
+  // 🏢 AUTRES (PAS REVENDEUR)
+  // =========================
+  matriculeFiscale: clean(body.matriculeFiscale),
 
-      pourcentageReussite: body.pourcentageReussite ?? null,
-      validationStatut: body.validationStatut ?? "Non validé",
+  entreprise: isRevendeur ? null : clean(body.entreprise),
+  promoteur: isRevendeur ? null : clean(body.promoteur),
+  bureauEtude: isRevendeur ? null : clean(body.bureauEtude),
+  bureauControle: isRevendeur ? null : clean(body.bureauControle),
 
-      typeProjet: clean(body.typeProjet),
-      surfaceProspectee: body.surfaceProspectee ?? null,
+  adresse: isRevendeur ? null : clean(body.adresse),
 
-      pipelineStage: body.pipelineStage ?? "Prospect",
+  latitude: isRevendeur ? null : lat,
+  longitude: isRevendeur ? null : lng,
 
-      // 🔥 NOUVEAU CRM
-      dateLimiteIngenieur: deadline,
-      isArchived: false,
-    });
+  localisationCommentaire: isRevendeur ? null : (body.localisationCommentaire ?? ""),
+
+  entrepriseFluide: isRevendeur ? null : clean(body.entrepriseFluide),
+  entrepriseElectricite: isRevendeur ? null : clean(body.entrepriseElectricite),
+
+  pourcentageReussite: isRevendeur ? null : body.pourcentageReussite,
+  validationStatut: body.validationStatut ?? "Non validé",
+
+  typeProjet: isRevendeur ? null : clean(body.typeProjet),
+  surfaceProspectee: isRevendeur ? null : body.surfaceProspectee,
+
+  pipelineStage: body.pipelineStage ?? "Prospect",
+
+  dateLimiteIngenieur: deadline,
+  isArchived: false,
+});
 
     // =========================
     // 🧠 ACTION CRM
