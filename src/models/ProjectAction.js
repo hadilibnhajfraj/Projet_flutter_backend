@@ -29,7 +29,8 @@ fileUrl: {
     "Negociation",
     "Relance",
     "Commande gagnée",
-    "Commande perdue"
+    "Commande perdue",
+    "Fidelisation"
   ),
   allowNull: false
 },

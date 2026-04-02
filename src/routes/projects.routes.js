@@ -116,6 +116,7 @@ const ACTION_TO_STAGE = {
   "Negociation": "Negociation",
   "Commande gagnée": "Commande gagnée",
   "Commande perdue": "Commande perdue",
+  "Fidélisation": "Fidélisation"
 };
 
 function getStageFromAction(action) {
