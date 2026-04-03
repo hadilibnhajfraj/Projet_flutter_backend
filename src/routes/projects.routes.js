@@ -2423,15 +2423,7 @@ router.get("/:id", authRequired, async (req, res) => {
     const isApplicateur = mode === "applicateur";
     const isChantier = !isRevendeur && !isApplicateur;
 
-    // 🔥 CLEAN DATA SELON MODE
-    if (!isChantier) {
-  up.dateDemarrage = null;
-  up.typeAdresseChantier = null;
-  up.latitude = null;
-  up.longitude = null;
-  up.ingenieurResponsable = null;
-  up.telephoneIngenieur = null;
-}
+    
 
     if (!isRevendeur) {
       json.comptoir = null;
@@ -2667,7 +2659,14 @@ router.put("/:id", authRequired, async (req, res) => {
     // =========================
     // 🔥 RESET CHAMPS SI PAS CHANTIER
     // =========================
-   
+    if (!isChantier) {
+      up.dateDemarrage = null;
+      up.typeAdresseChantier = null;
+      up.latitude = null;
+      up.longitude = null;
+      up.ingenieurResponsable = null;
+      up.telephoneIngenieur = null;
+    }
 
     // =========================
     // 🔥 DEADLINE RESET
