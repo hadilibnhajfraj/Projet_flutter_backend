@@ -2667,14 +2667,7 @@ router.put("/:id", authRequired, async (req, res) => {
     // =========================
     // 🔥 RESET CHAMPS SI PAS CHANTIER
     // =========================
-    if (!isChantier) {
-      up.dateDemarrage = null;
-      up.typeAdresseChantier = null;
-      up.latitude = null;
-      up.longitude = null;
-      up.ingenieurResponsable = null;
-      up.telephoneIngenieur = null;
-    }
+   
 
     // =========================
     // 🔥 DEADLINE RESET
@@ -2783,6 +2776,7 @@ router.delete("/:id", authRequired, async (req, res) => {
     return res.status(500).json({ message: e.message || "Server error" });
   }
 });
+
 router.post("/:id/reminders", authRequired, async (req, res) => {
 
   try {
