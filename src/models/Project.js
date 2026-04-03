@@ -116,6 +116,10 @@ serviceTechnique: {
     bureauEtude: { type: DataTypes.STRING(200), allowNull: true },
 
     bureauControle: { type: DataTypes.STRING(200), allowNull: true },
+    adresseRevendeur: {
+  type: DataTypes.STRING(255),
+  allowNull: true,
+},
 
     adresse: { type: DataTypes.STRING(255), allowNull: true },
 

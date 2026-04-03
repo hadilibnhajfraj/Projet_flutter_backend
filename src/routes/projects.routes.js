@@ -187,41 +187,19 @@ function validatePayload(body, isUpdate = false) {
     // =========================
     if (isRevendeur) {
 
-      if (!body.comptoir) {
-        errors.push("comptoir est obligatoire");
-      }
+  if (body.comptoir !== undefined && reqStr(body.comptoir) === "") {
+    errors.push("comptoir invalide");
+  }
 
-      if (!body.telephoneComptoir) {
-        errors.push("telephoneComptoir est obligatoire");
-      }
+  if (body.telephoneComptoir && !isValidPhone(body.telephoneComptoir)) {
+    errors.push("telephoneComptoir invalide");
+  }
 
-      if (!body.fonction) {
-        errors.push("fonction est obligatoire");
-      }
+  if (body.revendeurEmail && !isValidEmail(body.revendeurEmail)) {
+    errors.push("revendeurEmail invalide");
+  }
 
-      if (body.fonction && !["achat", "gerant"].includes(body.fonction)) {
-        errors.push("fonction invalide");
-      }
-
-      if (!body.revendeurNom) {
-        errors.push("revendeurNom est obligatoire");
-      }
-
-      if (!body.revendeurPrenom) {
-        errors.push("revendeurPrenom est obligatoire");
-      }
-
-      if (body.revendeurEmail && !isValidEmail(body.revendeurEmail)) {
-        errors.push("revendeurEmail invalide");
-      }
-
-      if (
-        body.revendeurStatut &&
-        !["prospect", "offre", "actif", "rate"].includes(body.revendeurStatut)
-      ) {
-        errors.push("revendeurStatut invalide");
-      }
-    }
+}
 
     // =========================
     // 🔵 APPLICATEUR
@@ -1460,6 +1438,7 @@ const p = await Project.create({
   dateProspection: body.dateProspection ?? null,
 
   statut: isRevendeur ? null : (body.statut || "Identification"),
+  adresseRevendeur: isRevendeur ? clean(body.adresseRevendeur) : null,
 
   typeAdresseChantier: isRevendeur
     ? null
