@@ -120,7 +120,13 @@ serviceTechnique: {
   type: DataTypes.STRING(255),
   allowNull: true,
 },
-
+montantMarche: {
+  type: DataTypes.DECIMAL(15, 2),
+  allowNull: true,
+  validate: {
+    min: 0,
+  },
+},
     adresse: { type: DataTypes.STRING(255), allowNull: true },
 
     latitude: { type: DataTypes.DECIMAL(10, 7), allowNull: true },

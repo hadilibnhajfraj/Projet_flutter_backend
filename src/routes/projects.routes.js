@@ -132,10 +132,15 @@ function validatePayload(body, isUpdate = false) {
   const errors = [];
 
   const mode = body.projectModele || "project";
+
   const isRevendeur = mode === "revendeur";
+  const isApplicateur = mode === "applicateur";
+
+  // 🔥 SEUL PROJECT = chantier
+  const isChantier = !isRevendeur && !isApplicateur;
 
   // =========================
-  // 📍 EXTRACTION GEO (IMPORTANT)
+  // 📍 GEO
   // =========================
   const lat =
     body?.location?.lat ??
@@ -151,17 +156,17 @@ function validatePayload(body, isUpdate = false) {
     body?.longitude;
 
   // =========================
-  // BASE REQUIRED (DYNAMIQUE)
+  // BASE REQUIRED
   // =========================
   if (!isUpdate) {
 
-    // 🔥 TOUJOURS
+    // 🔥 NOM PROJET
     if (!body.nomProjet || reqStr(body.nomProjet) === "") {
       errors.push("nomProjet est obligatoire");
     }
 
-    // 🔥 UNIQUEMENT SI PAS REVENDEUR
-    if (!isRevendeur) {
+    // 🔥 UNIQUEMENT PROJECT
+    if (isChantier) {
 
       if (!body.dateDemarrage || reqStr(body.dateDemarrage) === "") {
         errors.push("dateDemarrage est obligatoire");
@@ -178,49 +183,46 @@ function validatePayload(body, isUpdate = false) {
   }
 
   // =========================
-  // 🔥 MODE-SPECIFIC
+  // MODE SPECIFIC
   // =========================
   if (!isUpdate) {
 
     // =========================
-    // 🟠 REVENDEUR
+    // 🟠 REVENDEUR (NON BLOQUANT)
     // =========================
     if (isRevendeur) {
 
-  if (body.comptoir !== undefined && reqStr(body.comptoir) === "") {
-    errors.push("comptoir invalide");
-  }
+      // ❌ SUPPRIMÉ : comptoir obligatoire
 
-  if (body.telephoneComptoir && !isValidPhone(body.telephoneComptoir)) {
-    errors.push("telephoneComptoir invalide");
-  }
+      if (body.telephoneComptoir && !isValidPhone(body.telephoneComptoir)) {
+        errors.push("telephoneComptoir invalide");
+      }
 
-  if (body.revendeurEmail && !isValidEmail(body.revendeurEmail)) {
-    errors.push("revendeurEmail invalide");
-  }
-
-}
+      if (body.revendeurEmail && !isValidEmail(body.revendeurEmail)) {
+        errors.push("revendeurEmail invalide");
+      }
+    }
 
     // =========================
     // 🔵 APPLICATEUR
     // =========================
-    if (mode === "applicateur") {
+    if (isApplicateur) {
 
-      if (!body.dallagiste) {
+      if (!body.dallagiste || reqStr(body.dallagiste) === "") {
         errors.push("dallagiste est obligatoire");
       }
 
-      if (!body.telephoneDallagiste) {
+      if (!body.telephoneDallagiste || reqStr(body.telephoneDallagiste) === "") {
         errors.push("telephoneDallagiste est obligatoire");
       }
     }
   }
 
   // =========================
-  // FORMAT VALIDATION
+  // FORMAT DATE
   // =========================
   if (
-    !isRevendeur &&
+    isChantier &&
     body.dateDemarrage &&
     !isValidDateOnly(body.dateDemarrage)
   ) {
@@ -272,10 +274,10 @@ function validatePayload(body, isUpdate = false) {
   }
 
   // =========================
-  // GEO VALIDATION (SAFE)
+  // GEO VALIDATION
   // =========================
   if (
-    !isRevendeur &&
+    isChantier &&
     lat != null &&
     lng != null &&
     !isValidLatLng(lat, lng)
@@ -284,7 +286,7 @@ function validatePayload(body, isUpdate = false) {
   }
 
   // =========================
-  // OPTIONAL STRING VALIDATION
+  // OPTIONAL STRING
   // =========================
   if (body.entreprise !== undefined && body.entreprise !== null) {
     if (reqStr(body.entreprise) === "") {
@@ -299,7 +301,7 @@ function validatePayload(body, isUpdate = false) {
   }
 
   // =========================
-  // ENUM VALIDATION
+  // ENUM
   // =========================
   if (body.statut !== undefined && body.statut !== null) {
     const allowed = [
@@ -324,7 +326,7 @@ function validatePayload(body, isUpdate = false) {
   }
 
   // =========================
-  // NUMERIC VALIDATION
+  // NUMERIC
   // =========================
   if (body.pourcentageReussite !== undefined && body.pourcentageReussite !== null) {
     const val = Number(body.pourcentageReussite);
@@ -1310,8 +1312,11 @@ router.post("/", authRequired, async (req, res) => {
       return res.status(400).json({ message: "Validation error", errors });
     }
 
+    const isRevendeur = body.projectModele === "revendeur";
+    const isApplicateur = body.projectModele === "applicateur";
+
     // =========================
-    // 📍 GEO
+    // 📍 GEO (UNIQUEMENT PROJECT)
     // =========================
     const lat =
       body?.location?.lat ??
@@ -1326,15 +1331,12 @@ router.post("/", authRequired, async (req, res) => {
       body?.lng ??
       body?.longitude;
 
-    if (
-  body.projectModele !== "revendeur" &&
-  (lat == null || lng == null)
-) {
-  return res.status(400).json({
-    message: "Validation error",
-    errors: ["latitude/longitude est obligatoire"],
-  });
-}
+    if (!isRevendeur && !isApplicateur && (lat == null || lng == null)) {
+      return res.status(400).json({
+        message: "Validation error",
+        errors: ["latitude/longitude est obligatoire"],
+      });
+    }
 
     // =========================
     // 🧼 CLEAN
@@ -1346,10 +1348,8 @@ router.post("/", authRequired, async (req, res) => {
 
     let nomProjet = clean(body.nomProjet);
 
-    // =========================
-    // 🔥 MODE REVENDEUR (IMPORTANT)
-    // =========================
-    if (body.projectModele === "revendeur") {
+    // 🔥 REVendeur → nom = comptoir
+    if (isRevendeur) {
       nomProjet =
         clean(body.comptoir) ||
         clean(body.ingenieurResponsable) ||
@@ -1364,52 +1364,27 @@ router.post("/", authRequired, async (req, res) => {
     }
 
     // =========================
-    // 🔥 RESET INGENIEUR (revendeur/applicateur)
+    // 🔁 DUPLICATE CHECK
     // =========================
-    if (body.projectModele === "revendeur" || body.projectModele === "applicateur") {
-      body.ingenieurResponsable = null;
-      body.telephoneIngenieur = null;
+    let exists = null;
+
+    if (!isRevendeur) {
+      const normalizedName = nomProjet.toLowerCase().trim();
+
+      exists = await UserProject.findOne({
+        where: { userId: req.user.sub },
+        include: [
+          {
+            model: Project,
+            required: true,
+            where: sequelize.where(
+              sequelize.fn("lower", sequelize.col("Project.nomProjet")),
+              normalizedName
+            ),
+          },
+        ],
+      });
     }
-
-    // =========================
-    // 🔁 CHECK DUPLICATE (CORRIGÉ)
-    // =========================
-   let exists = null;
-
-const normalizedName = nomProjet?.toLowerCase().trim();
-
-if (body.projectModele !== "revendeur") {
-
-  // 🔵 PROJECT / APPLICATEUR → check nomProjet par user
-  exists = await UserProject.findOne({
-    where: {
-      userId: req.user.sub,
-    },
-    include: [
-      {
-        model: Project,
-        required: true,
-        where: sequelize.where(
-          sequelize.fn("lower", sequelize.col("Project.nomProjet")),
-          normalizedName
-        ),
-      },
-    ],
-  });
-
-} else {
-
-  // 🟠 REVENDEUR → PAS DE BLOCAGE PAR NOM
-  exists = null;
-
-}
-
-if (exists) {
-  return res.status(409).json({
-    message: "Project name already exists",
-    errors: ["Un projet avec ce nom existe déjà."],
-  });
-}
 
     if (exists) {
       return res.status(409).json({
@@ -1427,99 +1402,115 @@ if (exists) {
     // =========================
     // 🚀 CREATE
     // =========================
-    const isRevendeur = body.projectModele === "revendeur";
-const isApplicateur = body.projectModele === "applicateur";
+    const p = await Project.create({
+      nomProjet,
+      projectModele: body.projectModele || "project",
 
-const p = await Project.create({
-  nomProjet,
+      // =========================
+      // 🟠 REVENDEUR
+      // =========================
+      comptoir: isRevendeur ? clean(body.comptoir) : null,
+      telephoneComptoir: isRevendeur ? clean(body.telephoneComptoir) : null,
+      telephoneComptoir2: isRevendeur ? clean(body.telephoneComptoir2) : null,
+      registreCommerce: isRevendeur ? clean(body.registreCommerce) : null,
+      fonction: isRevendeur ? clean(body.fonction) : null,
 
-  // 🔥 CHANTIER UNIQUEMENT si PAS revendeur
-  dateDemarrage: isRevendeur ? null : body.dateDemarrage,
-  dateProspection: body.dateProspection ?? null,
+      revendeurNom: isRevendeur ? clean(body.revendeurNom) : null,
+      revendeurPrenom: isRevendeur ? clean(body.revendeurPrenom) : null,
+      revendeurEmail: isRevendeur ? clean(body.revendeurEmail) : null,
+      revendeurStatut: isRevendeur
+        ? body.revendeurStatut || "prospect"
+        : null,
 
-  statut: isRevendeur ? null : (body.statut || "Identification"),
-  adresseRevendeur: isRevendeur ? clean(body.adresseRevendeur) : null,
+      adresseRevendeur: isRevendeur ? clean(body.adresseRevendeur) : null,
 
-  typeAdresseChantier: isRevendeur
-    ? null
-    : clean(body.typeAdresseChantier),
+      // =========================
+      // 🔵 APPLICATEUR
+      // =========================
+      dallagiste: isApplicateur ? clean(body.dallagiste) : null,
+      telephoneDallagiste: isApplicateur
+        ? clean(body.telephoneDallagiste)
+        : null,
+      emailDallagiste: isApplicateur ? clean(body.emailDallagiste) : null,
+      serviceTechnique: isApplicateur
+        ? clean(body.serviceTechnique)
+        : null,
 
-  // 🔥 INGENIEUR
-  ingenieurResponsable: isRevendeur || isApplicateur
-    ? null
-    : clean(body.ingenieurResponsable),
+      matriculeFiscale: isApplicateur
+        ? clean(body.matriculeFiscale)
+        : null,
 
-  telephoneIngenieur: isRevendeur || isApplicateur
-    ? null
-    : clean(body.telephoneIngenieur),
+      registreCommerce: isApplicateur
+        ? clean(body.registreCommerce)
+        : null,
 
-  emailIngenieur: isRevendeur
-    ? null
-    : clean(body.emailIngenieur),
+      adresse: isApplicateur ? clean(body.adresse) : null,
 
-  // 🔥 ARCHITECTE (pas pour revendeur)
-  architecte: isRevendeur ? null : clean(body.architecte),
-  telephoneArchitecte: isRevendeur ? null : clean(body.telephoneArchitecte),
-  emailArchitecte: isRevendeur ? null : clean(body.emailArchitecte),
+      // =========================
+      // ⚪ PROJECT NORMAL
+      // =========================
+      dateDemarrage: !isRevendeur && !isApplicateur
+        ? body.dateDemarrage
+        : null,
 
-  projectModele: body.projectModele || "project",
+      statut: !isRevendeur && !isApplicateur
+        ? body.statut || "Identification"
+        : null,
 
-  // =========================
-  // 🟠 REVENDEUR
-  // =========================
-  comptoir: isRevendeur ? clean(body.comptoir) : null,
-  telephoneComptoir: isRevendeur ? clean(body.telephoneComptoir) : null,
-  telephoneComptoir2: isRevendeur ? clean(body.telephoneComptoir2) : null,
+      typeAdresseChantier: !isRevendeur && !isApplicateur
+        ? clean(body.typeAdresseChantier)
+        : null,
 
-  registreCommerce: isRevendeur ? clean(body.registreCommerce) : null,
-  fonction: isRevendeur ? clean(body.fonction) : null,
+      ingenieurResponsable: !isRevendeur && !isApplicateur
+        ? clean(body.ingenieurResponsable)
+        : null,
 
-  revendeurNom: isRevendeur ? clean(body.revendeurNom) : null,
-  revendeurPrenom: isRevendeur ? clean(body.revendeurPrenom) : null,
-  revendeurEmail: isRevendeur ? clean(body.revendeurEmail) : null,
-  revendeurStatut: isRevendeur
-    ? (body.revendeurStatut || "prospect")
-    : null,
+      telephoneIngenieur: !isRevendeur && !isApplicateur
+        ? clean(body.telephoneIngenieur)
+        : null,
 
-  // =========================
-  // 🔵 APPLICATEUR
-  // =========================
-  dallagiste: isApplicateur ? clean(body.dallagiste) : null,
-  telephoneDallagiste: isApplicateur ? clean(body.telephoneDallagiste) : null,
-  emailDallagiste: isApplicateur ? clean(body.emailDallagiste) : null,
-  serviceTechnique: isApplicateur ? clean(body.serviceTechnique) : null,
+      emailIngenieur: !isRevendeur
+        ? clean(body.emailIngenieur)
+        : null,
 
-  // =========================
-  // 🏢 AUTRES (PAS REVENDEUR)
-  // =========================
-  matriculeFiscale: clean(body.matriculeFiscale),
+      architecte: !isRevendeur ? clean(body.architecte) : null,
+      telephoneArchitecte: !isRevendeur
+        ? clean(body.telephoneArchitecte)
+        : null,
+      emailArchitecte: !isRevendeur
+        ? clean(body.emailArchitecte)
+        : null,
 
-  entreprise: isRevendeur ? null : clean(body.entreprise),
-  promoteur: isRevendeur ? null : clean(body.promoteur),
-  bureauEtude: isRevendeur ? null : clean(body.bureauEtude),
-  bureauControle: isRevendeur ? null : clean(body.bureauControle),
+      entreprise: !isRevendeur ? clean(body.entreprise) : null,
+      promoteur: !isRevendeur ? clean(body.promoteur) : null,
+      bureauEtude: !isRevendeur ? clean(body.bureauEtude) : null,
+      bureauControle: !isRevendeur ? clean(body.bureauControle) : null,
 
-  adresse: isRevendeur ? null : clean(body.adresse),
+      latitude: !isRevendeur && !isApplicateur ? lat : null,
+      longitude: !isRevendeur && !isApplicateur ? lng : null,
 
-  latitude: isRevendeur ? null : lat,
-  longitude: isRevendeur ? null : lng,
+      // =========================
+      // 💰 NOUVEAU
+      // =========================
+      montantMarche:
+        (isRevendeur || isApplicateur)
+          ? body.montantMarche ?? null
+          : null,
 
-  localisationCommentaire: isRevendeur ? null : (body.localisationCommentaire ?? ""),
+      // =========================
+      // AUTRES
+      // =========================
+      pourcentageReussite: !isRevendeur
+        ? body.pourcentageReussite
+        : null,
 
-  entrepriseFluide: isRevendeur ? null : clean(body.entrepriseFluide),
-  entrepriseElectricite: isRevendeur ? null : clean(body.entrepriseElectricite),
+      validationStatut: body.validationStatut ?? "Non validé",
 
-  pourcentageReussite: isRevendeur ? null : body.pourcentageReussite,
-  validationStatut: body.validationStatut ?? "Non validé",
+      pipelineStage: body.pipelineStage ?? "Prospect",
 
-  typeProjet: isRevendeur ? null : clean(body.typeProjet),
-  surfaceProspectee: isRevendeur ? null : body.surfaceProspectee,
-
-  pipelineStage: body.pipelineStage ?? "Prospect",
-
-  dateLimiteIngenieur: deadline,
-  isArchived: false,
-});
+      dateLimiteIngenieur: deadline,
+      isArchived: false,
+    });
 
     // =========================
     // 🧠 ACTION CRM
@@ -1545,9 +1536,6 @@ const p = await Project.create({
       defaults: { permission: "owner" },
     });
 
-    // =========================
-    // ✅ RESPONSE
-    // =========================
     return res.status(201).json({
       ...p.toJSON(),
       permission: "owner",
@@ -2375,21 +2363,45 @@ router.get("/:id", authRequired, async (req, res) => {
           include: [
             {
               model: User,
-              attributes: ["id", "email", ...(User.rawAttributes?.username ? ["username"] : [])],
+              attributes: [
+                "id",
+                "email",
+                ...(User.rawAttributes?.username ? ["username"] : []),
+              ],
             },
           ],
         },
       ],
       attributes: {
         include: [
-          [sequelize.literal(`(SELECT COUNT(*) FROM project_comments pc WHERE pc."projectId" = "Project"."id")`), "commentCount"],
-          [sequelize.literal(`(SELECT COUNT(*) FROM project_devis d WHERE d."projectId" = "Project"."id")`), "devisCount"],
-          [sequelize.literal(`(SELECT COUNT(*) FROM project_bon_de_commande bc WHERE bc."projectId" = "Project"."id")`), "bonCommandeCount"],
+          [
+            sequelize.literal(`(
+              SELECT COUNT(*) FROM project_comments pc 
+              WHERE pc."projectId" = "Project"."id"
+            )`),
+            "commentCount",
+          ],
+          [
+            sequelize.literal(`(
+              SELECT COUNT(*) FROM project_devis d 
+              WHERE d."projectId" = "Project"."id"
+            )`),
+            "devisCount",
+          ],
+          [
+            sequelize.literal(`(
+              SELECT COUNT(*) FROM project_bon_de_commande bc 
+              WHERE bc."projectId" = "Project"."id"
+            )`),
+            "bonCommandeCount",
+          ],
         ],
       },
     });
 
-    if (!item) return res.status(404).json({ message: "Not found" });
+    if (!item) {
+      return res.status(404).json({ message: "Not found" });
+    }
 
     const userRole = (req.user?.role || "").toLowerCase();
 
@@ -2401,14 +2413,61 @@ router.get("/:id", authRequired, async (req, res) => {
     }
 
     const json = item.toJSON();
+
+    // =========================
+    // 🔥 LOGIQUE MODE
+    // =========================
+    const mode = json.projectModele || "project";
+
+    const isRevendeur = mode === "revendeur";
+    const isApplicateur = mode === "applicateur";
+    const isChantier = !isRevendeur && !isApplicateur;
+
+    // 🔥 CLEAN DATA SELON MODE
+    if (!isChantier) {
+  up.dateDemarrage = null;
+  up.typeAdresseChantier = null;
+  up.latitude = null;
+  up.longitude = null;
+  up.ingenieurResponsable = null;
+  up.telephoneIngenieur = null;
+}
+
+    if (!isRevendeur) {
+      json.comptoir = null;
+      json.telephoneComptoir = null;
+      json.telephoneComptoir2 = null;
+      json.revendeurNom = null;
+      json.revendeurPrenom = null;
+      json.revendeurEmail = null;
+      json.revendeurStatut = null;
+      json.adresseRevendeur = null;
+    }
+
+    if (!isApplicateur) {
+      json.dallagiste = null;
+      json.telephoneDallagiste = null;
+      json.emailDallagiste = null;
+      json.serviceTechnique = null;
+    }
+
+    // =========================
+    // 🔐 PERMISSION
+    // =========================
     const permission = await getPermission(req.user, req.params.id);
 
-    const ownerLink = (json.UserProjects || []).find((up) => up.permission === "owner");
-    const ownerName = ownerLink?.User?.username || ownerLink?.User?.email || "";
+    const ownerLink = (json.UserProjects || []).find(
+      (up) => up.permission === "owner"
+    );
+
+    const ownerName =
+      ownerLink?.User?.username || ownerLink?.User?.email || "";
 
     delete json.UserProjects;
 
-    // LAST ACTION
+    // =========================
+    // 🧠 LAST ACTION
+    // =========================
     const lastAction = await ProjectAction.findOne({
       where: { projectId: item.id },
       order: [["dateAction", "DESC"]],
@@ -2418,17 +2477,23 @@ router.get("/:id", authRequired, async (req, res) => {
       ...json,
       permission,
       ownerName,
+
       devisCount: Number(json.devisCount || 0),
       bonCommandeCount: Number(json.bonCommandeCount || 0),
+
       dateVisite: lastAction?.dateAction ?? null,
       nextAction: lastAction?.typeAction ?? null,
       commentaireAction: lastAction?.commentaire ?? null,
+
       color: getProjectColor(json.pipelineStage),
     });
 
   } catch (e) {
     console.error("PROJECT_GET_ERROR:", e);
-    return res.status(500).json({ message: e.message || "Server error" });
+
+    return res.status(500).json({
+      message: e.message || "Server error",
+    });
   }
 });
 // ---------------- UPDATE ----------------
@@ -2472,7 +2537,7 @@ router.put("/:id", authRequired, async (req, res) => {
     }
 
     // =========================
-    // 🧼 CLEAN FUNCTION
+    // 🧼 CLEAN
     // =========================
     const clean = (val) =>
       val !== undefined && val !== null && String(val).trim() !== ""
@@ -2480,16 +2545,14 @@ router.put("/:id", authRequired, async (req, res) => {
         : null;
 
     // =========================
-    // 🔥 LOGIQUE MODE
+    // 🔥 MODE LOGIC
     // =========================
-    if (body.projectModele === "revendeur" || body.projectModele === "applicateur") {
-      body.ingenieurResponsable = null;
-      body.telephoneIngenieur = null;
-    }
+    const mode = body.projectModele || item.projectModele;
 
-    // =========================
-    // PREPARE UPDATE
-    // =========================
+    const isRevendeur = mode === "revendeur";
+    const isApplicateur = mode === "applicateur";
+    const isChantier = !isRevendeur && !isApplicateur;
+
     const fields = [
       "nomProjet",
       "dateDemarrage",
@@ -2522,22 +2585,99 @@ router.put("/:id", authRequired, async (req, res) => {
       "comptoir",
       "telephoneComptoir",
       "telephoneComptoir2",
+      "registreCommerce",
+      "fonction",
+      "revendeurNom",
+      "revendeurPrenom",
+      "revendeurEmail",
+      "revendeurStatut",
+      "adresseRevendeur",
       "dallagiste",
       "telephoneDallagiste",
       "emailDallagiste",
       "serviceTechnique",
+      "montantMarche",
     ];
 
     const up = {};
 
     for (const f of fields) {
-      if (body[f] !== undefined) {
+      if (body[f] === undefined) continue;
+
+      // =========================
+      // 🟠 REVENDEUR
+      // =========================
+      if (isRevendeur) {
+        const allowed = [
+          "nomProjet",
+          "projectModele",
+          "comptoir",
+          "telephoneComptoir",
+          "telephoneComptoir2",
+          "registreCommerce",
+          "fonction",
+          "revendeurNom",
+          "revendeurPrenom",
+          "revendeurEmail",
+          "revendeurStatut",
+          "adresseRevendeur",
+          "validationStatut",
+          "pipelineStage",
+        ];
+
+        if (allowed.includes(f)) {
+          up[f] = clean(body[f]);
+        }
+        continue;
+      }
+
+      // =========================
+      // 🔵 APPLICATEUR
+      // =========================
+      if (isApplicateur) {
+        const allowed = [
+          "nomProjet",
+          "projectModele",
+          "dallagiste",
+          "telephoneDallagiste",
+          "emailDallagiste",
+          "serviceTechnique",
+          "matriculeFiscale",
+          "registreCommerce",
+          "adresse",
+          "validationStatut",
+          "pipelineStage",
+          "montantMarche",
+        ];
+
+        if (allowed.includes(f)) {
+          up[f] = clean(body[f]);
+        }
+        continue;
+      }
+
+      // =========================
+      // 🔵 PROJECT NORMAL
+      // =========================
+      if (isChantier) {
         up[f] = clean(body[f]);
       }
     }
 
     // =========================
-    // 🔥 RESET DEADLINE SI INGENIEUR AJOUTÉ
+    // 🔥 RESET CHAMPS SI PAS CHANTIER
+    // =========================
+    if (!isChantier) {
+      up.dateDemarrage = null;
+      up.typeAdresseChantier = null;
+      up.latitude = null;
+      up.longitude = null;
+      up.ingenieurResponsable = null;
+      up.telephoneIngenieur = null;
+    }
+
+    // =========================
+    // 🔥 DEADLINE RESET
     // =========================
     if (body.ingenieurResponsable) {
       up.dateLimiteIngenieur = null;
@@ -2549,7 +2689,7 @@ router.put("/:id", authRequired, async (req, res) => {
     await item.update(up);
 
     // =========================
-    // AUTO NEXT ACTION
+    // AUTO ACTION
     // =========================
     if (newStage && newStage !== oldStage) {
       const nextAction = getNextAction(newStage);
@@ -2589,9 +2729,6 @@ router.put("/:id", authRequired, async (req, res) => {
       });
     }
 
-    // =========================
-    // LAST ACTION
-    // =========================
     const lastAction = await ProjectAction.findOne({
       where: { projectId: item.id },
       order: [["dateAction", "DESC"]],
@@ -2614,7 +2751,9 @@ router.put("/:id", authRequired, async (req, res) => {
 
   } catch (e) {
     console.error("PROJECT_UPDATE_ERROR:", e);
-    return res.status(500).json({ message: e.message || "Server error" });
+    return res.status(500).json({
+      message: e.message || "Server error",
+    });
   }
 });
 
