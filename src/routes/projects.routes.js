@@ -2756,10 +2756,11 @@ router.delete("/:id", authRequired, async (req, res) => {
       return res.status(400).json({ message: "Invalid project id (UUID required)" });
     }
 
-    // ✅ Autoriser uniquement admin / superadmin
-    if (!["admin", "superadmin"].includes(req.user.role)) {
-      return res.status(403).json({ message: "Only admin/superadmin can delete projects" });
-    }
+   if (req.user.email !== process.env.SUPERADMIN_EMAIL) {
+  return res.status(403).json({
+    message: "Only main superadmin can delete projects",
+  });
+}
 
     const item = await Project.findByPk(req.params.id);
     if (!item) return res.status(404).json({ message: "Not found" });
