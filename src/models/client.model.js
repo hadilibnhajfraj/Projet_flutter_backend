@@ -43,6 +43,10 @@ const Client = sequelize.define(
       type: DataTypes.TEXT,
       allowNull: true,
     },
+    derniereFacturation: {
+  type: DataTypes.DATEONLY,
+  allowNull: true,
+},
   },
   {
     tableName: "clients",

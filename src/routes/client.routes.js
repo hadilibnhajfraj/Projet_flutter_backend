@@ -6,7 +6,7 @@ const Client = require("../models/client.model");
 const { authRequired } = require("../middleware/auth.middleware");
 const router = express.Router();
 const upload = multer({ dest: "uploads/" });
-
+const { sequelize } = require("../db");
 function cleanValue(value) {
   if (value === undefined || value === null) return null;
 
@@ -67,7 +67,12 @@ function parseDate(value) {
 
   return null;
 }
-
+function normalize(str) {
+  return str
+    ?.toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+}
 router.post("/import-csv", upload.single("file"), async (req, res) => {
   try {
     if (!req.file) {
@@ -163,6 +168,7 @@ router.get("/all", authRequired, async (req, res) => {
         "matriculeFiscal",
         "identifiantUnique",
         "contact",
+        "derniereFacturation", // ✅ AJOUT ICI
       ],
       order: [["id", "ASC"]],
     });
@@ -171,6 +177,82 @@ router.get("/all", authRequired, async (req, res) => {
   } catch (error) {
     return res.status(500).json({
       message: "Erreur lors de la récupération des clients",
+      error: error.message,
+    });
+  }
+});
+router.post("/import-factures", upload.single("file"), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ message: "Aucun fichier envoyé." });
+    }
+
+    const workbook = XLSX.readFile(req.file.path);
+    const sheetName = workbook.SheetNames[0];
+    const worksheet = workbook.Sheets[sheetName];
+
+    const rows = XLSX.utils.sheet_to_json(worksheet, {
+      header: 1,
+      defval: "",
+      raw: true,
+    });
+
+    const headers = rows[0].map((h) => String(h).trim());
+    const dataRows = rows.slice(1);
+
+    let updated = 0;
+    let created = 0;
+
+    for (const row of dataRows) {
+      const rowObj = {};
+      headers.forEach((header, index) => {
+        rowObj[header] = row[index];
+      });
+
+      const raisonSociale = cleanValue(rowObj["Raison sociale"]);
+      const dateFacture = parseDate(rowObj["Date"]);
+
+      if (!raisonSociale || !dateFacture) continue;
+
+      // 🔍 chercher client existant
+     let client = await Client.findOne({
+  where: sequelize.where(
+    sequelize.fn("LOWER", sequelize.col("raisonSociale")),
+    normalize(raisonSociale)
+  ),
+});
+
+      if (client) {
+        // ✅ UPDATE
+        await client.update({
+          derniereFacturation: dateFacture,
+        });
+        updated++;
+      } else {
+        // ➕ CREATE (client minimal)
+        await Client.create({
+          raisonSociale,
+          derniereFacturation: dateFacture,
+          contact: null,
+        });
+        created++;
+      }
+    }
+
+    fs.unlinkSync(req.file.path);
+
+    return res.status(200).json({
+      message: "Import factures terminé",
+      updated,
+      created,
+    });
+  } catch (error) {
+    if (req.file && fs.existsSync(req.file.path)) {
+      fs.unlinkSync(req.file.path);
+    }
+
+    return res.status(500).json({
+      message: "Erreur import factures",
       error: error.message,
     });
   }
