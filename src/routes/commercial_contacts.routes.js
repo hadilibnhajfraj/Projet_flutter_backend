@@ -42,14 +42,21 @@ router.get("/", authRequired, async (req, res) => {
   try {
     const where = {};
 
-    if (!["admin", "superadmin"].includes(req.user.role)) {
-      where.createdBy = req.user.sub;
+    const { q, statut, dateRelance, user_nom, typeClient } = req.query;
+
+    /// 🔥 USER FILTER PRIORITY
+    if (user_nom && user_nom.trim()) {
+      where.user_nom = user_nom.trim();
+    } else {
+      if (!["admin", "superadmin"].includes(req.user.role)) {
+        where.createdBy = req.user.sub;
+      }
     }
 
-    const { q, statut, dateRelance } = req.query;
-
+    /// 🔍 SEARCH
     if (q && String(q).trim()) {
       const s = String(q).trim();
+
       where[Op.or] = [
         { nom: { [Op.iLike]: `%${s}%` } },
         { prenom: { [Op.iLike]: `%${s}%` } },
@@ -60,43 +67,32 @@ router.get("/", authRequired, async (req, res) => {
       ];
     }
 
-    if (statut && String(statut).trim()) {
-      where.statut = String(statut).trim();
+    /// 🔥 TYPE FILTER
+    if (typeClient && typeClient.trim()) {
+      where.typeClient = typeClient.trim();
     }
 
-    const include = [
-      {
-        model: CommercialContactProduct,
-        as: "produits", // ✅ FIX ICI
-      },
-      {
-        model: CommercialProject,
-        as: "projects", // ✅ OK
-      },
-      {
-        model: User,
-        as: "creator",
-        attributes: ["id", "email"],
-      },
-      {
-        model: CommercialContactRelance,
-        as: "relances",
-        required: false,
-        ...(dateRelance
-          ? {
-              where: {
-                dateRelance: String(dateRelance).trim(),
-              },
-            }
-          : {}),
-      },
-    ];
+    /// 🔥 STATUT
+    if (statut && statut.trim()) {
+      where.statut = statut.trim();
+    }
 
     const rows = await CommercialContact.findAll({
       where,
       order: [["createdAt", "DESC"]],
-      include,
+      include: [
+        { model: CommercialContactProduct, as: "produits" },
+        { model: CommercialProject, as: "projects" },
+        { model: User, as: "creator", attributes: ["id", "email"] },
+        {
+          model: CommercialContactRelance,
+          as: "relances",
+          required: false,
+        },
+      ],
     });
+
+    console.log("🔥 WHERE:", where);
 
     return res.json(rows);
   } catch (e) {
