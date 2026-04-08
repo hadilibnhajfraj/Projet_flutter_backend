@@ -543,32 +543,32 @@ router.get("/kpi/validation-by-surface", authRequired, async (req, res) => {
     const rows = await Project.findAll({
       where,
       attributes: [
+        "id",
+        "nomProjet", // 🔥 nom projet (important)
         "surfaceProspectee",
-        [sequelize.fn("COUNT", sequelize.col("id")), "totalProjects"],
-        [sequelize.fn("SUM", sequelize.literal(`CASE WHEN "validationStatut" = 'Validé' THEN 1 ELSE 0 END`)), "validatedProjects"],
-        [sequelize.fn("AVG", sequelize.cast(sequelize.col("pourcentageReussite"), "float")), "avgReussite"],
+        "validationStatut",
+        "pourcentageReussite",
       ],
-      group: ["surfaceProspectee"],
-      order: [[sequelize.col("surfaceProspectee"), "ASC"]],
+      order: [["surfaceProspectee", "ASC"]],
       raw: true,
     });
 
-    const result = rows.map((r) => {
-      const total = Number(r.totalProjects || 0);
-      const validated = Number(r.validatedProjects || 0);
-      const avgReussite = r.avgReussite == null ? null : Number(Number(r.avgReussite).toFixed(2));
-      return {
-        surfaceProspectee: r.surfaceProspectee,
-        totalProjects: total,
-        validatedProjects: validated,
-        validatedPercentage: total === 0 ? 0 : Number(((validated / total) * 100).toFixed(2)),
-        avgReussite,
-      };
-    });
+    const result = rows.map((r) => ({
+      id: r.id,
+      projectName: r.nomProjet, // 🔥 standard frontend
+      surfaceProspectee: r.surfaceProspectee,
+      statut: r.validationStatut,
+      successPercentage: r.pourcentageReussite
+        ? Number(r.pourcentageReussite)
+        : 0,
+    }));
 
     res.json(result);
   } catch (err) {
-    res.status(500).json({ error: "KPI_VALIDATION_BY_SURFACE_ERROR", details: err.message });
+    res.status(500).json({
+      error: "PROJECTS_BY_SURFACE_ERROR",
+      details: err.message,
+    });
   }
 });
 

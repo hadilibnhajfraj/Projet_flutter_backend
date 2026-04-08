@@ -16,7 +16,7 @@ const taskRoutes = require("./routes/tasks.routes");
 require("./cron/checkProjects");
 require("./cron/projectCron");
 const { checkProjects } = require("./cron/projectCron");
-
+const metabaseRoutes = require("./routes/metabase");
 checkProjects(); // 🔥 test direct au démarrage
 const commercialRoutes = require("./routes/commercial_contacts.routes");
 const clientRoutes = require("./routes/client.routes");
@@ -48,6 +48,7 @@ app.use("/users", userProfileRoutes);
 app.use("/api/clients", clientRoutes);
 app.use("/commercial-contacts", commercialRoutes);
 app.use("/projetactions", projectActionRoutes);
+app.use("/metabase", metabaseRoutes);
 app.use("/uploads", express.static("uploads"));
 
 app.get("/me", authRequired, (req, res) => {
