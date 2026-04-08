@@ -3,6 +3,7 @@ const { Op } = require("sequelize");
 const { authRequired } = require("../middleware/auth.middleware");
 
 const CommercialContact = require("../models/CommercialContact");
+const CommercialProject = require("../models/CommercialProject");
 const CommercialContactProduct = require("../models/CommercialContactProduct");
 const CommercialContactRelance = require("../models/CommercialContactRelance");
 const CommercialContactAction = require("../models/CommercialContactAction");
@@ -64,8 +65,19 @@ router.get("/", authRequired, async (req, res) => {
     }
 
     const include = [
-      { model: CommercialContactProduct, as: "produits" },
-      { model: User, as: "creator", attributes: ["id", "email"] },
+      {
+        model: CommercialContactProduct,
+        as: "produits", // ✅ FIX ICI
+      },
+      {
+        model: CommercialProject,
+        as: "projects", // ✅ OK
+      },
+      {
+        model: User,
+        as: "creator",
+        attributes: ["id", "email"],
+      },
       {
         model: CommercialContactRelance,
         as: "relances",
@@ -88,6 +100,7 @@ router.get("/", authRequired, async (req, res) => {
 
     return res.json(rows);
   } catch (e) {
+    console.error("❌ GET CONTACTS ERROR:", e);
     return res.status(500).json({ message: e.message || "Server error" });
   }
 });
@@ -267,12 +280,23 @@ router.get("/calendar/relances", authRequired, async (req, res) => {
 // CREATE CONTACT
 router.post("/", authRequired, async (req, res) => {
   try {
-    console.log("📥 CREATE CONTACT REQUEST");
-    console.log("👉 BODY:", req.body);
+    console.log("📥 CREATE CONTACT REQUEST =====================");
+    console.log("👉 BODY:", JSON.stringify(req.body, null, 2));
     console.log("👉 USER:", req.user);
 
     const body = req.body || {};
-    const produits = Array.isArray(body.produits) ? body.produits : [];
+
+    // 🔥 DEBUG PRODUITS
+    console.log("📦 RAW PRODUCTS:", body.products);
+
+    // 🔥 DEBUG PROJECTS
+    console.log("🏗️ RAW PROJECTS:", body.projects);
+
+    const produits = Array.isArray(body.products) ? body.products : [];
+    const projects = Array.isArray(body.projects) ? body.projects : [];
+
+    console.log("📦 PARSED PRODUCTS:", produits);
+    console.log("🏗️ PARSED PROJECTS:", projects);
 
     // =============================
     // PAYLOAD CONTACT
@@ -292,13 +316,13 @@ router.post("/", authRequired, async (req, res) => {
       sujetDiscussion: body.sujetDiscussion
         ? String(body.sujetDiscussion).trim()
         : null,
-
-      // CRM
       pipelineStage: body.pipelineStage || "Prospect",
       dateAppel: body.dateAppel || new Date(),
-
+      user_nom: body.user_nom || "najeh",
       createdBy: req.user.sub,
     };
+
+    console.log("📄 CONTACT PAYLOAD:", payload);
 
     // =============================
     // VALIDATION
@@ -317,7 +341,6 @@ router.post("/", authRequired, async (req, res) => {
     // CREATE CONTACT
     // =============================
     const contact = await CommercialContact.create(payload);
-
     console.log("✅ CONTACT CREATED:", contact.id);
 
     // =============================
@@ -330,9 +353,11 @@ router.post("/", authRequired, async (req, res) => {
       .filter((p) => p)
       .map((p) => ({
         commercialContactId: contact.id,
-        produit: String(p.produit || "PROBAR").trim() || "PROBAR",
+        produit: String(p.produit || "PROBAR").trim(),
         qte: Number(p.qte ?? 1) || 1,
       }));
+
+    console.log("📦 FINAL PRODUCTS TO INSERT:", items);
 
     if (items.length) {
       await CommercialContactProduct.bulkCreate(items);
@@ -340,51 +365,69 @@ router.post("/", authRequired, async (req, res) => {
     }
 
     // =============================
-    // 🔥 CREATE ACTION AUTO (IMPORTANT)
+    // CREATE PROJECTS 🔥 DEBUG
     // =============================
-    const typeAction = mapStageToAction(payload.pipelineStage);
+    if (projects.length) {
+      console.log("🏗️ PROJECTS BEFORE FILTER:", projects);
 
-    const action = await CommercialContactAction.create({
-  commercialContactId: contact.id,
-  typeAction: mapStageToAction(payload.pipelineStage),
-  commentaire: "Création du contact",
-  dateAction: new Date(),
-  statut: "Terminé",
-  createdBy: req.user.sub,
-});
+      const projectItems = projects
+        .filter(p => p && p.nomProjet && p.nomProjet.trim() !== "")
+        .map((p) => ({
+          commercialContactId: contact.id,
+          nomProjet: String(p.nomProjet).trim(),
+          localisation: p.localisation || null,
+          typeProjet: p.typeProjet || null,
+          description: p.description || null,
+          createdBy: req.user.sub,
+        }));
 
-    console.log("🔥 ACTION AUTO CREATED:", action.id);
+      console.log("🏗️ PROJECTS TO INSERT:", projectItems);
 
-    // =============================
-    // CREATE RELANCE
-    // =============================
-    if (
-      ["ok", "rappeler_plus_tard"].includes(payload.statut) &&
-      body.dateRelance
-    ) {
-      const relance = await CommercialContactRelance.create({
-        commercialContactId: contact.id,
-        dateRelance: body.dateRelance,
-        heureRelance: body.heureRelance || null,
-        commentaire:
-          body.commentaire || body.commentaireRelance || null,
-        createdBy: req.user.sub,
-      });
-
-      console.log("⏰ RELANCE CREATED:", relance.id);
+      if (projectItems.length) {
+        await CommercialProject.bulkCreate(projectItems);
+        console.log("🏗️ PROJECTS CREATED:", projectItems.length);
+      } else {
+        console.log("⚠️ NO VALID PROJECTS AFTER FILTER");
+      }
+    } else {
+      console.log("⚠️ NO PROJECTS RECEIVED FROM FRONT");
     }
+
+    // =============================
+    // VERIFY INSERT 🔥
+    // =============================
+    const savedProjects = await CommercialProject.findAll({
+      where: { commercialContactId: contact.id },
+    });
+
+    console.log("🧪 PROJECTS IN DB:", savedProjects);
+
+    // =============================
+    // CREATE ACTION AUTO
+    // =============================
+    const action = await CommercialContactAction.create({
+      commercialContactId: contact.id,
+      typeAction: mapStageToAction(payload.pipelineStage),
+      commentaire: "Création du contact",
+      dateAction: new Date(),
+      statut: "Terminé",
+      createdBy: req.user.sub,
+    });
+
+    console.log("🔥 ACTION CREATED:", action.id);
 
     // =============================
     // RETURN FULL DATA
     // =============================
     const full = await CommercialContact.findByPk(contact.id, {
       include: [
-        { model: CommercialContactProduct, as: "produits" },
+        { model: CommercialContactProduct, as: "products" },
         { model: CommercialContactRelance, as: "relances" },
+        { model: CommercialProject, as: "projects" },
       ],
     });
 
-    console.log("📤 CONTACT RESPONSE READY");
+    console.log("📤 FINAL RESPONSE:", JSON.stringify(full, null, 2));
 
     return res.status(201).json(full);
 
@@ -402,12 +445,14 @@ router.post("/", authRequired, async (req, res) => {
 router.put("/:id", authRequired, async (req, res) => {
   try {
     const id = req.params.id;
+
     const row = await CommercialContact.findByPk(id);
 
     if (!row) {
       return res.status(404).json({ message: "Contact introuvable" });
     }
 
+    // 🔐 SECURITY
     if (
       !["admin", "superadmin"].includes(req.user.role) &&
       row.createdBy !== req.user.sub
@@ -418,39 +463,66 @@ router.put("/:id", authRequired, async (req, res) => {
     const body = req.body || {};
     const up = {};
 
+    // =============================
+    // UPDATE FIELDS
+    // =============================
     if (body.typeClient != null) up.typeClient = body.typeClient;
     if (body.nomSociete != null) up.nomSociete = body.nomSociete || null;
     if (body.nom != null) up.nom = String(body.nom).trim();
     if (body.prenom != null) up.prenom = String(body.prenom).trim();
+
     if (body.localisation != null) {
       up.localisation = String(body.localisation).trim() || null;
     }
-    if (body.telephone != null) up.telephone = String(body.telephone).trim();
-    if (body.message != null) up.message = String(body.message).trim() || null;
-    if (body.statut != null) up.statut = String(body.statut).trim();
-    if (body.nbAppels != null) up.nbAppels = Number(body.nbAppels) || 0;
+
+    if (body.telephone != null) {
+      up.telephone = String(body.telephone).trim();
+    }
+
+    if (body.message != null) {
+      up.message = String(body.message).trim() || null;
+    }
+
+    if (body.statut != null) {
+      up.statut = String(body.statut).trim();
+    }
+
+    if (body.nbAppels != null) {
+      up.nbAppels = Number(body.nbAppels) || 0;
+    }
+
     if (body.sujetDiscussion != null) {
       up.sujetDiscussion = String(body.sujetDiscussion).trim() || null;
     }
-    if (body.pipelineStage != null) {
-  up.pipelineStage = String(body.pipelineStage).trim();
-}
 
-if (body.dateAppel != null) {
-  up.dateAppel = body.dateAppel;
-}
+    if (body.pipelineStage != null) {
+      up.pipelineStage = String(body.pipelineStage).trim();
+    }
+
+    if (body.dateAppel != null) {
+      up.dateAppel = body.dateAppel;
+    }
+
+    // 🔥 NEW
+    if (body.user_nom != null) {
+      up.user_nom = body.user_nom;
+    }
+
     await row.update(up);
 
-    if (Array.isArray(body.produits)) {
+    // =============================
+    // UPDATE PRODUCTS
+    // =============================
+    if (Array.isArray(body.products)) {
       await CommercialContactProduct.destroy({
         where: { commercialContactId: id },
       });
 
-      const items = body.produits
+      const items = body.products
         .filter((p) => p)
         .map((p) => ({
           commercialContactId: id,
-          produit: String(p.produit || "PROBAR").trim() || "PROBAR",
+          produit: String(p.produit || "PROBAR").trim(),
           qte: Number(p.qte ?? 1) || 1,
         }));
 
@@ -459,6 +531,30 @@ if (body.dateAppel != null) {
       }
     }
 
+    // =============================
+    // 🔥 UPDATE PROJECTS (NEW)
+    // =============================
+    if (Array.isArray(body.projects)) {
+      await CommercialProject.destroy({
+        where: { commercialContactId: id },
+      });
+
+      const projectItems = body.projects.map((p) => ({
+        commercialContactId: id,
+        nomProjet: String(p.nomProjet || "").trim(),
+        localisation: p.localisation || null,
+        typeProjet: p.typeProjet || null,
+        description: p.description || null,
+      }));
+
+      if (projectItems.length) {
+        await CommercialProject.bulkCreate(projectItems);
+      }
+    }
+
+    // =============================
+    // UPDATE RELANCE
+    // =============================
     if (
       ["ok", "rappeler_plus_tard"].includes(
         body.statut != null ? String(body.statut).trim() : row.statut
@@ -481,22 +577,33 @@ if (body.dateAppel != null) {
           commercialContactId: id,
           dateRelance: body.dateRelance,
           heureRelance: body.heureRelance || null,
-          commentaire: body.commentaire || body.commentaireRelance || null,
+          commentaire:
+            body.commentaire || body.commentaireRelance || null,
           createdBy: req.user.sub,
         });
       }
     }
 
+    // =============================
+    // RETURN FULL DATA
+    // =============================
     const full = await CommercialContact.findByPk(id, {
       include: [
-        { model: CommercialContactProduct, as: "produits" },
+        { model: CommercialContactProduct, as: "products" },
         { model: CommercialContactRelance, as: "relances" },
+        { model: CommercialProject, as: "projects" }, // 🔥 NEW
       ],
     });
 
     return res.json(full);
+
   } catch (e) {
-    return res.status(500).json({ message: e.message || "Server error" });
+    console.error("❌ UPDATE CONTACT ERROR:", e);
+
+    return res.status(500).json({
+      message: e.message || "Server error",
+      stack: e.stack,
+    });
   }
 });
 

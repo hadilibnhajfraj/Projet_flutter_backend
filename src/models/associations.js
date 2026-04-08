@@ -20,6 +20,8 @@ const ProjectReminder = require("./ProjectReminder");
 const CommercialContactAction = require("./CommercialContactAction");
 const CommercialContactReminder = require("./CommercialContactReminder");
 
+
+const CommercialProject = require("./CommercialProject");
 // ======================================================
 // USER <-> PROJECT
 // ======================================================
@@ -298,7 +300,22 @@ CommercialContactReminder.belongsTo(CommercialContactAction, {
 // ======================================================
 // EXPORT
 // ======================================================
+// 🔹 Contact → Produits
+CommercialContact.hasMany(CommercialContactProduct, {
+  foreignKey: "commercialContactId",
+  as: "products",
+});
 
+// 🔹 Contact → Projets
+CommercialContact.hasMany(CommercialProject, {
+  foreignKey: "commercialContactId",
+  as: "projects",
+});
+
+CommercialProject.belongsTo(CommercialContact, {
+  foreignKey: "commercialContactId",
+  as: "contact",
+});
 module.exports = {
   User,
   Project,
@@ -316,5 +333,6 @@ module.exports = {
   ProjectAction,
   ProjectReminder,
   CommercialContactAction,
-  CommercialContactReminder
+  CommercialContactReminder,
+  CommercialProject
 };

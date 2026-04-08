@@ -11,7 +11,7 @@ const CommercialContact = sequelize.define(
     },
 
     typeClient: {
-      type: DataTypes.ENUM("Tuteur", "Cloture", "autre"),
+      type: DataTypes.ENUM("Tuteur", "Cloture", "Batiment"),
       allowNull: false,
       defaultValue: "autre",
     },
@@ -88,6 +88,10 @@ const CommercialContact = sequelize.define(
   type: DataTypes.DATE,
   allowNull: true, // 🔥 IMPORTANT temporaire
   defaultValue: DataTypes.NOW,
+},
+user_nom: {
+  type: DataTypes.ENUM("najeh", "mooemen", "mayssa"),
+  allowNull: true,
 },
 
     createdBy: {
