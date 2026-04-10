@@ -1449,9 +1449,7 @@ router.post("/", authRequired, async (req, res) => {
       // =========================
       // ⚪ PROJECT NORMAL
       // =========================
-      dateDemarrage: !isRevendeur && !isApplicateur
-        ? body.dateDemarrage
-        : null,
+      dateDemarrage: body.dateDemarrage ?? new Date(),
 
       statut: !isRevendeur && !isApplicateur
         ? body.statut || "Identification"
@@ -1507,7 +1505,8 @@ router.post("/", authRequired, async (req, res) => {
       validationStatut: body.validationStatut ?? "Non validé",
 
       pipelineStage: body.pipelineStage ?? "Prospect",
-
+      localisationCommentaire : clean(body.localisationCommentaire),
+      
       dateLimiteIngenieur: deadline,
       isArchived: false,
     });
@@ -2442,6 +2441,15 @@ router.get("/:id", authRequired, async (req, res) => {
       json.emailDallagiste = null;
       json.serviceTechnique = null;
     }
+    // =========================
+// 📍 LOCATION (ONLY PROJECT)
+// =========================
+if (!isChantier) {
+  json.latitude = null;
+  json.longitude = null;
+  json.adresse = null;
+  json.localisationCommentaire = null;
+}
 
     // =========================
     // 🔐 PERMISSION
@@ -2472,7 +2480,8 @@ router.get("/:id", authRequired, async (req, res) => {
 
       devisCount: Number(json.devisCount || 0),
       bonCommandeCount: Number(json.bonCommandeCount || 0),
-
+      startDate: json.dateDemarrage ?? lastAction?.dateAction ?? null,
+      localisationCommentaire: json.localisationCommentaire ?? null,
       dateVisite: lastAction?.dateAction ?? null,
       nextAction: lastAction?.typeAction ?? null,
       commentaireAction: lastAction?.commentaire ?? null,
