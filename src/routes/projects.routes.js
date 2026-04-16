@@ -393,7 +393,52 @@ function adminOnly(req, res, next) {
   return res.status(403).json({ message: "Forbidden" });
 }
 // routes/projects.routes.js (or equivalent file where routes are defined)
+router.get("/applicateur", async (req, res) => {
+  try {
+    const { page = 1, limit = 10, q } = req.query;
 
+    const currentPage = Math.max(parseInt(page) || 1, 1);
+    const currentLimit = Math.max(parseInt(limit) || 10, 1);
+    const offset = (currentPage - 1) * currentLimit;
+
+    const where = {
+      projectModele: "applicateur",
+    };
+
+    if (q) {
+      where[Op.or] = [
+        { nomProjet: { [Op.iLike]: `%${q}%` } },
+        { dallagiste: { [Op.iLike]: `%${q}%` } },
+        { adresse: { [Op.iLike]: `%${q}%` } },
+      ];
+    }
+
+    const { count, rows } = await Project.findAndCountAll({
+      where,
+      limit: currentLimit,
+      offset,
+      order: [["createdAt", "DESC"]],
+    });
+
+    res.json({
+      items: rows,
+      total: count,
+      page: currentPage,
+      totalPages: Math.ceil(count / currentLimit),
+    });
+
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+});
+
+router.get("/revendeur", async (req, res) => {
+  const data = await Project.findAll({
+    where: { projectModele: "revendeur" },
+  });
+
+  res.json(data);
+});
 router.get("/calendar", authRequired, async (req, res) => {
   try {
     const projects = await Project.findAll({
@@ -1817,8 +1862,8 @@ router.get("/my-projects", authRequired, async (req, res) => {
       q,
     } = req.query;
 
-    const currentPage = Math.max(parseInt(page, 1000) || 1, 1);
-    const currentLimit = Math.max(parseInt(limit, 1000) || 1000, 1);
+   const currentPage = Math.max(parseInt(page, 10) || 1, 1);
+const currentLimit = Math.max(parseInt(limit, 10) || 10, 1);
     const offset = (currentPage - 1) * currentLimit;
 
     const role = (req.user?.role || "").toLowerCase();
@@ -1859,9 +1904,11 @@ router.get("/my-projects", authRequired, async (req, res) => {
       where.entreprise = { [Op.iLike]: `%${societeValue}%` };
     }
 
-    if (projectModele?.trim()) {
-      where.projectModele = projectModele.trim();
-    }
+   if (projectModele?.trim()) {
+  where.projectModele = projectModele.trim();
+} else {
+  where.projectModele = "project"; // 🔥 DEFAULT
+}
 
     /// =========================
     /// 🔥 INCLUDE COMMUN
