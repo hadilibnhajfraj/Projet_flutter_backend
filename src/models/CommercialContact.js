@@ -94,6 +94,12 @@ user_nom: {
   allowNull: true,
 },
 
+// 🔥 AJOUT
+user_nom_custom: {
+  type: DataTypes.STRING,
+  allowNull: true,
+},
+
     createdBy: {
       type: DataTypes.UUID,
       allowNull: false,

@@ -37,6 +37,30 @@ function mapStageToAction(stage) {
       return "Visite";
   }
 }
+router.get("/user-names/list", authRequired, async (req, res) => {
+  try {
+    const DEFAULT_USERS = ["najeh", "mooemen", "mayssa"];
+
+    const rows = await CommercialContact.findAll({
+      attributes: ["user_nom", "user_nom_custom"],
+    });
+
+    const dbUsers = [];
+
+    rows.forEach((r) => {
+      if (r.user_nom) dbUsers.push(r.user_nom);
+      if (r.user_nom_custom) dbUsers.push(r.user_nom_custom);
+    });
+
+    const allUsers = [...new Set([...DEFAULT_USERS, ...dbUsers])];
+
+    return res.json(allUsers);
+
+  } catch (err) {
+    console.error("❌ GET USER NAMES ERROR:", err);
+    res.status(500).json({ message: err.message });
+  }
+});
 // LIST
 router.get("/", authRequired, async (req, res) => {
   try {
@@ -44,39 +68,63 @@ router.get("/", authRequired, async (req, res) => {
 
     const { q, statut, dateRelance, user_nom, typeClient } = req.query;
 
-    /// 🔥 USER FILTER PRIORITY
-    if (user_nom && user_nom.trim()) {
-      where.user_nom = user_nom.trim();
-    } else {
+    // =============================
+    // 🔥 USER FILTER PRIORITY
+    // =============================
+  if (user_nom && user_nom.trim()) {
+  const cleanUser = user_nom.trim();
+
+  const allowedUsers = ["najeh", "mooemen", "mayssa"];
+
+  if (allowedUsers.includes(cleanUser)) {
+    where.user_nom = cleanUser;
+  } else {
+    where.user_nom_custom = cleanUser;
+  }
+}else {
       if (!["admin", "superadmin"].includes(req.user.role)) {
         where.createdBy = req.user.sub;
       }
     }
 
-    /// 🔍 SEARCH
+    // =============================
+    // 🔍 SEARCH
+    // =============================
     if (q && String(q).trim()) {
       const s = String(q).trim();
 
-      where[Op.or] = [
-        { nom: { [Op.iLike]: `%${s}%` } },
-        { prenom: { [Op.iLike]: `%${s}%` } },
-        { nomSociete: { [Op.iLike]: `%${s}%` } },
-        { telephone: { [Op.iLike]: `%${s}%` } },
-        { localisation: { [Op.iLike]: `%${s}%` } },
-        { sujetDiscussion: { [Op.iLike]: `%${s}%` } },
+      where[Op.and] = [
+        ...(where[Op.and] || []),
+        {
+          [Op.or]: [
+            { nom: { [Op.iLike]: `%${s}%` } },
+            { prenom: { [Op.iLike]: `%${s}%` } },
+            { nomSociete: { [Op.iLike]: `%${s}%` } },
+            { telephone: { [Op.iLike]: `%${s}%` } },
+            { localisation: { [Op.iLike]: `%${s}%` } },
+            { sujetDiscussion: { [Op.iLike]: `%${s}%` } },
+          ],
+        },
       ];
     }
 
-    /// 🔥 TYPE FILTER
+    // =============================
+    // 🔥 TYPE FILTER
+    // =============================
     if (typeClient && typeClient.trim()) {
       where.typeClient = typeClient.trim();
     }
 
-    /// 🔥 STATUT
+    // =============================
+    // 🔥 STATUT
+    // =============================
     if (statut && statut.trim()) {
       where.statut = statut.trim();
     }
 
+    // =============================
+    // FETCH DATA
+    // =============================
     const rows = await CommercialContact.findAll({
       where,
       order: [["createdAt", "DESC"]],
@@ -92,9 +140,19 @@ router.get("/", authRequired, async (req, res) => {
       ],
     });
 
-    console.log("🔥 WHERE:", where);
+    console.log("🔥 WHERE FINAL:", JSON.stringify(where, null, 2));
 
-    return res.json(rows);
+    const result = rows.map((row) => {
+  const r = row.toJSON();
+
+  // 🔥 FUSION USER
+  r.user_nom = r.user_nom || r.user_nom_custom;
+
+  return r;
+});
+
+return res.json(result);
+
   } catch (e) {
     console.error("❌ GET CONTACTS ERROR:", e);
     return res.status(500).json({ message: e.message || "Server error" });
@@ -293,6 +351,23 @@ router.post("/", authRequired, async (req, res) => {
 
     console.log("📦 PARSED PRODUCTS:", produits);
     console.log("🏗️ PARSED PROJECTS:", projects);
+    // =============================
+// USER NOM LOGIC 🔥
+// =============================
+const DEFAULT_USERS = ["najeh", "mooemen", "mayssa"];
+
+let user_nom = null;
+let user_nom_custom = null;
+
+if (body.user_nom) {
+  const cleanUser = String(body.user_nom).trim();
+
+  if (DEFAULT_USERS.includes(cleanUser)) {
+    user_nom = cleanUser; // ENUM
+  } else {
+    user_nom_custom = cleanUser; // STRING
+  }
+}
 
     // =============================
     // PAYLOAD CONTACT
@@ -314,7 +389,9 @@ router.post("/", authRequired, async (req, res) => {
         : null,
       pipelineStage: body.pipelineStage || "Prospect",
       dateAppel: body.dateAppel || new Date(),
-      user_nom: body.user_nom || "najeh",
+       // 🔥 IMPORTANT
+  user_nom,
+  user_nom_custom,
       createdBy: req.user.sub,
     };
 
@@ -500,9 +577,24 @@ router.put("/:id", authRequired, async (req, res) => {
     }
 
     // 🔥 NEW
-    if (body.user_nom != null) {
-      up.user_nom = body.user_nom;
-    }
+   if (body.user_nom != null) {
+  // =============================
+// 🔥 USER NOM LOGIC (FIX ENUM)
+// =============================
+const DEFAULT_USERS = ["najeh", "mooemen", "mayssa"];
+
+if (body.user_nom != null) {
+  const cleanUser = String(body.user_nom).trim();
+
+  if (DEFAULT_USERS.includes(cleanUser)) {
+    up.user_nom = cleanUser;        // ENUM
+    up.user_nom_custom = null;      // reset custom
+  } else {
+    up.user_nom = null;             // reset ENUM
+    up.user_nom_custom = cleanUser; // STRING
+  }
+}
+}
 
     await row.update(up);
 
