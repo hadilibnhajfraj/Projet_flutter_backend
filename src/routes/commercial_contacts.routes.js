@@ -390,6 +390,7 @@ if (body.user_nom) {
       pipelineStage: body.pipelineStage || "Prospect",
       dateAppel: body.dateAppel || new Date(),
        // 🔥 IMPORTANT
+       email: String(body.email || "").trim(),
   user_nom,
   user_nom_custom,
       createdBy: req.user.sub,
@@ -550,6 +551,9 @@ router.put("/:id", authRequired, async (req, res) => {
 
     if (body.telephone != null) {
       up.telephone = String(body.telephone).trim();
+    }
+    if (body.email != null) {
+      up.email = String(body.email).trim();
     }
 
     if (body.message != null) {

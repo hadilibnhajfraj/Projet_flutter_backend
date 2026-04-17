@@ -99,7 +99,13 @@ user_nom_custom: {
   type: DataTypes.STRING,
   allowNull: true,
 },
-
+email: {
+  type: DataTypes.STRING(150),
+  allowNull: true,
+  validate: {
+    isEmail: true, // ✅ validation automatique
+  },
+},
     createdBy: {
       type: DataTypes.UUID,
       allowNull: false,
