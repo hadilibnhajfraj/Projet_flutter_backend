@@ -1531,7 +1531,9 @@ router.post("/", authRequired, async (req, res) => {
 
       latitude: !isRevendeur && !isApplicateur ? lat : null,
       longitude: !isRevendeur && !isApplicateur ? lng : null,
-
+      // 🔥 AJOUT
+user_nom: body.user_nom || null,
+user_nom_custom: body.user_nom_custom || null,
       // =========================
       // 💰 NOUVEAU
       // =========================
@@ -1705,9 +1707,15 @@ router.get("/", authRequired, async (req, res) => {
         (up) => up.permission === "owner"
       );
 
-      const ownerName = ownerLink?.User
-        ? displayName(ownerLink.User)
-        : "";
+    const ownerName =
+  ownerLink?.User
+    ? displayName(ownerLink.User)
+    : (
+        json.user_nom_custom ||
+        json.user_nom ||
+        json.createdByName ||   // si tu ajoutes plus tard
+        "Inconnu"
+      );
 
       delete json.UserProjects;
 

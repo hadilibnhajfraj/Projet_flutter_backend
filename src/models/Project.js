@@ -137,6 +137,8 @@ lastRelanceAt: {
   type: DataTypes.DATE,
   allowNull: true,
 },
+user_nom: DataTypes.STRING,
+user_nom_custom: DataTypes.STRING,
     statut: {
   type: DataTypes.ENUM(
     "Identification",
