@@ -390,7 +390,9 @@ if (body.user_nom) {
       pipelineStage: body.pipelineStage || "Prospect",
       dateAppel: body.dateAppel || new Date(),
        // 🔥 IMPORTANT
-       email: String(body.email || "").trim(),
+       email: body.email && body.email.trim() !== "" 
+  ? body.email.trim() 
+  : null,
   user_nom,
   user_nom_custom,
       createdBy: req.user.sub,
