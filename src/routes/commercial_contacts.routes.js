@@ -584,20 +584,22 @@ router.put("/:id", authRequired, async (req, res) => {
 
     // 🔥 NEW
    if (body.user_nom != null) {
-  // =============================
-// 🔥 USER NOM LOGIC (FIX ENUM)
+// =============================
+// 🔥 USER NOM LOGIC (FIX)
 // =============================
 const DEFAULT_USERS = ["najeh", "mooemen", "mayssa"];
 
-if (body.user_nom != null) {
+if (body.user_nom !== undefined) {
   const cleanUser = String(body.user_nom).trim();
 
+  console.log("USER REÇU =>", cleanUser);
+
   if (DEFAULT_USERS.includes(cleanUser)) {
-    up.user_nom = cleanUser;        // ENUM
-    up.user_nom_custom = null;      // reset custom
+    up.user_nom = cleanUser;
+    up.user_nom_custom = null;
   } else {
-    up.user_nom = null;             // reset ENUM
-    up.user_nom_custom = cleanUser; // STRING
+    up.user_nom = null;
+    up.user_nom_custom = cleanUser;
   }
 }
 }
