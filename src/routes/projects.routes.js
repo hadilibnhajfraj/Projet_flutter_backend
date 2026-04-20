@@ -1870,8 +1870,8 @@ router.get("/my-projects", authRequired, async (req, res) => {
       q,
     } = req.query;
 
-   const currentPage = Math.max(parseInt(page, 10) || 1, 1);
-const currentLimit = Math.max(parseInt(limit, 10) || 10, 1);
+   const currentPage = Math.max(parseInt(page, 1000) || 1, 1);
+const currentLimit = Math.max(parseInt(limit, 1000) || 1000, 1);
     const offset = (currentPage - 1) * currentLimit;
 
     const role = (req.user?.role || "").toLowerCase();
