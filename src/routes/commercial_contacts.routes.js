@@ -103,6 +103,7 @@ router.get("/", authRequired, async (req, res) => {
             { telephone: { [Op.iLike]: `%${s}%` } },
             { localisation: { [Op.iLike]: `%${s}%` } },
             { sujetDiscussion: { [Op.iLike]: `%${s}%` } },
+            { matriculeFiscale: { [Op.iLike]: `%${s}%` } },
           ],
         },
       ];
@@ -381,6 +382,9 @@ if (body.user_nom) {
         ? String(body.localisation).trim()
         : null,
       telephone: String(body.telephone || "").trim(),
+      matriculeFiscale: body.matriculeFiscale
+  ? String(body.matriculeFiscale).trim()
+  : null,
       message: body.message ? String(body.message).trim() : null,
       statut: body.statut || "user_injoignable",
       nbAppels: Number(body.nbAppels ?? 0) || 0,
@@ -569,7 +573,10 @@ router.put("/:id", authRequired, async (req, res) => {
     if (body.nbAppels != null) {
       up.nbAppels = Number(body.nbAppels) || 0;
     }
-
+   if (body.matriculeFiscale !== undefined) {
+  const mf = String(body.matriculeFiscale).trim();
+  up.matriculeFiscale = mf === "" ? null : mf;
+}
     if (body.sujetDiscussion != null) {
       up.sujetDiscussion = String(body.sujetDiscussion).trim() || null;
     }

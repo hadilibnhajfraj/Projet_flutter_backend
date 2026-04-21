@@ -106,6 +106,10 @@ email: {
     isEmail: true, // ✅ validation automatique
   },
 },
+matriculeFiscale: {
+  type: DataTypes.STRING(50),
+  allowNull: true, // ou false si obligatoire
+},
     createdBy: {
       type: DataTypes.UUID,
       allowNull: false,
