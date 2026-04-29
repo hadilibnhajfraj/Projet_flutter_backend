@@ -2523,11 +2523,24 @@ if (!isChantier) {
     // =========================
     // 🧠 LAST ACTION
     // =========================
-    const lastAction = await ProjectAction.findOne({
-      where: { projectId: item.id },
-      order: [["dateAction", "DESC"]],
-    });
+   const lastAction = await ProjectAction.findOne({
+  where: { projectId: item.id },
+  order: [["dateAction", "DESC"]],
+  include: [
+    {
+      model: ProjectReminder,
+      as: "reminders"
+    }
+  ]
+});
+const nextAction = lastAction
+  ? getNextAction(lastAction.typeAction)
+  : null;
 
+const dateRelance =
+  lastAction?.reminders?.[0]?.dateRelance ||
+  lastAction?.dateRelance ||
+  null;
     return res.json({
       ...json,
       permission,
@@ -2540,7 +2553,8 @@ if (!isChantier) {
       dateVisite: lastAction?.dateAction ?? null,
       nextAction: lastAction?.typeAction ?? null,
       commentaireAction: lastAction?.commentaire ?? null,
-
+        nextAction,
+  dateRelance,
       color: getProjectColor(json.pipelineStage),
     });
 
@@ -3710,6 +3724,22 @@ router.get("/kpi/projects-per-user-summary", authRequired, async (req, res) => {
     console.error("KPI_PROJECTS_PER_USER_SUMMARY_ERROR:", e);
     return res.status(500).json({ message: e.message || "Server error" });
   }
+});
+router.get("/reminders/upcoming", authRequired, async (req, res) => {
+
+  const today = new Date();
+
+  const reminders = await ProjectReminder.findAll({
+    where: {
+      dateRelance: {
+        [Op.gte]: today
+      }
+    },
+    include: [Project]
+  });
+
+  res.json(reminders);
+
 });
 exports.updatePipeline = async (req, res) => {
   try {
