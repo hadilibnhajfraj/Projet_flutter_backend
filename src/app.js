@@ -21,6 +21,7 @@ checkProjects(); // 🔥 test direct au démarrage
 const commercialRoutes = require("./routes/commercial_contacts.routes");
 const clientRoutes = require("./routes/client.routes");
 const projectActionRoutes = require("./routes/projectActions.routes");
+require("./cron/followup.job");
 const app = express();
 
 app.use(helmet());

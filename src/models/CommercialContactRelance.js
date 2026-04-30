@@ -36,6 +36,12 @@ const CommercialContactRelance = sequelize.define(
       defaultValue: "planifiee",
     },
 
+    // 🔥 IMPORTANT
+    emailSent: {
+      type: DataTypes.BOOLEAN,
+      defaultValue: false,
+    },
+
     createdBy: {
       type: DataTypes.UUID,
       allowNull: false,
