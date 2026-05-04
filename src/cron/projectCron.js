@@ -1,7 +1,7 @@
 const cron = require("node-cron");
 
 const { Project, User, UserProject } = require("../models");
-
+const Notification = require("../models/Notification");
 const {
   sendRelanceIngenieurEmail,
   sendRelanceEntrepriseEmail,
@@ -127,71 +127,231 @@ async function checkProjects() {
       );
 
       const email = owner?.User?.email;
-      if (!email) continue;
+      const userId = owner?.User?.id;
+
+      if (!email || !userId) continue;
 
       const missingFields = getMissingFields(p);
 
       const createdAt = new Date(p.createdAt);
       const diffDays = Math.floor((now - createdAt) / DAY_MS);
 
-      // =========================
-      // 🚫 PAS DE SPAM
-      // =========================
       const last = p.lastRelanceAt ? new Date(p.lastRelanceAt) : null;
 
       const alreadyToday =
         last && last.toDateString() === now.toDateString();
 
       // =========================
-      // 📧 RELANCE INTELLIGENTE
+      // 📧 RELANCE
       // =========================
       if (missingFields.length > 0 && !alreadyToday && diffDays < 7) {
 
         console.log(
-          `📧 RELANCE ${p.projectModele?.toUpperCase()} | ${p.nomProjet} | Missing:`,
-          missingFields
+          `📧 RELANCE ${p.projectModele?.toUpperCase()} | ${p.nomProjet}`
         );
 
-        // 🔵 PROJECT
-        if (missingFields.includes("ingenieur")) {
-          await sendRelanceIngenieurEmail(email, p);
-        }
+        let type = "PROJECT_RELANCE";
+        let message = `Relance pour projet ${p.nomProjet}`;
 
-        // 🟡 REVENDEUR
-        if (
-          missingFields.includes("comptoir") ||
-          missingFields.includes("tel_comptoir")
-        ) {
-          await sendRelanceEntrepriseEmail(email, p);
-        }
+        try {
 
-        // 🟢 APPLICATEUR
-        if (
-          missingFields.includes("dallagiste") ||
-          missingFields.includes("tel_dallagiste")
-        ) {
-          await sendRelanceEntrepriseEmail(email, p);
-        }
+          // 🔵 PROJECT
+          if (missingFields.includes("ingenieur")) {
+            await sendRelanceIngenieurEmail(email, p);
+            message = `Projet ${p.nomProjet} sans ingénieur`;
+          }
 
-        // 🔴 ENTREPRISE
-        if (missingFields.includes("entreprise")) {
-          await sendRelanceEntrepriseEmail(email, p);
-        }
+          // 🟡 REVENDEUR
+          if (
+            missingFields.includes("comptoir") ||
+            missingFields.includes("tel_comptoir")
+          ) {
+            await sendRelanceEntrepriseEmail(email, p);
+            message = `Informations comptoir manquantes (${p.nomProjet})`;
+          }
 
-        // 🟠 BUREAU CONTROLE
-        if (missingFields.includes("bureau")) {
-          await sendRelanceBureauControleEmail(email, p);
-        }
+          // 🟢 APPLICATEUR
+          if (
+            missingFields.includes("dallagiste") ||
+            missingFields.includes("tel_dallagiste")
+          ) {
+            await sendRelanceEntrepriseEmail(email, p);
+            message = `Informations dallagiste manquantes (${p.nomProjet})`;
+          }
 
-        // 🔥 SAVE LAST RELANCE
-        p.lastRelanceAt = now;
-        await p.save();
+          // 🔴 ENTREPRISE
+          if (missingFields.includes("entreprise")) {
+            await sendRelanceEntrepriseEmail(email, p);
+            message = `Entreprise manquante (${p.nomProjet})`;
+          }
+
+          // 🟠 BUREAU
+          if (missingFields.includes("bureau")) {
+            await sendRelanceBureauControleEmail(email, p);
+            message = `Bureau de contrôle manquant (${p.nomProjet})`;
+          }
+
+          // =========================
+          // 🔔 NOTIFICATION
+          // =========================
+          await Notification.create({
+            userId: userId,
+            type: "PROJECT_RELANCE",
+            title: "Relance projet",
+            message: message,
+            projectId: p.id,
+            isRead: false,
+          });
+
+          // =========================
+          // 💾 SAVE
+          // =========================
+          p.lastRelanceAt = now;
+          await p.save();
+
+        } catch (err) {
+          console.error("❌ EMAIL ERROR:", err.message);
+
+          await Notification.create({
+            userId: userId,
+            type: "PROJECT_ERROR",
+            title: "Erreur relance",
+            message: `Erreur envoi pour ${p.nomProjet}`,
+            projectId: p.id,
+            isRead: false,
+          });
+        }
       }
     }
 
-    // =========================
-    // 📦 ARCHIVAGE
-    // =========================
+    await archiveProjects(projects);
+
+    console.log("✅ CRON END");
+
+  } catch (e) {
+    console.error("❌ CRON ERROR:", e.message);
+  }
+}async function checkProjects() {
+  try {
+    console.log("⏰ CRON START");
+
+    const projects = await Project.findAll({
+      where: { isArchived: false },
+      include: [
+        {
+          model: UserProject,
+          include: [User],
+        },
+      ],
+    });
+
+    console.log("📁 Projects:", projects.length);
+
+    const now = new Date();
+
+    for (const p of projects) {
+      const owner = p.UserProjects?.find(
+        (u) => u.permission === "owner"
+      );
+
+      const email = owner?.User?.email;
+      const userId = owner?.User?.id;
+
+      if (!email || !userId) continue;
+
+      const missingFields = getMissingFields(p);
+
+      const createdAt = new Date(p.createdAt);
+      const diffDays = Math.floor((now - createdAt) / DAY_MS);
+
+      const last = p.lastRelanceAt ? new Date(p.lastRelanceAt) : null;
+
+      const alreadyToday =
+        last && last.toDateString() === now.toDateString();
+
+      // =========================
+      // 📧 RELANCE
+      // =========================
+      if (missingFields.length > 0 && !alreadyToday && diffDays < 7) {
+
+        console.log(
+          `📧 RELANCE ${p.projectModele?.toUpperCase()} | ${p.nomProjet}`
+        );
+
+        let type = "PROJECT_RELANCE";
+        let message = `Relance pour projet ${p.nomProjet}`;
+
+        try {
+
+          // 🔵 PROJECT
+          if (missingFields.includes("ingenieur")) {
+            await sendRelanceIngenieurEmail(email, p);
+            message = `Projet ${p.nomProjet} sans ingénieur`;
+          }
+
+          // 🟡 REVENDEUR
+          if (
+            missingFields.includes("comptoir") ||
+            missingFields.includes("tel_comptoir")
+          ) {
+            await sendRelanceEntrepriseEmail(email, p);
+            message = `Informations comptoir manquantes (${p.nomProjet})`;
+          }
+
+          // 🟢 APPLICATEUR
+          if (
+            missingFields.includes("dallagiste") ||
+            missingFields.includes("tel_dallagiste")
+          ) {
+            await sendRelanceEntrepriseEmail(email, p);
+            message = `Informations dallagiste manquantes (${p.nomProjet})`;
+          }
+
+          // 🔴 ENTREPRISE
+          if (missingFields.includes("entreprise")) {
+            await sendRelanceEntrepriseEmail(email, p);
+            message = `Entreprise manquante (${p.nomProjet})`;
+          }
+
+          // 🟠 BUREAU
+          if (missingFields.includes("bureau")) {
+            await sendRelanceBureauControleEmail(email, p);
+            message = `Bureau de contrôle manquant (${p.nomProjet})`;
+          }
+
+          // =========================
+          // 🔔 NOTIFICATION
+          // =========================
+          await Notification.create({
+            userId: userId,
+            type: "PROJECT_RELANCE",
+            title: "Relance projet",
+            message: message,
+            projectId: p.id,
+            isRead: false,
+          });
+
+          // =========================
+          // 💾 SAVE
+          // =========================
+          p.lastRelanceAt = now;
+          await p.save();
+
+        } catch (err) {
+          console.error("❌ EMAIL ERROR:", err.message);
+
+          await Notification.create({
+            userId: userId,
+            type: "PROJECT_ERROR",
+            title: "Erreur relance",
+            message: `Erreur envoi pour ${p.nomProjet}`,
+            projectId: p.id,
+            isRead: false,
+          });
+        }
+      }
+    }
+
     await archiveProjects(projects);
 
     console.log("✅ CRON END");

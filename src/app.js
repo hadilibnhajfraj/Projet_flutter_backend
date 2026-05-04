@@ -21,6 +21,7 @@ checkProjects(); // 🔥 test direct au démarrage
 const commercialRoutes = require("./routes/commercial_contacts.routes");
 const clientRoutes = require("./routes/client.routes");
 const projectActionRoutes = require("./routes/projectActions.routes");
+const notificationRoutes = require("./routes/notifications.routes");
 require("./cron/followup.job");
 const app = express();
 
@@ -41,6 +42,7 @@ app.use("/projects", projectRoutes);
 app.use("/auth", authRoutes);
 app.use("/admin", adminRoutes); // ✅ NEW
 app.use("/tasks", taskRoutes);
+app.use("/notifications", notificationRoutes);
 app.use("/utils", require("./routes/geocode.routes"));
 app.use("/users", require("./routes/users.routes"));
 app.use("/utils", require("./routes/utils.routes"));

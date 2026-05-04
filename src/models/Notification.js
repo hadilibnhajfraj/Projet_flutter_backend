@@ -4,23 +4,71 @@ const { sequelize } = require("../db");
 const Notification = sequelize.define(
   "Notification",
   {
-    id: { type: DataTypes.UUID, defaultValue: DataTypes.UUIDV4, primaryKey: true },
-
-    userId: { type: DataTypes.UUID, allowNull: false },
-
-    type: {
-      type: DataTypes.ENUM("PROJECT_COMMENT"),
-      allowNull: false,
-      defaultValue: "PROJECT_COMMENT",
+    id: {
+      type: DataTypes.UUID,
+      defaultValue: DataTypes.UUIDV4,
+      primaryKey: true,
     },
 
-    title: { type: DataTypes.STRING(200), allowNull: false },
-    message: { type: DataTypes.STRING(500), allowNull: false },
+    userId: {
+      type: DataTypes.UUID,
+      allowNull: false,
+    },
 
-    projectId: { type: DataTypes.UUID, allowNull: true },
-    commentId: { type: DataTypes.UUID, allowNull: true },
+    // 🔥 TYPE GLOBAL (TRÈS IMPORTANT)
+    type: {
+      type: DataTypes.ENUM(
+        "PROJECT_COMMENT",
+        "PROJECT_UPDATE",
+        "FOLLOWUP",
+        "FOLLOWUP_MISSING",
+        "CONTACT_CREATED"
+      ),
+      allowNull: false,
+    },
 
-    isRead: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+    title: {
+      type: DataTypes.STRING(200),
+      allowNull: false,
+    },
+
+    message: {
+      type: DataTypes.STRING(500),
+      allowNull: false,
+    },
+
+    // =========================
+    // 🔥 RELATIONS FLEXIBLES
+    // =========================
+
+    projectId: {
+      type: DataTypes.UUID,
+      allowNull: true,
+    },
+
+    commentId: {
+      type: DataTypes.UUID,
+      allowNull: true,
+    },
+
+    commercialContactId: {
+      type: DataTypes.UUID,
+      allowNull: true,
+    },
+
+    relanceId: {
+      type: DataTypes.UUID,
+      allowNull: true,
+    },
+
+    // =========================
+    // 🔥 STATUS
+    // =========================
+    isRead: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false,
+    },
   },
   {
     tableName: "notifications",
@@ -29,6 +77,8 @@ const Notification = sequelize.define(
       { fields: ["userId"] },
       { fields: ["isRead"] },
       { fields: ["projectId"] },
+      { fields: ["commercialContactId"] },
+      { fields: ["relanceId"] },
     ],
   }
 );
