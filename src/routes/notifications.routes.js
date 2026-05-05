@@ -1,7 +1,7 @@
 const router = require("express").Router();
 const Notification = require("../models/Notification");
 const { authRequired } = require("../middleware/auth.middleware");
-
+const emailService = require("../services/emailService");
 // =========================
 // 🔥 GET MY NOTIFICATIONS
 // =========================
@@ -28,7 +28,49 @@ router.get("/", authRequired, async (req, res) => {
     res.status(500).json({ message: "Server error" });
   }
 });
+// =========================
+// 🔥 SEND EMAIL + CREATE NOTIFICATION
+// =========================
+router.post("/send-email", async (req, res) => {
+  try {
+    const {
+      toUserId,
+      emailTo,
+      fromName,
+      subject,
+      message,
+      type = "CONTACT_CREATED",
+    } = req.body;
 
+    // 1. envoyer email
+    await emailService.send({
+      to: emailTo,
+      subject,
+      text: message,
+    });
+
+    // 2. créer notification
+    const notification = await Notification.create({
+      userId: toUserId,
+      type,
+      title: subject || "Nouvel email reçu",
+      message: `${fromName ? fromName + " : " : ""}${message}`,
+      isRead: false,
+    });
+
+    return res.json({
+      success: true,
+      notification,
+    });
+
+  } catch (error) {
+    console.error("❌ SEND EMAIL + NOTIFICATION ERROR:", error.message);
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+    });
+  }
+});
 // =========================
 // 🔥 MARK ALL READ
 // =========================
