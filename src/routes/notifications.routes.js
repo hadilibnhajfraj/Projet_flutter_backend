@@ -7,12 +7,17 @@ const emailService = require("../services/emailService");
 // =========================
 router.get("/", authRequired, async (req, res) => {
   try {
-    const userId = req.user.sub; // ✅ FIX ICI
+    const userId = req.user.sub;
 
-    const items = await Notification.findAll({
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const offset = (page - 1) * limit;
+
+    const { count, rows } = await Notification.findAndCountAll({
       where: { userId },
       order: [["createdAt", "DESC"]],
-      limit: 50,
+      limit,
+      offset,
     });
 
     const unreadCount = await Notification.count({
@@ -20,9 +25,13 @@ router.get("/", authRequired, async (req, res) => {
     });
 
     res.json({
-      items,
+      items: rows,
       unreadCount,
+      total: count,
+      page,
+      totalPages: Math.ceil(count / limit),
     });
+
   } catch (err) {
     console.error("❌ GET NOTIFICATIONS ERROR:", err.message);
     res.status(500).json({ message: "Server error" });
