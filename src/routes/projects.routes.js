@@ -11,6 +11,7 @@ const ProjectDevis = require("../models/ProjectDevis"); // adapte selon ton expo
 const ProjectBonDeCommande = require("../models/ProjectBonDeCommande");
 const ProjectAction = require("../models/ProjectAction");
 const ProjectReminder = require("../models/ProjectReminder");
+const CommercialContact = require("../models/CommercialContact");
 const router = express.Router();
 const uploads = require("../middleware/uploads");
 
@@ -1099,6 +1100,87 @@ router.get("/dashboard/kpi", authRequired, async (req, res) => {
     return res.status(500).json({
       message: e.message || "Server error",
     });
+  }
+});
+router.get("/kpis/overview", authRequired, async (req, res) => {
+  try {
+    const { role, sub } = req.user;
+    const isAdmin = ["admin", "superadmin"].includes(role);
+
+    // =========================
+    // 📊 TOTAL PROJECTS
+    // =========================
+    const totalProjects = isAdmin
+      ? await Project.count()
+      : await Project.count({
+          include: [
+            {
+              model: UserProject,
+              required: true,
+              where: { userId: sub },
+            },
+          ],
+        });
+
+    // =========================
+    // 📊 TOTAL CONTACTS
+    // =========================
+    const totalContacts = isAdmin
+      ? await CommercialContact.count()
+      : await CommercialContact.count({
+          where: { createdBy: sub },
+        });
+
+    // =========================
+    // 📊 PROJECTS BY STATUS (FIX GROUP BY)
+    // =========================
+    const projectsByStatus = await sequelize.query(
+      `
+      SELECT p."validationStatut", COUNT(*) AS count
+      FROM projects p
+      INNER JOIN user_projects up ON up."projectId" = p.id
+      WHERE (:isAdmin = true OR up."userId" = :userId)
+      GROUP BY p."validationStatut"
+      `,
+      {
+        replacements: {
+          isAdmin,
+          userId: sub,
+        },
+        type: sequelize.QueryTypes.SELECT,
+      }
+    );
+
+    // =========================
+    // 📊 CONTACTS BY STATUS
+    // =========================
+    const contactsByStatus = await CommercialContact.findAll({
+      where: isAdmin ? {} : { createdBy: sub },
+      attributes: [
+        "statut",
+        [sequelize.fn("COUNT", sequelize.col("id")), "count"],
+      ],
+      group: ["statut"],
+      raw: true,
+    });
+
+    // =========================
+    // 📦 RESPONSE KPI
+    // =========================
+    return res.json({
+      totals: {
+        projects: totalProjects,
+        commercialContacts: totalContacts,
+        global: totalProjects + totalContacts,
+      },
+      breakdown: {
+        projectsByStatus,
+        contactsByStatus,
+      },
+    });
+  } catch (e) {
+    console.error("KPI_ERROR:", e);
+    return res.status(500).json({ message: e.message });
   }
 });
 // ---------------- LIST ----------------
