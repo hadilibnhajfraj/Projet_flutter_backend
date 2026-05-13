@@ -31,10 +31,18 @@ app.use(cookieParser());
 
 app.use(
   cors({
-    origin: (origin, cb) => cb(null, true), // ✅ simple pour dev
+    origin: [
+      "https://www.crmprobar.com",
+      "https://crmprobar.com",
+      "https://api.crmprobar.com"
+    ],
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     credentials: true,
+    allowedHeaders: ["Content-Type", "Authorization"]
   })
 );
+
+app.options("*", cors());
 
 app.get("/", (req, res) => res.json({ ok: true }));
 
