@@ -31,6 +31,15 @@ const Project = sequelize.define(
   allowNull: true 
 },
 
+engineerId: {
+  type: DataTypes.UUID,
+  allowNull: true,
+  references: {
+    model: "engineers",
+    key: "id",
+  },
+},
+
 telephoneIngenieur: { 
   type: DataTypes.STRING(30), 
   allowNull: true 
@@ -44,6 +53,14 @@ telephoneIngenieur: {
     },
 
     architecte: { type: DataTypes.STRING(200), allowNull: true },
+    architectId: {
+      type: DataTypes.UUID,
+      allowNull: true,
+      references: {
+        model: "architects",
+        key: "id",
+      },
+    },
     telephoneArchitecte: { type: DataTypes.STRING(30), allowNull: true },
 
     // ✅ NOUVEAU EMAIL ARCHITECTE
@@ -110,6 +127,15 @@ serviceTechnique: {
   allowNull: true,
 },
     entreprise: { type: DataTypes.STRING(200), allowNull: true },
+
+    companyId: {
+      type: DataTypes.UUID,
+      allowNull: true,
+      references: {
+        model: "companies",
+        key: "id",
+      },
+    },
 
     promoteur: { type: DataTypes.STRING(200), allowNull: true },
 

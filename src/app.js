@@ -20,8 +20,13 @@ const metabaseRoutes = require("./routes/metabase");
 checkProjects(); // 🔥 test direct au démarrage
 const commercialRoutes = require("./routes/commercial_contacts.routes");
 const clientRoutes = require("./routes/client.routes");
+const companyRoutes = require("./routes/company.routes");
+const engineerRoutes = require("./routes/engineer.routes");
+const architectRoutes = require("./routes/architect.routes");
 const projectActionRoutes = require("./routes/projectActions.routes");
 const notificationRoutes = require("./routes/notifications.routes");
+const { syncCompaniesFromProjects } = require("./services/companySync.service");
+const { syncPeopleFromProjects } = require("./services/personSync.service");
 require("./cron/followup.job");
 const app = express();
 
@@ -35,6 +40,7 @@ app.use(
       "https://www.crmprobar.com",
       "https://crmprobar.com",
       "https://api.crmprobar.com"
+      ,"http://localhost:57745"
     ],
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     credentials: true,
@@ -42,7 +48,6 @@ app.use(
   })
 );
 
-app.options("*", cors());
 
 app.get("/", (req, res) => res.json({ ok: true }));
 
@@ -57,6 +62,9 @@ app.use("/utils", require("./routes/utils.routes"));
 app.use("/uploads", express.static("uploads"));
 app.use("/users", userProfileRoutes);
 app.use("/api/clients", clientRoutes);
+app.use("/companies", companyRoutes);
+app.use("/engineers", engineerRoutes);
+app.use("/architects", architectRoutes);
 app.use("/commercial-contacts", commercialRoutes);
 app.use("/projetactions", projectActionRoutes);
 app.use("/metabase", metabaseRoutes);
@@ -73,6 +81,8 @@ async function start() {
 
     // ✅ DEV ONLY: ajoute role + crée user_projects automatiquement
     await sequelize.sync({ alter: true });
+    await syncCompaniesFromProjects();
+    await syncPeopleFromProjects();
 
     const port = Number(process.env.PORT || 4000);
     app.listen(port, () => console.log(`✅ API running on http://localhost:${port}`));

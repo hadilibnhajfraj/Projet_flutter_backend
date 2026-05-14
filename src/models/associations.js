@@ -2,6 +2,9 @@
 
 const User = require("./User");
 const Project = require("./Project");
+const Company = require("./Company");
+const Engineer = require("./Engineer");
+const Architect = require("./Architect");
 const UserProject = require("./UserProject");
 const ProjectComment = require("./ProjectComment");
 const UserProfile = require("./UserProfile");
@@ -22,6 +25,40 @@ const CommercialContactReminder = require("./CommercialContactReminder");
 
 
 const CommercialProject = require("./CommercialProject");
+// ======================================================
+// COMPANY <-> PROJECT
+// ======================================================
+
+Project.belongsTo(Company, {
+  foreignKey: "companyId",
+  as: "company",
+});
+
+Company.hasMany(Project, {
+  foreignKey: "companyId",
+  as: "projects",
+});
+
+Project.belongsTo(Engineer, {
+  foreignKey: "engineerId",
+  as: "engineer",
+});
+
+Engineer.hasMany(Project, {
+  foreignKey: "engineerId",
+  as: "projects",
+});
+
+Project.belongsTo(Architect, {
+  foreignKey: "architectId",
+  as: "architect",
+});
+
+Architect.hasMany(Project, {
+  foreignKey: "architectId",
+  as: "projects",
+});
+
 // ======================================================
 // USER <-> PROJECT
 // ======================================================
@@ -319,6 +356,9 @@ CommercialProject.belongsTo(CommercialContact, {
 module.exports = {
   User,
   Project,
+  Company,
+  Engineer,
+  Architect,
   UserProject,
   ProjectComment,
   UserProfile,

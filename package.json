@@ -5,7 +5,12 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "dev": "nodemon src/app.js",
-    "start": "node src/app.js"
+    "start": "node src/app.js",
+    "sync:companies": "node scripts/syncCompanies.js",
+    "sync:engineers": "node scripts/syncEngineers.js",
+    "sync:architects": "node scripts/syncArchitects.js",
+    "sync:people": "node scripts/syncPeople.js",
+    "link:companies": "node src/scripts/linkProjectsToCompanies.js"
   },
   "keywords": [],
   "author": "",

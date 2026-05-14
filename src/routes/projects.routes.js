@@ -12,6 +12,11 @@ const ProjectBonDeCommande = require("../models/ProjectBonDeCommande");
 const ProjectAction = require("../models/ProjectAction");
 const ProjectReminder = require("../models/ProjectReminder");
 const CommercialContact = require("../models/CommercialContact");
+const { resolveCompanyForProject } = require("../services/company.service");
+const {
+  resolveEngineerForProject,
+  resolveArchitectForProject,
+} = require("../services/person.service");
 const router = express.Router();
 const uploads = require("../middleware/uploads");
 
@@ -109,6 +114,7 @@ function normalizePayload(body = {}) {
 
   return b;
 }
+
 const ACTION_TO_STAGE = {
   "Visite": "Prospect",
   "Plan technique": "Prospect",        // ✅ IMPORTANT
@@ -1525,6 +1531,25 @@ router.post("/", authRequired, async (req, res) => {
     // =========================
     const deadline = new Date();
     deadline.setDate(deadline.getDate() + 7);
+    const companySelection = !isRevendeur
+      ? await resolveCompanyForProject(body)
+      : { companyId: null, entreprise: null };
+    const engineerSelection = !isRevendeur && !isApplicateur
+      ? await resolveEngineerForProject(body)
+      : {
+          engineerId: null,
+          ingenieurResponsable: null,
+          telephoneIngenieur: null,
+          emailIngenieur: null,
+        };
+    const architectSelection = !isRevendeur
+      ? await resolveArchitectForProject(body)
+      : {
+          architectId: null,
+          architecte: null,
+          telephoneArchitecte: null,
+          emailArchitecte: null,
+        };
 
     // =========================
     // 🚀 CREATE
@@ -1587,26 +1612,30 @@ router.post("/", authRequired, async (req, res) => {
         : null,
 
       ingenieurResponsable: !isRevendeur && !isApplicateur
-        ? clean(body.ingenieurResponsable)
+        ? engineerSelection.ingenieurResponsable
         : null,
 
+      engineerId: engineerSelection.engineerId,
+
       telephoneIngenieur: !isRevendeur && !isApplicateur
-        ? clean(body.telephoneIngenieur)
+        ? clean(engineerSelection.telephoneIngenieur)
         : null,
 
       emailIngenieur: !isRevendeur
-        ? clean(body.emailIngenieur)
+        ? clean(engineerSelection.emailIngenieur)
         : null,
 
-      architecte: !isRevendeur ? clean(body.architecte) : null,
+      architecte: !isRevendeur ? architectSelection.architecte : null,
+      architectId: architectSelection.architectId,
       telephoneArchitecte: !isRevendeur
-        ? clean(body.telephoneArchitecte)
+        ? clean(architectSelection.telephoneArchitecte)
         : null,
       emailArchitecte: !isRevendeur
-        ? clean(body.emailArchitecte)
+        ? clean(architectSelection.emailArchitecte)
         : null,
 
-      entreprise: !isRevendeur ? clean(body.entreprise) : null,
+      companyId: companySelection.companyId,
+      entreprise: companySelection.entreprise,
       promoteur: !isRevendeur ? clean(body.promoteur) : null,
       bureauEtude: !isRevendeur ? clean(body.bureauEtude) : null,
       bureauControle: !isRevendeur ? clean(body.bureauControle) : null,
@@ -1672,7 +1701,7 @@ user_nom_custom: body.user_nom_custom || null,
   } catch (e) {
     console.error("PROJECT_CREATE_ERROR:", e);
 
-    return res.status(500).json({
+    return res.status(e.status || 500).json({
       message: e.message || "Server error",
     });
   }
@@ -2704,6 +2733,30 @@ router.put("/:id", authRequired, async (req, res) => {
     const isRevendeur = mode === "revendeur";
     const isApplicateur = mode === "applicateur";
     const isChantier = !isRevendeur && !isApplicateur;
+    const hasCompanyInput =
+      body.companyId !== undefined ||
+      body.custom_company_name !== undefined ||
+      body.customCompanyName !== undefined ||
+      body.entrepriseCustom !== undefined ||
+      body.customEntreprise !== undefined ||
+      body.otherEntreprise !== undefined ||
+      body.autreEntreprise !== undefined ||
+      body.companyCustomName !== undefined ||
+      body.entreprise !== undefined;
+    const hasEngineerInput =
+      body.engineerId !== undefined ||
+      body.custom_engineer_name !== undefined ||
+      body.customEngineerName !== undefined ||
+      body.engineerCustomName !== undefined ||
+      body.ingenieurResponsableCustom !== undefined ||
+      body.ingenieurResponsable !== undefined;
+    const hasArchitectInput =
+      body.architectId !== undefined ||
+      body.custom_architect_name !== undefined ||
+      body.customArchitectName !== undefined ||
+      body.architectCustomName !== undefined ||
+      body.architecteCustom !== undefined ||
+      body.architecte !== undefined;
 
     const fields = [
       "nomProjet",
@@ -2712,9 +2765,11 @@ router.put("/:id", authRequired, async (req, res) => {
       "statut",
       "typeAdresseChantier",
       "ingenieurResponsable",
+      "engineerId",
       "telephoneIngenieur",
       "emailIngenieur",
       "architecte",
+      "architectId",
       "telephoneArchitecte",
       "emailArchitecte",
       "entreprise",
@@ -2825,7 +2880,37 @@ router.put("/:id", authRequired, async (req, res) => {
       up.latitude = null;
       up.longitude = null;
       up.ingenieurResponsable = null;
+      up.engineerId = null;
       up.telephoneIngenieur = null;
+      up.emailIngenieur = null;
+      up.architecte = null;
+      up.architectId = null;
+      up.telephoneArchitecte = null;
+      up.emailArchitecte = null;
+      up.companyId = null;
+      up.entreprise = null;
+    }
+
+    if (isChantier && hasCompanyInput) {
+      const companySelection = await resolveCompanyForProject(body);
+      up.companyId = companySelection.companyId;
+      up.entreprise = companySelection.entreprise;
+    }
+
+    if (isChantier && hasEngineerInput) {
+      const engineerSelection = await resolveEngineerForProject(body);
+      up.engineerId = engineerSelection.engineerId;
+      up.ingenieurResponsable = engineerSelection.ingenieurResponsable;
+      up.telephoneIngenieur = clean(engineerSelection.telephoneIngenieur);
+      up.emailIngenieur = clean(engineerSelection.emailIngenieur);
+    }
+
+    if (!isRevendeur && hasArchitectInput) {
+      const architectSelection = await resolveArchitectForProject(body);
+      up.architectId = architectSelection.architectId;
+      up.architecte = architectSelection.architecte;
+      up.telephoneArchitecte = clean(architectSelection.telephoneArchitecte);
+      up.emailArchitecte = clean(architectSelection.emailArchitecte);
     }
 
     // =========================
@@ -2839,6 +2924,7 @@ router.put("/:id", authRequired, async (req, res) => {
     const newStage = body.pipelineStage;
 
     await item.update(up);
+    await item.reload();
 
     // =========================
     // AUTO ACTION
@@ -2903,7 +2989,7 @@ router.put("/:id", authRequired, async (req, res) => {
 
   } catch (e) {
     console.error("PROJECT_UPDATE_ERROR:", e);
-    return res.status(500).json({
+    return res.status(e.status || 500).json({
       message: e.message || "Server error",
     });
   }
