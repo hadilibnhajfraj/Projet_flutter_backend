@@ -17,6 +17,7 @@ const {
   resolveEngineerForProject,
   resolveArchitectForProject,
 } = require("../services/person.service");
+const LocationService = require("../services/location.service");
 const router = express.Router();
 const uploads = require("../middleware/uploads");
 
@@ -72,14 +73,12 @@ function isUUID(v) {
 function normalizePayload(body = {}) {
   const b = { ...body };
 
-  // support: location:{lat,lng}
-  if (b.location && (b.latitude === undefined || b.longitude === undefined)) {
-    if (b.location.lat !== undefined) b.latitude = b.location.lat;
-    if (b.location.lng !== undefined) b.longitude = b.location.lng;
+  // Use LocationService for coordinate normalization
+  const coords = LocationService.normalizeCoordinates(b);
+  if (coords.valid) {
+    b.latitude = coords.lat;
+    b.longitude = coords.lng;
   }
-
-  if (b.lng !== undefined && b.longitude === undefined) b.longitude = b.lng;
-  if (b.lat !== undefined && b.latitude === undefined) b.latitude = b.lat;
 
   const stringFields = [
     "nomProjet",
@@ -146,35 +145,12 @@ function validatePayload(body, isUpdate = false) {
   // 🔥 SEUL PROJECT = chantier
   const isChantier = !isRevendeur && !isApplicateur;
 
-  // =========================
-  // 📍 GEO
-  // =========================
-  const lat =
-    body?.location?.lat ??
-    body?.location?.latitude ??
-    body?.lat ??
-    body?.latitude;
-
-  const lng =
-    body?.location?.lng ??
-    body?.location?.lon ??
-    body?.location?.longitude ??
-    body?.lng ??
-    body?.longitude;
-
-  // =========================
-  // BASE REQUIRED
-  // =========================
   if (!isUpdate) {
-
-    // 🔥 NOM PROJET
     if (!body.nomProjet || reqStr(body.nomProjet) === "") {
       errors.push("nomProjet est obligatoire");
     }
 
-    // 🔥 UNIQUEMENT PROJECT
     if (isChantier) {
-
       if (!body.dateDemarrage || reqStr(body.dateDemarrage) === "") {
         errors.push("dateDemarrage est obligatoire");
       }
@@ -182,12 +158,14 @@ function validatePayload(body, isUpdate = false) {
       if (!body.typeAdresseChantier || reqStr(body.typeAdresseChantier) === "") {
         errors.push("typeAdresseChantier est obligatoire");
       }
-
-      if (lat == null || lng == null) {
-        errors.push("latitude/longitude est obligatoire");
-      }
     }
   }
+
+  // =========================
+  // 📍 GEO VALIDATION
+  // =========================
+  const coordinateErrors = LocationService.validateCoordinateInput(body, isChantier && !isUpdate);
+  errors.push(...coordinateErrors);
 
   // =========================
   // MODE SPECIFIC
@@ -278,18 +256,6 @@ function validatePayload(body, isUpdate = false) {
   // =========================
   if (body.emailDallagiste && !isValidEmail(body.emailDallagiste)) {
     errors.push("emailDallagiste invalide");
-  }
-
-  // =========================
-  // GEO VALIDATION
-  // =========================
-  if (
-    isChantier &&
-    lat != null &&
-    lng != null &&
-    !isValidLatLng(lat, lng)
-  ) {
-    errors.push("latitude/longitude invalides");
   }
 
   // =========================
@@ -1663,8 +1629,12 @@ user_nom_custom: body.user_nom_custom || null,
       validationStatut: body.validationStatut ?? "Non validé",
 
       pipelineStage: body.pipelineStage ?? "Prospect",
-      localisationCommentaire : clean(body.localisationCommentaire),
-      
+      localisationCommentaire: LocationService.generateLocalizationComment(
+        !isRevendeur && !isApplicateur ? lat : null,
+        !isRevendeur && !isApplicateur ? lng : null,
+        clean(body.localisationCommentaire)
+      ),
+
       dateLimiteIngenieur: deadline,
       isArchived: false,
     });
@@ -2891,6 +2861,17 @@ router.put("/:id", authRequired, async (req, res) => {
       up.entreprise = null;
     }
 
+    // =========================
+    // 📍 AUTO-GENERATE LOCALISATION COMMENTAIRE
+    // =========================
+    if (isChantier && (body.latitude !== undefined || body.longitude !== undefined || body.localisationCommentaire !== undefined)) {
+      const finalLat = body.latitude !== undefined ? body.latitude : item.latitude;
+      const finalLng = body.longitude !== undefined ? body.longitude : item.longitude;
+      const finalComment = body.localisationCommentaire !== undefined ? clean(body.localisationCommentaire) : item.localisationCommentaire;
+
+      up.localisationCommentaire = LocationService.generateLocalizationComment(finalLat, finalLng, finalComment);
+    }
+
     if (isChantier && hasCompanyInput) {
       const companySelection = await resolveCompanyForProject(body);
       up.companyId = companySelection.companyId;
@@ -3924,5 +3905,63 @@ exports.updatePipeline = async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 };
+
+// ---------------- NEARBY PROJECTS ----------------
+router.get("/nearby", authRequired, async (req, res) => {
+  try {
+    const { lat, lng, radius = 50, limit = 50 } = req.query;
+
+    // Validate required parameters
+    if (lat === undefined || lng === undefined) {
+      return res.status(400).json({
+        message: "Validation error",
+        errors: ["lat and lng parameters are required"]
+      });
+    }
+
+    const centerLat = Number(lat);
+    const centerLng = Number(lng);
+    const searchRadius = Math.min(Math.max(Number(radius) || 50, 1), 500); // 1-500km
+    const maxLimit = Math.min(Math.max(parseInt(limit, 10) || 50, 1), 100); // 1-100 results
+
+    // Validate coordinates
+    if (!LocationService.validateCoordinates(centerLat, centerLng)) {
+      return res.status(400).json({
+        message: "Validation error",
+        errors: ["Invalid latitude or longitude values"]
+      });
+    }
+
+    // Get accessible project IDs for the user
+    const accessibleIds = await getAccessibleProjectIds(req.user);
+
+    // Find nearby projects
+    const nearbyProjects = await LocationService.findNearbyProjects(
+      centerLat,
+      centerLng,
+      searchRadius,
+      maxLimit,
+      accessibleIds
+    );
+
+    // Format for map integration
+    const mapReadyProjects = nearbyProjects.map((project) =>
+      LocationService.formatForMap(project)
+    );
+
+    return res.json({
+      center: { lat: centerLat, lng: centerLng },
+      radiusKm: searchRadius,
+      count: mapReadyProjects.length,
+      projects: mapReadyProjects
+    });
+
+  } catch (e) {
+    console.error("PROJECT_NEARBY_ERROR:", e);
+    return res.status(e.status || 500).json({
+      message: e.message || "Server error",
+    });
+  }
+});
 
 module.exports = router;
