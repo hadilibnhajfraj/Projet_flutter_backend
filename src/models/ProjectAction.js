@@ -1,5 +1,3 @@
-// models/ProjectAction.js
-
 const { DataTypes } = require("sequelize");
 const { sequelize } = require("../db");
 
@@ -16,29 +14,16 @@ const ProjectAction = sequelize.define(
       type: DataTypes.UUID,
       allowNull: false,
     },
-fileUrl: {
-  type: DataTypes.STRING,
-  allowNull: true,
-},
-    typeAction: {
-  type: DataTypes.ENUM(
-    "Visite",
-    "Plan technique",
-    "Echantillonnage",
-    "Devis envoyé",
-    "Negociation",
-    "Relance",
-    "Commande gagnée",
-    "Commande perdue",
-    "Fidelisation"
-  ),
-  allowNull: false
-},
 
-    commentaire: {
-      type: DataTypes.TEXT,
+    // ── Dynamic action type (replaces typeAction ENUM) ────
+    actionTypeId: {
+      type: DataTypes.UUID,
       allowNull: true,
+      references: { model: "project_action_types", key: "id" },
+      onDelete: "SET NULL",
     },
+
+    commentaire: { type: DataTypes.TEXT, allowNull: true },
 
     dateAction: {
       type: DataTypes.DATE,
@@ -46,29 +31,26 @@ fileUrl: {
       defaultValue: DataTypes.NOW,
     },
 
-    // rappel futur
-    dateRelance: {
-      type: DataTypes.DATE,
-      allowNull: true,
-    },
+    dateRelance: { type: DataTypes.DATE, allowNull: true },
 
     statut: {
-      type: DataTypes.ENUM(
-        "A faire",
-        "En cours",
-        "Terminé"
-      ),
+      type: DataTypes.ENUM("A faire", "En cours", "Terminé"),
       defaultValue: "A faire",
     },
 
-    createdBy: {
-      type: DataTypes.UUID,
-      allowNull: false,
-    },
+    fileUrl: { type: DataTypes.STRING, allowNull: true },
+
+    createdBy: { type: DataTypes.UUID, allowNull: false },
   },
   {
     tableName: "project_actions",
     timestamps: true,
+    indexes: [
+      { fields: ["projectId"] },
+      { fields: ["actionTypeId"] },
+      { fields: ["dateAction"] },
+      { fields: ["createdBy"] },
+    ],
   }
 );
 

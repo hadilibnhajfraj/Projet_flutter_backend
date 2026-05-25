@@ -4,8 +4,10 @@ const Engineer = require("./Engineer");
 const Architect = require("./Architect");
 const User = require("./User");
 const UserProject = require("./UserProject");
+const PipelineStage = require("./PipelineStage");
+const ProjectActionType = require("./ProjectActionType");
+const ProjectActivity = require("./ProjectActivity");
 
-// ✅ simple require (PAS de fonction)
 require("./associations");
 
 module.exports = {
@@ -15,4 +17,7 @@ module.exports = {
   Architect,
   User,
   UserProject,
+  PipelineStage,
+  ProjectActionType,
+  ProjectActivity,
 };

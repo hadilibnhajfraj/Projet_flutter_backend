@@ -6,18 +6,17 @@ const cookieParser = require("cookie-parser");
 const { sequelize } = require("./db");
 require("./services/scheduler");
 
-
 const authRoutes = require("./routes/auth.routes");
 const { authRequired } = require("./middleware/auth.middleware");
 const projectRoutes = require("./routes/projects.routes");
-const adminRoutes = require("./routes/admin"); // ✅ NEW
+const adminRoutes = require("./routes/admin");
 const userProfileRoutes = require("./routes/userProfile.routes");
 const taskRoutes = require("./routes/tasks.routes");
 require("./cron/checkProjects");
 require("./cron/projectCron");
 const { checkProjects } = require("./cron/projectCron");
 const metabaseRoutes = require("./routes/metabase");
-checkProjects(); // 🔥 test direct au démarrage
+checkProjects();
 const commercialRoutes = require("./routes/commercial_contacts.routes");
 const clientRoutes = require("./routes/client.routes");
 const companyRoutes = require("./routes/company.routes");
@@ -28,6 +27,14 @@ const notificationRoutes = require("./routes/notifications.routes");
 const { syncCompaniesFromProjects } = require("./services/companySync.service");
 const { syncPeopleFromProjects } = require("./services/personSync.service");
 require("./cron/followup.job");
+
+// ── CRM Pipeline Modules ──────────────────────────────────
+const pipelineStageRoutes = require("./modules/pipeline/routes/pipelineStage.routes");
+const kanbanRoutes = require("./modules/kanban/routes/kanban.routes");
+const pipelineProjectRoutes = require("./modules/projects/routes/project.routes");
+const actionTypeRoutes = require("./modules/project-actions/routes/projectActionType.routes");
+const dashboardRoutes = require("./modules/dashboard/routes/dashboard.routes");
+
 const app = express();
 
 app.use(helmet());
@@ -51,9 +58,17 @@ app.use(
 
 app.get("/", (req, res) => res.json({ ok: true }));
 
+// ── CRM Pipeline ─────────────────────────────────────────
+app.use("/pipeline-stages", pipelineStageRoutes);
+app.use("/pipeline", kanbanRoutes);
+app.use("/projects", pipelineProjectRoutes);
+app.use("/action-types", actionTypeRoutes);
+app.use("/dashboard", dashboardRoutes);
+
+// ── Existing routes (unchanged) ──────────────────────────
 app.use("/projects", projectRoutes);
 app.use("/auth", authRoutes);
-app.use("/admin", adminRoutes); // ✅ NEW
+app.use("/admin", adminRoutes);
 app.use("/tasks", taskRoutes);
 app.use("/notifications", notificationRoutes);
 app.use("/utils", require("./routes/geocode.routes"));
@@ -68,7 +83,6 @@ app.use("/architects", architectRoutes);
 app.use("/commercial-contacts", commercialRoutes);
 app.use("/projetactions", projectActionRoutes);
 app.use("/metabase", metabaseRoutes);
-app.use("/uploads", express.static("uploads"));
 
 app.get("/me", authRequired, (req, res) => {
   res.json({ user: req.user });
@@ -79,8 +93,8 @@ async function start() {
     await sequelize.authenticate();
     console.log("✅ DB connected");
 
-    // ✅ DEV ONLY: ajoute role + crée user_projects automatiquement
-    await sequelize.sync({ alter: true });
+    // Schema is managed by migrations only — never auto-sync in production.
+    // To apply pending migrations: node src/scripts/run-pipeline-migration.js
     await syncCompaniesFromProjects();
     await syncPeopleFromProjects();
 

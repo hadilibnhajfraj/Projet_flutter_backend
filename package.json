@@ -10,7 +10,11 @@
     "sync:engineers": "node scripts/syncEngineers.js",
     "sync:architects": "node scripts/syncArchitects.js",
     "sync:people": "node scripts/syncPeople.js",
-    "link:companies": "node src/scripts/linkProjectsToCompanies.js"
+    "link:companies": "node src/scripts/linkProjectsToCompanies.js",
+    "migrate:pipeline": "node src/scripts/run-pipeline-migration.js",
+    "db:migrate": "npx sequelize-cli db:migrate",
+    "db:migrate:undo": "npx sequelize-cli db:migrate:undo",
+    "db:seed:pipeline": "npx sequelize-cli db:seed --seed src/seeders/pipeline-stages.seeder.js"
   },
   "keywords": [],
   "author": "",
@@ -27,6 +31,7 @@
     "express": "^5.2.1",
     "express-rate-limit": "^8.2.1",
     "helmet": "^8.1.0",
+    "joi": "^18.2.1",
     "jsonwebtoken": "^9.0.3",
     "multer": "^2.1.1",
     "node-cron": "^4.2.1",
@@ -34,9 +39,11 @@
     "pg": "^8.20.0",
     "pg-hstore": "^2.3.4",
     "sequelize": "^6.37.8",
+    "uuid": "^11.0.0",
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
-    "nodemon": "^3.1.11"
+    "nodemon": "^3.1.11",
+    "sequelize-cli": "^6.6.5"
   }
 }
