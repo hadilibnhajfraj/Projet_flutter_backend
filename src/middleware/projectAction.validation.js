@@ -1,6 +1,6 @@
 const multer = require("multer");
 
-const VALID_STATUTS = ["A faire", "En cours", "Terminé"];
+const VALID_STATUTS = ["A faire", "En cours", "Terminé", "Annulé"];
 const DEFAULT_ACTION_TYPE = "Visite";
 
 exports.validateCreateAction = (req, res, next) => {

@@ -32,7 +32,7 @@ const createSchema = Joi.object({
     "date.tooOld": "dateRelance must be today or a future date",
   }),
   reminderMessage: Joi.string().max(500).allow(null, "").optional(),
-  statut: Joi.string().valid("A faire", "En cours", "Terminé").optional(),
+  statut: Joi.string().valid("A faire", "En cours", "Terminé", "Annulé").optional(),
   fileUrl: Joi.string().uri().allow(null, "").optional(),
 })
   // Require at least one action-type field to be present
@@ -52,7 +52,7 @@ const updateSchema = Joi.object({
   commentaire: Joi.string().max(2000).allow(null, "").optional(),
   dateAction: Joi.date().iso().optional(),
   dateRelance: Joi.date().iso().allow(null).optional(),
-  statut: Joi.string().valid("A faire", "En cours", "Terminé").optional(),
+  statut: Joi.string().valid("A faire", "En cours", "Terminé", "Annulé").optional(),
   fileUrl: Joi.string().uri().allow(null, "").optional(),
 });
 

@@ -45,11 +45,16 @@ const ProjectAction = sequelize.define(
 
     dateRelance: { type: DataTypes.DATE, allowNull: true },
 
-    statut: {
-      type: DataTypes.ENUM("A faire", "En cours", "Terminé"),
-      allowNull: false,
-      defaultValue: "A faire",
-    },
+   statut: {
+  type: DataTypes.ENUM(
+    "A faire",
+    "En cours",
+    "Terminé",
+    "Annulé"
+  ),
+  allowNull: false,
+  defaultValue: "A faire",
+},
 
     fileUrl: { type: DataTypes.STRING, allowNull: true },
 
