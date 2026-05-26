@@ -2266,99 +2266,124 @@ router.get("/:id/actions", authRequired, async (req, res) => {
 // ===============================
 // ADD CRM ACTION
 // ===============================
-router.post("/:id/actions", authRequired, uploads.single("file"), async (req, res) => {
-
-  try {
-
+// actionUpload stores to uploads/actions/ (served by express.static).
+// Multer must run before the handler so req.body is populated from
+// multipart/form-data. handleUploadError converts Multer rejections to 400.
+router.post(
+  "/:id/actions",
+  authRequired,
+  actionUpload.single("file"),
+  handleUploadError,
+  async (req, res) => {
     console.log("📥 CREATE ACTION REQUEST");
+    console.log("BODY =", req.body);
+    console.log("FILE =", req.file);
 
-    const { typeAction, commentaire, dateRelance } = req.body;
+    try {
+      const body = req.body || {};
+      const projectId = req.params.id;
 
-    if (!typeAction) {
-      return res.status(400).json({
-        message: "typeAction is required"
+      // Resolve action type from all accepted field names
+      const actionType =
+        (body.typeAction        || "").trim() ||
+        (body.typeAction_legacy || "").trim() ||
+        (body.firstAction       || "").trim();
+
+      if (!actionType) {
+        return res.status(400).json({
+          success: false,
+          message: "Action type is required (typeAction, typeAction_legacy, or firstAction)",
+        });
+      }
+
+      const commentaire = body.commentaire || null;
+      const dateAction  = body.dateAction ? new Date(body.dateAction) : new Date();
+      const dateRelance = body.dateRelance ? new Date(body.dateRelance) : null;
+      const statut      = body.statut || "A faire";
+
+      // ── Duplicate detection ─────────────────────────────────────────────
+      const dayStart = new Date(dateAction); dayStart.setHours(0, 0, 0, 0);
+      const dayEnd   = new Date(dateAction); dayEnd.setHours(23, 59, 59, 999);
+      const { Op } = require("sequelize");
+      const commentaireWhere = commentaire
+        ? { commentaire }
+        : { [Op.or]: [{ commentaire: null }, { commentaire: "" }] };
+
+      const existing = await ProjectAction.findOne({
+        where: {
+          projectId,
+          typeAction_legacy: actionType,
+          ...commentaireWhere,
+          dateAction: { [Op.between]: [dayStart, dayEnd] },
+        },
       });
-    }
 
-    const fileUrl = req.file
-      ? `/uploads/actions/${req.file.filename}`
-      : null;
+      if (existing) {
+        console.log("DUPLICATE ACTION BLOCKED:", existing.id);
+        return res.status(409).json({
+          success: false,
+          message: "This action already exists for this project on this date",
+        });
+      }
 
-    // =============================
-    // CREATE ACTION
-    // =============================
-    const action = await ProjectAction.create({
+      const fileUrl = req.file ? `/uploads/actions/${req.file.filename}` : null;
 
-      projectId: req.params.id,
-      typeAction,
-      commentaire: commentaire ?? null,
-      dateAction: new Date(),
-      dateRelance: dateRelance ?? null,
-      statut: "A faire",
-      fileUrl,
-      createdBy: req.user.sub
-
-    });
-
-    console.log("✅ ACTION CREATED:", action.id);
-
-    // =============================
-    // 🔥 UPDATE PIPELINE AUTOMATIQUE
-    // =============================
-    const newStage = getStageFromAction(typeAction);
-
-    await Project.update(
-      { pipelineStage: newStage },
-      { where: { id: req.params.id } }
-    );
-
-    console.log("📊 PIPELINE UPDATED:", newStage);
-
-    // =============================
-    // CREATE REMINDER IF EXISTS
-    // =============================
-    if (dateRelance) {
-
-      const reminder = await ProjectReminder.create({
-
-        projectId: req.params.id,
-        actionId: action.id,
-        message: commentaire ?? "",
+      // ── Create action ───────────────────────────────────────────────────
+      const action = await ProjectAction.create({
+        projectId,
+        typeAction_legacy: actionType,  // correct column name post-migration-005
+        commentaire,
+        dateAction,
         dateRelance,
-        createdBy: req.user.sub
-
+        statut,
+        fileUrl,
+        createdBy: req.user.sub,
       });
 
-      console.log("⏰ REMINDER CREATED:", reminder.id);
+      console.log("✅ ACTION CREATED:", action.id);
+
+      // ── Update pipeline stage ───────────────────────────────────────────
+      const newStage = getStageFromAction(actionType);
+      await Project.update(
+        { pipelineStage: newStage },
+        { where: { id: projectId } }
+      );
+      console.log("📊 PIPELINE UPDATED:", newStage);
+
+      // ── Create reminder ─────────────────────────────────────────────────
+      if (dateRelance) {
+        const reminder = await ProjectReminder.create({
+          projectId,
+          actionId:   action.id,
+          message:    commentaire || `Relance - ${actionType}`,
+          dateRelance,
+          createdBy:  req.user.sub,
+        });
+        console.log("⏰ REMINDER CREATED:", reminder.id);
+      }
+
+      // ── Return full action ──────────────────────────────────────────────
+      const result = await ProjectAction.findByPk(action.id, {
+        include: [{ model: ProjectReminder, as: "reminders" }],
+      });
+
+      return res.status(201).json({ success: true, data: result });
+
+    } catch (err) {
+      console.error("❌ CREATE ACTION ERROR:", err);
+
+      // Surface DB unique-constraint violations as 409 instead of 500
+      if (err.name === "SequelizeUniqueConstraintError") {
+        return res.status(409).json({
+          success: false,
+          message: "This action already exists for this project on this date",
+        });
+      }
+
+      return res.status(500).json({ success: false, message: err.message || "Server error" });
     }
-
-    // =============================
-    // RETURN FULL ACTION
-    // =============================
-    const result = await ProjectAction.findByPk(action.id, {
-
-      include: [
-        {
-          model: ProjectReminder,
-          as: "reminders"
-        }
-      ]
-
-    });
-
-    res.status(201).json(result);
-
-  } catch (err) {
-
-    console.error("❌ CREATE ACTION ERROR:", err);
-
-    res.status(500).json({
-      message: "Server error"
-    });
-
   }
-
-});
+);
 router.delete("/actions/:actionId", authRequired, async (req, res) => {
 
   try {
