@@ -17,8 +17,19 @@ const createSchema = Joi.object({
 
   commentaire: Joi.string().max(2000).allow(null, "").optional(),
   dateAction: Joi.date().iso().optional(),
-  dateRelance: Joi.date().iso().greater("now").allow(null).optional().messages({
-    "date.greater": "dateRelance must be a future date",
+  dateRelance: Joi.date().iso().allow(null).optional().custom((value, helpers) => {
+    if (!value) return value;
+    // Allow up to 60 s in the past to absorb network latency and client clock
+    // skew when the user selects "today" or the current hour.
+    const tolerance = new Date();
+    tolerance.setMinutes(tolerance.getMinutes() - 1);
+    console.log("dateRelance =", value, "| threshold =", tolerance);
+    if (value < tolerance) {
+      return helpers.error("date.tooOld");
+    }
+    return value;
+  }).messages({
+    "date.tooOld": "dateRelance must be today or a future date",
   }),
   reminderMessage: Joi.string().max(500).allow(null, "").optional(),
   statut: Joi.string().valid("A faire", "En cours", "Terminé").optional(),
