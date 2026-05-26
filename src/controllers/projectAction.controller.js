@@ -1,61 +1,139 @@
 const { ProjectAction, ProjectReminder } = require("../models/associations");
 
+const log = {
+  info: (msg, meta = {}) =>
+    console.log(JSON.stringify({ level: "info", msg, ...meta, ts: new Date().toISOString() })),
+  warn: (msg, meta = {}) =>
+    console.warn(JSON.stringify({ level: "warn", msg, ...meta, ts: new Date().toISOString() })),
+  error: (msg, meta = {}) =>
+    console.error(JSON.stringify({ level: "error", msg, ...meta, ts: new Date().toISOString() })),
+};
 
 // ==============================
 // CREATE ACTION
 // ==============================
 exports.createAction = async (req, res) => {
+
+  const { projectId } = req.params;
+
+  const createdBy =
+    req.user?.id || req.body.createdBy;
+
+  // =====================================
+  // LEGACY ACTION TYPE
+  // =====================================
+
+  const actionTypeLabel =
+    req.body.typeAction ||
+    req.body.typeAction_legacy ||
+    req.body.firstAction ||
+    "Visite";
+
+  const {
+    commentaire,
+    dateAction,
+    dateRelance,
+    statut,
+    actionTypeId,
+  } = req.body;
+
+  log.info("createAction", {
+    projectId,
+    actionTypeLabel,
+    createdBy,
+  });
+
   try {
 
-    const {
-      projectId,
-      typeAction,
-      commentaire,
-      dateAction,
-      dateRelance
-    } = req.body;
-
-    const createdBy = req.user?.id || req.body.createdBy;
-
-    // création action
     const action = await ProjectAction.create({
+
       projectId,
-      typeAction,
-      commentaire,
-      dateAction,
-      createdBy
+
+      // OLD SYSTEM
+      typeAction_legacy:
+        actionTypeLabel,
+
+      // NEW SYSTEM
+      actionTypeId:
+        actionTypeId || null,
+
+      commentaire:
+        commentaire || null,
+
+      dateAction:
+        dateAction || new Date(),
+
+      statut:
+        statut || "A faire",
+
+      createdBy,
     });
 
-    // création reminder si relance
+    // ==============================
+    // REMINDER
+    // ==============================
+
     if (dateRelance) {
 
       await ProjectReminder.create({
+
         projectId,
-        actionId: action.id,
-        message: "Relance prévue",
+
+        actionId:
+          action.id,
+
+        message:
+          "Relance prévue",
+
         dateRelance,
-        createdBy
+
+        createdBy,
       });
 
+      log.info(
+        "reminder created",
+        {
+          actionId:
+            action.id,
+
+          dateRelance,
+        }
+      );
     }
 
-    // renvoyer avec reminders
-    const actionWithReminder = await ProjectAction.findByPk(action.id, {
-      include: [
+    const actionWithReminder =
+      await ProjectAction.findByPk(
+        action.id,
         {
-          model: ProjectReminder,
-          as: "reminders"
+          include: [
+            {
+              model: ProjectReminder,
+              as: "reminders",
+            },
+          ],
         }
-      ]
+      );
+
+    log.info("action created", {
+      actionId: action.id,
     });
 
-    res.status(201).json(actionWithReminder);
+    return res.status(201).json({
+      success: true,
+      data: actionWithReminder,
+    });
 
   } catch (error) {
 
-    console.error(error);
-    res.status(500).json({ message: "Erreur création action" });
+    console.error(
+      "CREATE_ACTION_ERROR:",
+      error
+    );
 
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+    });
   }
 };
 
@@ -64,35 +142,21 @@ exports.createAction = async (req, res) => {
 // GET PROJECT ACTIONS
 // ==============================
 exports.getProjectActions = async (req, res) => {
+  const { projectId } = req.params;
 
   try {
-
-    const { projectId } = req.params;
-
     const actions = await ProjectAction.findAll({
-
       where: { projectId },
-
-      include: [
-        {
-          model: ProjectReminder,
-          as: "reminders"
-        }
-      ],
-
-      order: [["dateAction", "DESC"]]
-
+      include: [{ model: ProjectReminder, as: "reminders" }],
+      order: [["dateAction", "DESC"]],
     });
 
-    res.json(actions);
+    return res.json({ success: true, data: actions });
 
   } catch (error) {
-
-    console.error(error);
-    res.status(500).json({ error: error.message });
-
+    log.error("getProjectActions failed", { projectId, message: error.message });
+    return res.status(500).json({ success: false, message: "Failed to fetch project actions" });
   }
-
 };
 
 
@@ -100,33 +164,19 @@ exports.getProjectActions = async (req, res) => {
 // GET TIMELINE CRM
 // ==============================
 exports.getTimeline = async (req, res) => {
+  const { projectId } = req.params;
 
   try {
-
-    const { projectId } = req.params;
-
     const timeline = await ProjectAction.findAll({
-
       where: { projectId },
-
-      include: [
-        {
-          model: ProjectReminder,
-          as: "reminders"
-        }
-      ],
-
-      order: [["dateAction", "ASC"]]
-
+      include: [{ model: ProjectReminder, as: "reminders" }],
+      order: [["dateAction", "ASC"]],
     });
 
-    res.json(timeline);
+    return res.json({ success: true, data: timeline });
 
   } catch (error) {
-
-    console.error(error);
-    res.status(500).json({ error: error.message });
-
+    log.error("getTimeline failed", { projectId, message: error.message });
+    return res.status(500).json({ success: false, message: "Failed to fetch timeline" });
   }
-
 };

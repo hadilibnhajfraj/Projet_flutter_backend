@@ -1643,13 +1643,23 @@ user_nom_custom: body.user_nom_custom || null,
     // 🧠 ACTION CRM
     // =========================
     if (body.firstAction) {
-      await ProjectAction.create({
-        projectId: p.id,
-        typeAction: body.firstAction,
-        commentaire: clean(body.commentaireAction),
-        createdBy: req.user.sub,
-        dateAction: body.dateVisite ?? new Date(),
-      });
+     await ProjectAction.create({
+  projectId: p.id,
+
+  typeAction_legacy:
+    body.firstAction || "Visite",
+
+  commentaire:
+    clean(body.commentaireAction),
+
+  createdBy:
+    req.user.sub,
+
+  dateAction:
+    body.dateVisite ?? new Date(),
+
+  statut: "A faire",
+});
     }
 
     // =========================

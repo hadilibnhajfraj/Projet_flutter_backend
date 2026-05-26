@@ -15,7 +15,19 @@ const ProjectAction = sequelize.define(
       allowNull: false,
     },
 
-    // ── Dynamic action type (replaces typeAction ENUM) ────
+    // ── Legacy action type string (NOT NULL in DB — always required) ──
+   typeAction_legacy: {
+  type: DataTypes.STRING(100),
+  allowNull: false,
+  defaultValue: "Visite",
+  validate: {
+    notEmpty: {
+      msg: "typeAction_legacy cannot be empty",
+    },
+  },
+},
+
+    // ── Dynamic action type FK (new system, nullable for BC) ─────────
     actionTypeId: {
       type: DataTypes.UUID,
       allowNull: true,
@@ -35,6 +47,7 @@ const ProjectAction = sequelize.define(
 
     statut: {
       type: DataTypes.ENUM("A faire", "En cours", "Terminé"),
+      allowNull: false,
       defaultValue: "A faire",
     },
 

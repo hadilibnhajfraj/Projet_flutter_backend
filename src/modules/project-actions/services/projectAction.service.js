@@ -26,63 +26,89 @@ async function getActionById(id) {
 }
 
 async function createAction(projectId, body, userId) {
+  // ── Guard: body must exist before any field access ────────────────────
+  if (!body || typeof body !== "object") {
+    throw { status: 400, message: "Request body is missing or invalid" };
+  }
+
+  console.log("BODY =", body);
+  console.log("ACTION TYPE ID =", body?.actionTypeId);
+
   const t = await sequelize.transaction();
+
   try {
     const project = await Project.findByPk(projectId);
     if (!project) throw { status: 404, message: "Project not found" };
 
-    const actionType = await actionTypeRepo.findById(body.actionTypeId);
-    if (!actionType) throw { status: 404, message: "ActionType not found" };
+    // ── Resolve action type (new FK system takes priority) ───────────────
+    let actionType = null;
+    if (body?.actionTypeId) {
+      actionType = await actionTypeRepo.findById(body.actionTypeId);
+    }
 
+    // ── Resolve legacy string (backward compat — never null in DB) ───────
+    const legacyAction =
+      body?.typeAction ||
+      body?.typeAction_legacy ||
+      body?.firstAction ||
+      "Visite";
+
+    console.log("LEGACY ACTION =", legacyAction);
+
+    // ── Create action ─────────────────────────────────────────────────────
     const action = await actionRepo.create(
       {
         projectId,
-        actionTypeId: body.actionTypeId,
-        commentaire: body.commentaire || null,
-        dateAction: body.dateAction ? new Date(body.dateAction) : new Date(),
-        dateRelance: body.dateRelance ? new Date(body.dateRelance) : null,
-        statut: body.statut || "A faire",
-        fileUrl: body.fileUrl || null,
-        createdBy: userId,
+        actionTypeId:       actionType?.id || null,
+        typeAction_legacy:  legacyAction,
+        commentaire:        body?.commentaire || null,
+        dateAction:         body?.dateAction ? new Date(body.dateAction) : new Date(),
+        dateRelance:        body?.dateRelance ? new Date(body.dateRelance) : null,
+        statut:             body?.statut || "A faire",
+        fileUrl:            body?.fileUrl || null,
+        createdBy:          userId,
       },
       t
     );
 
-    // Create reminder if dateRelance provided
-    if (body.dateRelance) {
+    // ── Reminder ──────────────────────────────────────────────────────────
+    if (body?.dateRelance) {
       await ProjectReminder.create(
         {
           projectId,
-          actionId: action.id,
+          actionId:   action.id,
           dateRelance: new Date(body.dateRelance),
-          message: body.reminderMessage || `Relance - ${actionType.name}`,
-          createdBy: userId,
+          message:    body?.reminderMessage || `Relance - ${legacyAction}`,
+          createdBy:  userId,
         },
         { transaction: t }
       );
     }
 
-    // Update lastRelanceAt on project
+    // ── Update project lastRelanceAt ──────────────────────────────────────
     await Project.update(
       { lastRelanceAt: action.dateAction },
       { where: { id: projectId }, transaction: t }
     );
 
+    // ── Activity log ──────────────────────────────────────────────────────
     await logActivity(
       {
         projectId,
         userId,
-        type: "action_created",
-        message: `Action créée : ${actionType.name}`,
-        metadata: { actionId: action.id, actionType: actionType.name },
+        type:    "action_created",
+        message: `Action créée : ${legacyAction}`,
+        metadata: { actionId: action.id, actionType: legacyAction },
       },
       t
     );
 
     await t.commit();
     return actionRepo.findById(action.id);
+
   } catch (err) {
     await t.rollback();
+    console.error("CREATE_ACTION_ERROR:", err);
     throw err;
   }
 }
