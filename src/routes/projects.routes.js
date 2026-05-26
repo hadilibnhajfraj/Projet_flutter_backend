@@ -7,6 +7,8 @@ const { sequelize } = require("../db");
 const path = require("path");
 const fs = require("fs");
 const multer = require("multer");
+const { actionUpload } = require("../middleware/actionUpload.middleware");
+const { handleUploadError } = require("../middleware/projectAction.validation");
 const ProjectDevis = require("../models/ProjectDevis"); // adapte selon ton export
 const ProjectBonDeCommande = require("../models/ProjectBonDeCommande");
 const ProjectAction = require("../models/ProjectAction");
@@ -2459,38 +2461,64 @@ router.delete("/reminders/:id", authRequired, async (req, res) => {
 // ===============================
 // UPDATE ACTION (PIPELINE DRAG)
 // ===============================
-router.put("/actions/:actionId", authRequired, async (req, res) => {
+// Multer must run before the handler so req.body is populated from
+// multipart/form-data. handleUploadError converts Multer rejections to 400.
+router.put(
+  "/actions/:actionId",
+  authRequired,
+  actionUpload.single("file"),
+  handleUploadError,
+  async (req, res) => {
+    console.log("BODY =", req.body);
+    console.log("FILE =", req.file);
+    console.log("HEADERS content-type =", req.headers["content-type"]);
 
-  try {
+    try {
+      const action = await ProjectAction.findByPk(req.params.actionId);
 
-    const { typeAction } = req.body;
+      if (!action) {
+        return res.status(404).json({ success: false, message: "Action not found" });
+      }
 
-    const action = await ProjectAction.findByPk(req.params.actionId);
+      // Safe field access — never destructure req.body directly when it may be
+      // undefined (multipart requests require Multer to parse first).
+      const body = req.body || {};
 
-    if (!action) {
-      return res.status(404).json({ message: "Action not found" });
+      const typeAction =
+        (body.typeAction || "").trim() ||
+        (body.typeAction_legacy || "").trim() ||
+        null;
+
+      const commentaire = body.commentaire !== undefined ? body.commentaire : action.commentaire;
+      const statut      = body.statut      || action.statut;
+      const dateAction  = body.dateAction  ? new Date(body.dateAction)  : action.dateAction;
+      const dateRelance = body.dateRelance  ? new Date(body.dateRelance) : action.dateRelance;
+
+      // Keep the existing attachment unless a new file is uploaded.
+      const fileUrl = req.file
+        ? `/uploads/actions/${req.file.filename}`
+        : action.fileUrl;
+
+      await action.update({
+        typeAction_legacy: typeAction || action.typeAction_legacy,
+        commentaire,
+        statut,
+        dateAction,
+        dateRelance,
+        fileUrl,
+      });
+
+      return res.json({ success: true, data: action });
+
+    } catch (err) {
+      console.error("UPDATE ACTION ERROR:", err);
+      return res.status(500).json({
+        success: false,
+        message: err.message || "Server error",
+      });
     }
-
-    await action.update({
-      typeAction
-    });
-
-    res.json({
-      message: "Action updated",
-      action
-    });
-
-  } catch (err) {
-
-    console.error("UPDATE ACTION ERROR:", err);
-
-    res.status(500).json({
-      message: "Server error"
-    });
-
   }
-
-});
+);
 // ---------------- GET BY ID ----------------
 // ---------------- GET BY ID ----------------
 router.get("/:id", authRequired, async (req, res) => {

@@ -2,7 +2,9 @@ const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
 
-const UPLOAD_DIR = path.join(__dirname, "..", "uploads", "actions");
+// Use process.cwd() (project root) so files land in uploads/actions/ which
+// express.static("uploads") serves correctly from app.js.
+const UPLOAD_DIR = path.join(process.cwd(), "uploads", "actions");
 const MAX_FILE_MB = 10;
 const ALLOWED_EXT = new Set([".pdf", ".jpg", ".jpeg", ".png", ".doc", ".docx", ".xls", ".xlsx"]);
 

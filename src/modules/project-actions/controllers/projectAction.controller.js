@@ -3,7 +3,10 @@ const svc = require("../services/projectAction.service");
 function handle(res, err) {
   const status = err.status || 500;
   if (status >= 500) console.error("ProjectAction error:", err);
-  res.status(status).json({ message: err.message || "Internal server error" });
+  res.status(status).json({
+    success: false,
+    message: err.message || "Internal server error",
+  });
 }
 
 // ── Project Actions ─────────────────────────────────────
@@ -38,7 +41,15 @@ async function createAction(req, res) {
 
 async function updateAction(req, res) {
   try {
+    console.log("BODY =", req.body);
+    console.log("FILE =", req.file);
+    // Multer stores the file and populates req.file; inject the public URL so
+    // the service can persist it and clean up the previous attachment.
+    if (req.file) {
+      req.body.fileUrl = `/uploads/actions/${req.file.filename}`;
+    }
     res.json({
+      success: true,
       data: await svc.updateAction(req.params.id, req.body, req.user.sub),
     });
   } catch (err) {
@@ -48,7 +59,7 @@ async function updateAction(req, res) {
 
 async function deleteAction(req, res) {
   try {
-    res.json(await svc.deleteAction(req.params.id));
+    res.json({ success: true, ...(await svc.deleteAction(req.params.id)) });
   } catch (err) {
     handle(res, err);
   }

@@ -1,3 +1,5 @@
+const fs = require("fs");
+const path = require("path");
 const { sequelize } = require("../../../db");
 const actionRepo = require("../repositories/projectAction.repository");
 const actionTypeRepo = require("../repositories/projectActionType.repository");
@@ -34,26 +36,40 @@ async function createAction(projectId, body, userId) {
   console.log("BODY =", body);
   console.log("ACTION TYPE ID =", body?.actionTypeId);
 
+  // ── Resolve legacy string early so duplicate check can use it ─────────
+  const legacyAction =
+    body?.typeAction ||
+    body?.typeAction_legacy ||
+    body?.firstAction ||
+    "Visite";
+
+  console.log("LEGACY ACTION =", legacyAction);
+
+  // ── Duplicate detection (outside transaction — read-only) ─────────────
+  const duplicate = await actionRepo.findDuplicate(
+    projectId,
+    legacyAction,
+    body?.commentaire || null,
+    body?.dateAction || null
+  );
+  if (duplicate) {
+    throw {
+      status: 409,
+      message: "This action already exists for this project on this date",
+    };
+  }
+
   const t = await sequelize.transaction();
 
   try {
     const project = await Project.findByPk(projectId);
     if (!project) throw { status: 404, message: "Project not found" };
 
-    // ── Resolve action type (new FK system takes priority) ───────────────
+    // ── Resolve action type FK (new system takes priority) ───────────────
     let actionType = null;
     if (body?.actionTypeId) {
       actionType = await actionTypeRepo.findById(body.actionTypeId);
     }
-
-    // ── Resolve legacy string (backward compat — never null in DB) ───────
-    const legacyAction =
-      body?.typeAction ||
-      body?.typeAction_legacy ||
-      body?.firstAction ||
-      "Visite";
-
-    console.log("LEGACY ACTION =", legacyAction);
 
     // ── Create action ─────────────────────────────────────────────────────
     const action = await actionRepo.create(
@@ -114,16 +130,61 @@ async function createAction(projectId, body, userId) {
 }
 
 async function updateAction(id, body, userId) {
+  if (!body || typeof body !== "object") {
+    throw { status: 400, message: "Request body is missing or invalid" };
+  }
+
+  console.log("UPDATE ACTION =", id);
+
   const t = await sequelize.transaction();
   try {
     const action = await actionRepo.findById(id);
     if (!action) throw { status: 404, message: "Action not found" };
 
-    const updated = await actionRepo.update(id, body, t);
+    // ── Build a clean update payload from only the editable fields ───────
+    const patch = {};
+
+    const resolvedType =
+      (body?.typeAction || "").trim() ||
+      (body?.typeAction_legacy || "").trim() ||
+      null;
+    if (resolvedType)                     patch.typeAction_legacy = resolvedType;
+    if (body?.actionTypeId !== undefined) patch.actionTypeId = body.actionTypeId || null;
+    if (body?.commentaire  !== undefined) patch.commentaire  = body.commentaire  || null;
+    if (body?.statut)                     patch.statut       = body.statut;
+    if (body?.dateAction)                 patch.dateAction   = new Date(body.dateAction);
+    if (body?.dateRelance  !== undefined) patch.dateRelance  = body.dateRelance ? new Date(body.dateRelance) : null;
+    if (body?.fileUrl      !== undefined) patch.fileUrl      = body.fileUrl || null;
+
+    // ── Delete old attachment when it is being replaced ───────────────────
+    if (patch.fileUrl && action.fileUrl && action.fileUrl !== patch.fileUrl) {
+      const oldPath = path.join(process.cwd(), action.fileUrl.replace(/^\//, ""));
+      fs.unlink(oldPath, (err) => {
+        if (err) console.warn("Could not delete old action file:", err.message);
+      });
+    }
+
+    await actionRepo.update(id, patch, t);
+
+    await logActivity(
+      {
+        projectId: action.projectId,
+        userId,
+        type:    "action_updated",
+        message: `Action modifiée : ${patch.typeAction_legacy || action.typeAction_legacy}`,
+        metadata: { actionId: id, changes: Object.keys(patch) },
+      },
+      t
+    );
+
     await t.commit();
-    return updated;
+
+    // Return the full hydrated record (with associations) after update
+    return actionRepo.findById(id);
+
   } catch (err) {
     await t.rollback();
+    console.error("UPDATE_ACTION_ERROR:", err);
     throw err;
   }
 }
