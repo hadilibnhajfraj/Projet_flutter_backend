@@ -192,9 +192,11 @@ async function getProject(req, res) {
       lastAction,
       nextAction: lastAction?.typeAction_legacy ?? null,
       nextActionId: lastAction?.actionTypeId ?? null,
+      visitDate: lastAction?.dateAction ? new Date(lastAction.dateAction).toISOString() : null,
+      dateVisite: lastAction?.dateAction ? new Date(lastAction.dateAction).toISOString() : null,
     };
 
-    console.log("[PROJECT EDIT]", { id: p.id, nextAction: response.nextAction, nextActionId: response.nextActionId });
+    console.log("[PROJECT EDIT]", { id: p.id, nextAction: response.nextAction, nextActionId: response.nextActionId, visitDate: response.visitDate });
 
     res.json(response);
   } catch (err) {
