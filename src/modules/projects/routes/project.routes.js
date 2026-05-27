@@ -17,13 +17,14 @@ router.put("/:id/move-stage", requireOwnerOrAdmin, validateMoveStage, ctrl.moveS
 // Assign / remove owner
 router.put("/:id/owner", requireOwnerOrAdmin, validateAssignOwner, ctrl.assignOwner);
 
-// Full project detail for edit form — USER: own project / ADMIN: any
-// Must be declared BEFORE the nested /:projectId/* use() calls so that
-// a bare GET /projects/:id is caught here and not swallowed by sub-routers.
-router.get("/:id", ctrl.getProject);
+// Specific sub-resource routes must come BEFORE the bare /:id catch-all
+router.get("/:id/full", ctrl.getProjectFull);
+router.get("/:id/timeline", ctrl.getTimeline);
+router.get("/:id/notes", ctrl.getNotes);
+router.post("/:id/notes", ctrl.createNote);
 
-// Secured timeline: USER sees only own project, ADMIN sees any
-router.get("/:projectId/timeline", ctrl.getTimeline);
+// Full project detail for edit form — USER: own project / ADMIN: any
+router.get("/:id", ctrl.getProject);
 
 // Nested resources
 router.use("/:projectId/actions", actionRoutes);

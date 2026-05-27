@@ -191,6 +191,14 @@ const Project = sequelize.define(
       references: { model: "users", key: "id" },
       onDelete: "SET NULL",
     },
+
+    // ── CRM Priority ──────────────────────────────────────
+    // Values: low | medium | high | urgent
+    priority: {
+      type: DataTypes.STRING(20),
+      allowNull: false,
+      defaultValue: "medium",
+    },
   },
   {
     tableName: "projects",

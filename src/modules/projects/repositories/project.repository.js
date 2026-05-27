@@ -45,6 +45,37 @@ const ACTIONS_COUNT_ATTR = [
   "actionsCount",
 ];
 
+const NOTES_COUNT_ATTR = [
+  literal(`(
+    SELECT COUNT(*)::int
+    FROM project_comments
+    WHERE "projectId" = "Project".id
+      AND "parentId" IS NULL
+  )`),
+  "notesCount",
+];
+
+const UPCOMING_REMINDERS_ATTR = [
+  literal(`(
+    SELECT COUNT(*)::int
+    FROM project_reminders
+    WHERE "projectId" = "Project".id
+      AND "dateRelance" >= NOW()
+  )`),
+  "upcomingRemindersCount",
+];
+
+const ATTACHMENTS_COUNT_ATTR = [
+  literal(`(
+    SELECT COUNT(*)::int
+    FROM project_actions
+    WHERE "projectId" = "Project".id
+      AND "fileUrl" IS NOT NULL
+      AND "fileUrl" <> ''
+  )`),
+  "attachmentsCount",
+];
+
 const LAST_ACTION_ATTR = [
   literal(`(
     SELECT json_build_object(
@@ -81,6 +112,7 @@ const LIST_ATTRIBUTES = [
   "nomProjet",
   "typeProjet",
   "statut",
+  "priority",
   "projectModele",
   "pipelineStageId",
   "ownerId",
@@ -93,6 +125,9 @@ const LIST_ATTRIBUTES = [
   "createdAt",
   "updatedAt",
   ACTIONS_COUNT_ATTR,
+  NOTES_COUNT_ATTR,
+  UPCOMING_REMINDERS_ATTR,
+  ATTACHMENTS_COUNT_ATTR,
   LAST_ACTION_ATTR,
 ];
 

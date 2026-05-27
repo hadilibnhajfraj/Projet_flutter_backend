@@ -60,6 +60,15 @@ async function getKanbanBoard({ mine, userId, projectModele, search }) {
   return columns;
 }
 
+// ── Priority metadata ─────────────────────────────────────
+
+const PRIORITY_META = {
+  low:    { color: "#6b7280", label: "Faible",  icon: "trending-down" },
+  medium: { color: "#3b82f6", label: "Normal",  icon: "minus" },
+  high:   { color: "#f59e0b", label: "Élevé",   icon: "trending-up" },
+  urgent: { color: "#ef4444", label: "Urgent",  icon: "alert-triangle" },
+};
+
 // ── Shape builders ────────────────────────────────────────
 
 function toStageShape(stage) {
@@ -127,9 +136,7 @@ function toProjectCard(project) {
   const fallbackName = p.user_nom_custom || p.user_nom || null;
   const ownerShape = toOwnerShape(p.owner, fallbackName);
 
-  // lastAction comes from the correlated SQL subquery (LAST_ACTION_ATTR).
-  // It already contains typeAction_legacy and actionType.name so we can
-  // derive currentAction without an extra query.
+  // lastAction comes from the correlated SQL subquery (LAST_ACTION_ATTR)
   const lastAction = p.lastAction || null;
   const currentAction =
     lastAction?.typeAction_legacy ||
@@ -148,6 +155,9 @@ function toProjectCard(project) {
       }
     : null;
 
+  const priorityKey = (p.priority || "medium");
+  const priorityMeta = PRIORITY_META[priorityKey] || PRIORITY_META.medium;
+
   return {
     id: p.id,
 
@@ -158,6 +168,12 @@ function toProjectCard(project) {
     typeProjet: p.typeProjet || null,
     statut: p.statut || null,
     projectModele: p.projectModele,
+
+    // Priority
+    priority: priorityKey,
+    priorityColor: priorityMeta.color,
+    priorityLabel: priorityMeta.label,
+    priorityIcon: priorityMeta.icon,
 
     // FK fields
     ownerId: p.ownerId || null,
@@ -174,8 +190,12 @@ function toProjectCard(project) {
     currentAction,
     lastAction,
 
-    // Metrics
+    // Kanban badge counts
     actionsCount: p.actionsCount || 0,
+    notesCount: p.notesCount || 0,
+    upcomingRemindersCount: p.upcomingRemindersCount || 0,
+    attachmentsCount: p.attachmentsCount || 0,
+
     pourcentageReussite: p.pourcentageReussite !== null ? parseFloat(p.pourcentageReussite) : null,
     montantMarche: p.montantMarche !== null ? parseFloat(p.montantMarche) : null,
 
