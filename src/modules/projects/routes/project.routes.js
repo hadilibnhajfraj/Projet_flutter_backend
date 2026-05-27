@@ -17,6 +17,14 @@ router.put("/:id/move-stage", requireOwnerOrAdmin, validateMoveStage, ctrl.moveS
 // Assign / remove owner
 router.put("/:id/owner", requireOwnerOrAdmin, validateAssignOwner, ctrl.assignOwner);
 
+// Full project detail for edit form — USER: own project / ADMIN: any
+// Must be declared BEFORE the nested /:projectId/* use() calls so that
+// a bare GET /projects/:id is caught here and not swallowed by sub-routers.
+router.get("/:id", ctrl.getProject);
+
+// Secured timeline: USER sees only own project, ADMIN sees any
+router.get("/:projectId/timeline", ctrl.getTimeline);
+
 // Nested resources
 router.use("/:projectId/actions", actionRoutes);
 router.use("/:projectId/activities", activityRoutes);

@@ -1,7 +1,7 @@
 // routes/projects.routes.js
 const express = require("express");
 const { Op, fn, col, where, literal } = require("sequelize");
-const { User, Project, UserProject, ProjectComment } = require("../models/associations");
+const { User, Project, UserProject, ProjectComment, UserProfile } = require("../models/associations");
 const { authRequired } = require("../middleware/auth.middleware");
 const { sequelize } = require("../db");
 const path = require("path");
@@ -1524,6 +1524,7 @@ router.post("/", authRequired, async (req, res) => {
     // =========================
     const p = await Project.create({
       nomProjet,
+      ownerId: req.user.sub,
       projectModele: body.projectModele || "project",
 
       // =========================
@@ -1740,6 +1741,19 @@ router.get("/", authRequired, async (req, res) => {
           attributes: ["permission", "userId", "createdAt"],
           include: [{ model: User, attributes: userAttrs }],
         },
+        // Owner via direct FK — includes UserProfile for fullName + avatar
+        {
+          model: User,
+          as: "owner",
+          required: false,
+          attributes: ["id", "email"],
+          include: [{
+            model: UserProfile,
+            as: "profile",
+            attributes: ["name", "avatarUrl"],
+            required: false,
+          }],
+        },
       ],
       order: [["createdAt", "DESC"]],
       attributes: {
@@ -1800,22 +1814,45 @@ router.get("/", authRequired, async (req, res) => {
         (up) => up.permission === "owner"
       );
 
-    const ownerName =
-  ownerLink?.User
-    ? displayName(ownerLink.User)
-    : (
+      // Legacy flat string — kept for backwards compat
+      const ownerName =
+        ownerLink?.User
+          ? displayName(ownerLink.User)
+          : (json.user_nom_custom || json.user_nom || "Inconnu");
+
+      // Structured owner — built from the ownerId FK (User + UserProfile)
+      const ownerRaw = json.owner;
+      const ownerProfile = ownerRaw?.profile || {};
+      const fullName =
+        (ownerProfile.name || "").trim() ||
+        ownerRaw?.email ||
         json.user_nom_custom ||
         json.user_nom ||
-        json.createdByName ||   // si tu ajoutes plus tard
-        "Inconnu"
-      );
+        null;
+
+      const owner = ownerRaw
+        ? {
+            id: ownerRaw.id,
+            email: ownerRaw.email,
+            fullName,
+            name: fullName,
+            avatar: ownerProfile.avatarUrl || null,
+          }
+        : (json.user_nom_custom || json.user_nom
+            ? { id: null, email: null, fullName: json.user_nom_custom || json.user_nom, name: json.user_nom_custom || json.user_nom, avatar: null }
+            : null);
 
       delete json.UserProjects;
+      delete json.owner; // replaced by the structured shape above
 
       return {
         ...json,
+        // Display name alias — Flutter uses title to render the card title
+        title: json.nomProjet || json.comptoir || null,
+        owner,
+        // Kept for existing consumers that read the flat string
+        ownerName: fullName || ownerName,
         permission: perm,
-        ownerName,
         devisCount: Number(json.devisCount || 0),
         bonCommandeCount: Number(json.bonCommandeCount || 0),
         taskCount: Number(json.taskCount || 0),

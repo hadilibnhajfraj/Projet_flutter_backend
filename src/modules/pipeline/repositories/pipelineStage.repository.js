@@ -1,4 +1,4 @@
-const { Op } = require("sequelize");
+const { Op, literal } = require("sequelize");
 const PipelineStage = require("../../../models/PipelineStage");
 const ProjectActionType = require("../../../models/ProjectActionType");
 
@@ -43,4 +43,33 @@ function destroy(id, transaction) {
   return PipelineStage.destroy({ where: { id }, transaction });
 }
 
-module.exports = { findAll, findById, findByName, getMaxPosition, create, update, destroy };
+/**
+ * All stages with an inline projectsCount (non-archived projects only).
+ * Single query — no N+1.
+ */
+function findAllWithProjectCount() {
+  return PipelineStage.findAll({
+    attributes: [
+      "id",
+      "name",
+      "color",
+      "icon",
+      "position",
+      "isWonStage",
+      "isLostStage",
+      "autoCreateAction",
+      [
+        literal(`(
+          SELECT COUNT(*)::int
+          FROM projects
+          WHERE "pipelineStageId" = "PipelineStage".id
+            AND "isArchived" = false
+        )`),
+        "projectsCount",
+      ],
+    ],
+    order: [["position", "ASC"]],
+  });
+}
+
+module.exports = { findAll, findAllWithProjectCount, findById, findByName, getMaxPosition, create, update, destroy };

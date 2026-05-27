@@ -18,9 +18,14 @@ async function listProjects(query, userId) {
   const sortBy = SORTABLE.includes(query.sortBy) ? query.sortBy : "createdAt";
   const sortDir = query.sortDir === "ASC" ? "ASC" : "DESC";
 
+  // Accept both ?mine=true and ?myProjects=true so Flutter and web clients work.
+  const mine = query.mine === "true" || query.myProjects === "true";
+
+  console.log("[listProjects] userId =", userId, "| mine =", mine, "| raw query =", { mine: query.mine, myProjects: query.myProjects, ownerId: query.ownerId });
+
   const { count, rows } = await projectRepo.findPaginated(
     {
-      mine: query.mine === "true",
+      mine,
       userId,
       stageId: query.stageId || null,
       projectModele: query.projectModele || null,

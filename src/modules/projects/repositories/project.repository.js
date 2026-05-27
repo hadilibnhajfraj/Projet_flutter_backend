@@ -48,11 +48,12 @@ const ACTIONS_COUNT_ATTR = [
 const LAST_ACTION_ATTR = [
   literal(`(
     SELECT json_build_object(
-      'id',          pa.id::text,
-      'commentaire', pa.commentaire,
-      'dateAction',  pa."dateAction",
-      'statut',      pa.statut,
-      'fileUrl',     pa."fileUrl",
+      'id',                pa.id::text,
+      'commentaire',       pa.commentaire,
+      'typeAction_legacy', pa."typeAction_legacy",
+      'dateAction',        pa."dateAction",
+      'statut',            pa.statut,
+      'fileUrl',           pa."fileUrl",
       'actionType',  CASE
         WHEN pat.id IS NOT NULL
         THEN json_build_object(
@@ -172,6 +173,51 @@ function findById(id) {
   });
 }
 
+/**
+ * Full project detail for the edit form.
+ * Fetches ALL columns (no attribute restriction) + owner (with UserProfile name)
+ * + stage + full actions timeline + devisCount/bonCommandeCount subqueries.
+ */
+function findByIdFull(id) {
+  return Project.findByPk(id, {
+    attributes: {
+      include: [
+        [
+          literal(`(SELECT COUNT(*)::int FROM project_devis WHERE "projectId" = "Project".id)`),
+          "devisCount",
+        ],
+        [
+          literal(`(SELECT COUNT(*)::int FROM project_bon_de_commande WHERE "projectId" = "Project".id)`),
+          "bonCommandeCount",
+        ],
+        [
+          literal(`(SELECT COUNT(*)::int FROM project_actions WHERE "projectId" = "Project".id)`),
+          "actionsCount",
+        ],
+      ],
+    },
+    include: [
+      OWNER_INCLUDE,
+      STAGE_INCLUDE,
+      {
+        model: ProjectAction,
+        as: "actions",
+        separate: true,
+        order: [["dateAction", "DESC"]],
+        include: [
+          { model: ProjectActionType, as: "actionType" },
+          {
+            model: ProjectReminder,
+            as: "reminders",
+            separate: true,
+            order: [["dateRelance", "ASC"]],
+          },
+        ],
+      },
+    ],
+  });
+}
+
 async function update(id, data, transaction) {
   const [, rows] = await Project.update(data, {
     where: { id },
@@ -208,4 +254,4 @@ function findAllForKanban({ projectModele, ownerId, search }) {
   });
 }
 
-module.exports = { findPaginated, findById, update, findAllForKanban };
+module.exports = { findPaginated, findById, findByIdFull, update, findAllForKanban };

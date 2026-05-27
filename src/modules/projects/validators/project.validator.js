@@ -16,6 +16,8 @@ const assignOwnerSchema = Joi.object({
 
 const listQuerySchema = Joi.object({
   mine: Joi.string().valid("true", "false").optional(),
+  // Flutter sends ?myProjects=true — treated identically to mine=true
+  myProjects: Joi.string().valid("true", "false").optional(),
   stageId: Joi.string().uuid().optional(),
   projectModele: Joi.string().valid("project", "revendeur", "applicateur").optional(),
   search: Joi.string().max(200).allow("").optional(),

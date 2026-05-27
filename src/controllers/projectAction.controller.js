@@ -1,4 +1,19 @@
-const { ProjectAction, ProjectReminder } = require("../models/associations");
+const { ProjectAction, ProjectReminder, Project } = require("../models/associations");
+
+const ADMIN_ROLES = ["admin", "superadmin"];
+
+async function assertProjectAccess(projectId, req, res) {
+  if (ADMIN_ROLES.includes(req.user?.role)) return true;
+  const project = await Project.findOne({
+    where: { id: projectId, ownerId: req.user?.sub },
+    attributes: ["id"],
+  });
+  if (!project) {
+    res.status(403).json({ success: false, message: "Forbidden: not project owner" });
+    return false;
+  }
+  return true;
+}
 
 const log = {
   info: (msg, meta = {}) =>
@@ -145,6 +160,8 @@ exports.getProjectActions = async (req, res) => {
   const { projectId } = req.params;
 
   try {
+    if (!await assertProjectAccess(projectId, req, res)) return;
+
     const actions = await ProjectAction.findAll({
       where: { projectId },
       include: [{ model: ProjectReminder, as: "reminders" }],
@@ -167,6 +184,8 @@ exports.getTimeline = async (req, res) => {
   const { projectId } = req.params;
 
   try {
+    if (!await assertProjectAccess(projectId, req, res)) return;
+
     const timeline = await ProjectAction.findAll({
       where: { projectId },
       include: [{ model: ProjectReminder, as: "reminders" }],

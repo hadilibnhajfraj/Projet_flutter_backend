@@ -1,5 +1,16 @@
 const PipelineStage = require("../../../models/PipelineStage");
 const projectRepo = require("../../projects/repositories/project.repository");
+const stageRepo = require("../../pipeline/repositories/pipelineStage.repository");
+const { sequelize } = require("../../../db");
+
+// ── TTL cache for pipeline stages (60 s) ─────────────────────────────────────
+const _stageCache = { data: null, expiresAt: 0 };
+const STAGE_TTL_MS = 60_000;
+
+function _invalidateStageCache() {
+  _stageCache.data = null;
+  _stageCache.expiresAt = 0;
+}
 
 /**
  * Returns the full Kanban board grouped by pipeline stage.
@@ -73,12 +84,12 @@ function toStageShape(stage) {
  */
 function toOwnerShape(user, projectFallbackName) {
   if (!user) {
-    // No ownerId on the project — use legacy user_nom field or "—"
-    const displayName = projectFallbackName || "Non assigné";
+    const displayName = projectFallbackName || "Utilisateur";
     return {
       id: null,
-      email: null,
+      email: "Aucun email",
       name: displayName,
+      fullName: displayName,
       initials: _initials(displayName),
       avatar: null,
     };
@@ -87,14 +98,14 @@ function toOwnerShape(user, projectFallbackName) {
   const u = user.toJSON ? user.toJSON() : user;
   const profile = u.profile || {};
 
-  // UserProfile.name is the single full-name field
-  const name = (profile.name || "").trim() || u.email || "—";
+  const name = (profile.name || "").trim() || u.email || "Utilisateur";
   const avatarUrl = profile.avatarUrl || null;
 
   return {
     id: u.id,
-    email: u.email,
+    email: u.email || "Aucun email",
     name,
+    fullName: name,
     initials: _initials(name),
     avatar: avatarUrl,
   };
@@ -113,34 +124,55 @@ function _initials(name) {
 function toProjectCard(project) {
   const p = project.toJSON ? project.toJSON() : project;
 
-  // Fallback display name from legacy fields when ownerId is null
   const fallbackName = p.user_nom_custom || p.user_nom || null;
+  const ownerShape = toOwnerShape(p.owner, fallbackName);
+
+  // lastAction comes from the correlated SQL subquery (LAST_ACTION_ATTR).
+  // It already contains typeAction_legacy and actionType.name so we can
+  // derive currentAction without an extra query.
+  const lastAction = p.lastAction || null;
+  const currentAction =
+    lastAction?.typeAction_legacy ||
+    lastAction?.actionType?.name ||
+    "Aucune action";
+
+  const stageShape = p.stage
+    ? {
+        id: p.stage.id,
+        name: p.stage.name,
+        color: p.stage.color,
+        icon: p.stage.icon,
+        position: p.stage.position,
+        isWonStage: p.stage.isWonStage,
+        isLostStage: p.stage.isLostStage,
+      }
+    : null;
 
   return {
     id: p.id,
+
+    // Project name — both keys so Flutter can use either
     nomProjet: p.nomProjet,
+    title: p.nomProjet || p.comptoir || "Projet sans nom",
+
     typeProjet: p.typeProjet || null,
     statut: p.statut || null,
     projectModele: p.projectModele,
 
-    // Owner — always present, never null
-    owner: toOwnerShape(p.owner, fallbackName),
+    // FK fields
+    ownerId: p.ownerId || null,
+    pipelineStageId: p.pipelineStageId || null,
 
-    // Stage
-    stage: p.stage
-      ? {
-          id: p.stage.id,
-          name: p.stage.name,
-          color: p.stage.color,
-          icon: p.stage.icon,
-          position: p.stage.position,
-          isWonStage: p.stage.isWonStage,
-          isLostStage: p.stage.isLostStage,
-        }
-      : null,
+    // Owner — always an object, never null
+    owner: ownerShape,
 
-    // Latest ProjectAction (inline correlated subquery — plain object)
-    lastAction: p.lastAction || null,
+    // Stage — under both keys Flutter might query
+    stage: stageShape,
+    pipelineStage: stageShape,
+
+    // CRM action fields
+    currentAction,
+    lastAction,
 
     // Metrics
     actionsCount: p.actionsCount || 0,
@@ -154,4 +186,50 @@ function toProjectCard(project) {
   };
 }
 
-module.exports = { getKanbanBoard, toProjectCard };
+/**
+ * Returns all pipeline stages with per-stage projectsCount.
+ * Result is cached for 60 seconds to avoid hitting the DB on every kanban render.
+ */
+async function getStagesWithCount() {
+  if (_stageCache.data && Date.now() < _stageCache.expiresAt) {
+    return _stageCache.data;
+  }
+  const stages = await stageRepo.findAllWithProjectCount();
+  _stageCache.data = stages.map((s) => {
+    const j = s.toJSON ? s.toJSON() : s;
+    return {
+      id: j.id,
+      name: j.name,
+      color: j.color,
+      icon: j.icon,
+      position: j.position,
+      isWonStage: j.isWonStage,
+      isLostStage: j.isLostStage,
+      autoCreateAction: j.autoCreateAction,
+      projectsCount: j.projectsCount ?? 0,
+    };
+  });
+  _stageCache.expiresAt = Date.now() + STAGE_TTL_MS;
+  return _stageCache.data;
+}
+
+/**
+ * Fast drag-and-drop stage move — skips activity logging and full project reload.
+ * Use for kanban D&D where the Flutter UI already optimistically updates the card.
+ * Returns only { id, pipelineStageId } so the response is tiny.
+ */
+async function moveStageFast(projectId, newStageId) {
+  const [count] = await sequelize.query(
+    `UPDATE projects SET "pipelineStageId" = :stageId, "updatedAt" = NOW()
+     WHERE id = :projectId AND "isArchived" = false`,
+    { replacements: { stageId: newStageId, projectId }, type: sequelize.QueryTypes.UPDATE }
+  );
+  if (count === 0) throw { status: 404, message: "Project not found or archived" };
+
+  // Bust the stage counts cache so the next /stages call reflects the move.
+  _invalidateStageCache();
+
+  return { id: projectId, pipelineStageId: newStageId };
+}
+
+module.exports = { getKanbanBoard, getStagesWithCount, moveStageFast, toProjectCard };
