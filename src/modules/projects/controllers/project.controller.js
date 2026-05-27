@@ -170,22 +170,22 @@ const PROJECT_STATUSES = [
   "Identification",
   "Prospect",
   "Contacté",
-  "Site Visit",
+  "Visite",
   "Plan technique",
   "Echantillonnage",
-  "Quote Sent",
-  "Negotiation",
-  "Won",
-  "Lost",
-  "Loyalty",
+  "Devis envoyé",
+  "Négociation",
+  "Gagné",
+  "Perdu",
+  "Fidélisation",
 ];
 
 const REVENDEUR_STATUSES = ["Prospect", "Offre", "Actif", "Raté"];
 
 function getAvailableStatuses(projectModele) {
-  switch (projectModele) {
+  switch ((projectModele || "").toLowerCase()) {
     case "revendeur":   return REVENDEUR_STATUSES;
-    case "applicateur": return [];           // no status dropdown for applicateur
+    case "applicateur": return [];
     default:            return PROJECT_STATUSES;
   }
 }
@@ -210,7 +210,8 @@ async function updateStatus(req, res) {
       return res.status(403).json({ success: false, message: "Forbidden: not project owner" });
     }
 
-    const allowed = getAvailableStatuses(project.projectModele);
+    const allowed = getAvailableStatuses((project.projectModele || "").toLowerCase().trim());
+    console.log("PROJECT MODELE =", project.projectModele, "| STATUT RECU =", statut, "| ALLOWED STATUSES =", allowed);
     if (allowed.length > 0 && !allowed.includes(statut)) {
       return res.status(400).json({
         success: false,

@@ -275,23 +275,7 @@ function validatePayload(body, isUpdate = false) {
     }
   }
 
-  // =========================
-  // ENUM
-  // =========================
-  if (body.statut !== undefined && body.statut !== null) {
-    const allowed = [
-      "Identification",
-      "Proposition technique",
-      "Proposition commerciale",
-      "Négociation",
-      "Livraison",
-      "Fidélisation",
-    ];
-
-    if (!allowed.includes(body.statut)) {
-      errors.push("statut invalide");
-    }
-  }
+  // statut validation is done dynamically inside the handler (per projectModele)
 
   if (body.validationStatut !== undefined && body.validationStatut !== null) {
     const allowed = ["Validé", "Non validé"];
@@ -2868,15 +2852,29 @@ router.put("/:id", authRequired, async (req, res) => {
 
     // Validate statut against per-model allowed list
     if (body.statut !== undefined) {
-      const modele = body.projectModele || item.projectModele || "project";
-      const PROJECT_STATUSES = ["Identification","Prospect","Contacté","Site Visit","Plan technique","Echantillonnage","Quote Sent","Negotiation","Won","Lost","Loyalty"];
+      const PROJECT_STATUSES = ["Identification","Prospect","Contacté","Visite","Plan technique","Echantillonnage","Devis envoyé","Négociation","Gagné","Perdu","Fidélisation"];
       const REVENDEUR_STATUSES = ["Prospect","Offre","Actif","Raté"];
-      const allowed = modele === "revendeur" ? REVENDEUR_STATUSES : modele === "applicateur" ? [] : PROJECT_STATUSES;
-      console.log("MODELE:", modele, "| STATUT:", body.statut, "| ALLOWED:", allowed);
-      if (allowed.length > 0 && !allowed.includes(body.statut)) {
+
+      const rawModele = body.projectModele || item.projectModele || "project";
+      const modele = (rawModele || "").toLowerCase().trim();
+      console.log("PROJECT MODELE =", item.projectModele, "| MODELE NORMALIZED =", modele);
+      console.log("STATUT RECU =", body.statut);
+
+      let allowedStatuses;
+      if (modele === "revendeur") {
+        allowedStatuses = REVENDEUR_STATUSES;
+      } else if (modele === "applicateur") {
+        allowedStatuses = [];
+      } else {
+        allowedStatuses = PROJECT_STATUSES;
+      }
+      console.log("ALLOWED STATUSES =", allowedStatuses);
+
+      if (allowedStatuses.length > 0 && !allowedStatuses.includes(body.statut)) {
         return res.status(400).json({
           success: false,
-          message: `Statut invalide pour ${modele}. Valeurs acceptées : ${allowed.join(", ")}`,
+          message: `Statut invalide pour ${rawModele}. Valeurs acceptées : ${allowedStatuses.join(", ")}`,
+          allowedStatuses,
         });
       }
     }
