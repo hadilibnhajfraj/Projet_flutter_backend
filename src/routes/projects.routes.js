@@ -21,6 +21,7 @@ const {
 } = require("../services/person.service");
 const LocationService = require("../services/location.service");
 const router = express.Router();
+const ADMIN_ROLES = ["admin", "superadmin"];
 const uploads = require("../middleware/uploads");
 
 // ---------------- Helpers ----------------
@@ -1724,10 +1725,11 @@ router.get("/", authRequired, async (req, res) => {
       where.projectModele = req.query.projectModele.trim();
     }
 
-    // =========================
-    // 🔥 ARCHIVE FILTER
-    // =========================
-    if (!["admin", "superadmin"].includes(req.user.role)) {
+    // Archive filter — controlled by ?isArchived=true|false
+    // If not supplied: return ALL projects (archived + non-archived)
+    if (req.query.isArchived === "true") {
+      where.isArchived = true;
+    } else if (req.query.isArchived === "false") {
       where.isArchived = false;
     }
 
@@ -1869,6 +1871,8 @@ router.get("/", authRequired, async (req, res) => {
         // Kept for existing consumers that read the flat string
         ownerName: fullName || ownerName,
         permission: perm,
+        isEditable: ADMIN_ROLES.includes(req.user.role) || json.ownerId === req.user.sub,
+        isArchived: json.isArchived || false,
         devisCount: Number(json.devisCount || 0),
         bonCommandeCount: Number(json.bonCommandeCount || 0),
         taskCount: Number(json.taskCount || 0),
@@ -2011,6 +2015,7 @@ router.get("/my-projects", authRequired, async (req, res) => {
       entreprise,
       createdBy,
       projectModele,
+      isArchived,
       page = 1,
       limit = 1000,
       q,
@@ -2064,6 +2069,13 @@ const currentLimit = Math.max(parseInt(limit, 1000) || 1000, 1);
   where.projectModele = "project"; // 🔥 DEFAULT
 }
 
+    // Archive filter — optional; no filter = return ALL (archived + non-archived)
+    if (isArchived === "true") {
+      where.isArchived = true;
+    } else if (isArchived === "false") {
+      where.isArchived = false;
+    }
+
     /// =========================
     /// 🔥 INCLUDE COMMUN
     /// =========================
@@ -2115,6 +2127,9 @@ const currentLimit = Math.max(parseInt(limit, 1000) || 1000, 1);
 
         createdById:
           json.UserProjects?.[0]?.User?.id || null,
+
+        isEditable: ADMIN_ROLES.includes(req.user.role) || json.ownerId === req.user.sub,
+        isArchived: json.isArchived || false,
       };
     });
 
