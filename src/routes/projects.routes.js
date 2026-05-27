@@ -1,7 +1,7 @@
 // routes/projects.routes.js
 const express = require("express");
 const { Op, fn, col, where, literal } = require("sequelize");
-const { User, Project, UserProject, ProjectComment, UserProfile } = require("../models/associations");
+const { User, Project, UserProject, ProjectComment, UserProfile, PipelineStage } = require("../models/associations");
 const { authRequired } = require("../middleware/auth.middleware");
 const { sequelize } = require("../db");
 const path = require("path");
@@ -3044,25 +3044,51 @@ router.put("/:id", authRequired, async (req, res) => {
     }
 
     await item.update(up);
-    await item.reload();
 
-    const lastAction = await ProjectAction.findOne({
-      where: { projectId: item.id },
-      order: [["dateAction", "DESC"]],
-    });
-
-    const [devisCount, bonCommandeCount] = await Promise.all([
+    // Reload with all relations so Flutter gets the full owner/stage shape
+    const [updated, lastAction, devisCount, bonCommandeCount] = await Promise.all([
+      Project.findByPk(item.id, {
+        include: [
+          {
+            model: User,
+            as: "owner",
+            attributes: ["id", "email"],
+            include: [{ model: UserProfile, as: "profile", attributes: ["name", "avatarUrl"], required: false }],
+            required: false,
+          },
+          {
+            model: PipelineStage,
+            as: "stage",
+            attributes: ["id", "name", "color", "icon", "position", "isWonStage", "isLostStage"],
+            required: false,
+          },
+        ],
+      }),
+      ProjectAction.findOne({ where: { projectId: item.id }, order: [["dateAction", "DESC"]] }),
       ProjectDevis.count({ where: { projectId: item.id } }),
       ProjectBonDeCommande.count({ where: { projectId: item.id } }),
     ]);
 
+    const updatedJson = updated.toJSON();
+    const ownerProfile = updatedJson.owner?.profile || {};
+
     return res.json({
-      ...item.toJSON(),
+      ...updatedJson,
       permission,
       devisCount,
       bonCommandeCount,
-      dateVisite: lastAction?.dateAction ?? null,
-      nextAction: lastAction?.typeAction ?? null,
+      title:             updatedJson.nomProjet || updatedJson.comptoir || null,
+      dateDemarrage:     updatedJson.dateDemarrage ?? null,
+      startDate:         updatedJson.dateDemarrage ?? null,
+      owner: updatedJson.owner ? {
+        id:       updatedJson.owner.id,
+        email:    updatedJson.owner.email,
+        fullName: ownerProfile.name || updatedJson.owner.email || null,
+        avatarUrl: ownerProfile.avatarUrl || null,
+      } : null,
+      dateVisite:        lastAction?.dateAction ?? null,
+      nextAction:        lastAction?.typeAction_legacy ?? lastAction?.typeAction ?? null,
+      nextActionId:      lastAction?.actionTypeId ?? null,
       commentaireAction: lastAction?.commentaire ?? null,
     });
 
