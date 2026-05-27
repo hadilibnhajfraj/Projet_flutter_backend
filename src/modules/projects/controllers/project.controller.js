@@ -181,13 +181,22 @@ async function getProject(req, res) {
 
     const p = project.toJSON();
     const ownerProfile = p.owner?.profile || {};
-    res.json({
+    const lastAction = p.actions?.[0] ?? null;
+
+    const response = {
       ...p,
       title: p.nomProjet || p.comptoir || null,
       owner: p.owner
         ? { id: p.owner.id, email: p.owner.email, fullName: ownerProfile.name || p.owner.email || null, avatarUrl: ownerProfile.avatarUrl || null }
         : null,
-    });
+      lastAction,
+      nextAction: lastAction?.typeAction_legacy ?? null,
+      nextActionId: lastAction?.actionTypeId ?? null,
+    };
+
+    console.log("[PROJECT EDIT]", { id: p.id, nextAction: response.nextAction, nextActionId: response.nextActionId });
+
+    res.json(response);
   } catch (err) {
     handle(res, err);
   }
