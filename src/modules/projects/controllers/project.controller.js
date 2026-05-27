@@ -164,6 +164,35 @@ async function assignOwner(req, res) {
   }
 }
 
+// ── PUT /projects/:id/status ──────────────────────────────
+
+async function updateStatus(req, res) {
+  try {
+    const { id } = req.params;
+    const { statut } = req.body;
+
+    if (!statut) {
+      return res.status(400).json({ success: false, message: "statut est requis" });
+    }
+
+    const project = await Project.findByPk(id, { attributes: ["id", "ownerId", "statut"] });
+    if (!project) return res.status(404).json({ success: false, message: "Projet introuvable" });
+
+    if (!ADMIN_ROLES.includes(req.user?.role) && project.ownerId !== req.user?.sub) {
+      return res.status(403).json({ success: false, message: "Forbidden: not project owner" });
+    }
+
+    const oldStatut = project.statut;
+    await project.update({ statut });
+
+    console.log("[UPDATE STATUS]", { id, oldStatut, newStatut: statut });
+
+    res.json({ success: true, message: "Statut mis à jour", data: { id, statut } });
+  } catch (err) {
+    handle(res, err);
+  }
+}
+
 // ── GET /projects/:id ─────────────────────────────────────
 
 async function getProject(req, res) {
@@ -373,6 +402,7 @@ module.exports = {
   listProjects,
   moveStage,
   assignOwner,
+  updateStatus,
   getProject,
   getTimeline,
   getNotes,
