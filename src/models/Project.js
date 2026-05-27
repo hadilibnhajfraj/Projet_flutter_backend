@@ -111,14 +111,7 @@ const Project = sequelize.define(
     user_nom_custom: DataTypes.STRING,
 
     statut: {
-      type: DataTypes.ENUM(
-        "Identification",
-        "Proposition technique",
-        "Proposition commerciale",
-        "Négociation",
-        "Livraison",
-        "Fidélisation"
-      ),
+      type: DataTypes.STRING(100),
       allowNull: true,
       defaultValue: "Identification",
     },

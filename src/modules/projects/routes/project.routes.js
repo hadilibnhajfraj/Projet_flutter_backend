@@ -15,6 +15,9 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 router.param("id",        (req, res, next, val) => UUID_RE.test(val) ? next() : next("router"));
 router.param("projectId", (req, res, next, val) => UUID_RE.test(val) ? next() : next("router"));
 
+// Available statuses for a given projectModele — static, no UUID needed
+router.get("/statuses", ctrl.listStatuses);
+
 // Enhanced project list: ?mine=true&stageId=X&search=X&page=1&limit=20&sortBy=createdAt
 router.get("/pipeline", validateListQuery, ctrl.listProjects);
 

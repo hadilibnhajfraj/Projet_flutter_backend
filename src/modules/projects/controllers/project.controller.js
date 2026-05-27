@@ -164,6 +164,32 @@ async function assignOwner(req, res) {
   }
 }
 
+// ── Status lists per project model ───────────────────────
+
+const PROJECT_STATUSES = [
+  "Identification",
+  "Prospect",
+  "Contacté",
+  "Site Visit",
+  "Plan technique",
+  "Echantillonnage",
+  "Quote Sent",
+  "Negotiation",
+  "Won",
+  "Lost",
+  "Loyalty",
+];
+
+const REVENDEUR_STATUSES = ["Prospect", "Offre", "Actif", "Raté"];
+
+function getAvailableStatuses(projectModele) {
+  switch (projectModele) {
+    case "revendeur":   return REVENDEUR_STATUSES;
+    case "applicateur": return [];           // no status dropdown for applicateur
+    default:            return PROJECT_STATUSES;
+  }
+}
+
 // ── PUT /projects/:id/status ──────────────────────────────
 
 async function updateStatus(req, res) {
@@ -175,22 +201,51 @@ async function updateStatus(req, res) {
       return res.status(400).json({ success: false, message: "statut est requis" });
     }
 
-    const project = await Project.findByPk(id, { attributes: ["id", "ownerId", "statut"] });
+    const project = await Project.findByPk(id, {
+      attributes: ["id", "ownerId", "statut", "projectModele"],
+    });
     if (!project) return res.status(404).json({ success: false, message: "Projet introuvable" });
 
     if (!ADMIN_ROLES.includes(req.user?.role) && project.ownerId !== req.user?.sub) {
       return res.status(403).json({ success: false, message: "Forbidden: not project owner" });
     }
 
+    const allowed = getAvailableStatuses(project.projectModele);
+    if (allowed.length > 0 && !allowed.includes(statut)) {
+      return res.status(400).json({
+        success: false,
+        message: `Statut invalide pour ${project.projectModele}. Valeurs acceptées : ${allowed.join(", ")}`,
+        allowedStatuses: allowed,
+      });
+    }
+
     const oldStatut = project.statut;
-    await project.update({ statut });
+    await project.update({ statut: allowed.length === 0 ? null : statut });
 
-    console.log("[UPDATE STATUS]", { id, oldStatut, newStatut: statut });
+    console.log("[UPDATE STATUS]", {
+      id,
+      projectModele: project.projectModele,
+      oldStatut,
+      newStatut: statut,
+    });
 
-    res.json({ success: true, message: "Statut mis à jour", data: { id, statut } });
+    res.json({
+      success: true,
+      message: "Statut mis à jour",
+      data: { id, statut, projectModele: project.projectModele },
+      allowedStatuses: allowed,
+    });
   } catch (err) {
     handle(res, err);
   }
+}
+
+// ── GET /projects/statuses ────────────────────────────────
+// Returns the status list for a given projectModele (?projectModele=project|revendeur|applicateur)
+
+function listStatuses(req, res) {
+  const modele = req.query.projectModele || "project";
+  res.json({ success: true, projectModele: modele, statuses: getAvailableStatuses(modele) });
 }
 
 // ── GET /projects/:id ─────────────────────────────────────
@@ -403,6 +458,7 @@ module.exports = {
   moveStage,
   assignOwner,
   updateStatus,
+  listStatuses,
   getProject,
   getTimeline,
   getNotes,

@@ -2866,6 +2866,21 @@ router.put("/:id", authRequired, async (req, res) => {
     }
     console.log("DATE DEMARRAGE =", body.dateDemarrage);
 
+    // Validate statut against per-model allowed list
+    if (body.statut !== undefined) {
+      const modele = body.projectModele || item.projectModele || "project";
+      const PROJECT_STATUSES = ["Identification","Prospect","Contacté","Site Visit","Plan technique","Echantillonnage","Quote Sent","Negotiation","Won","Lost","Loyalty"];
+      const REVENDEUR_STATUSES = ["Prospect","Offre","Actif","Raté"];
+      const allowed = modele === "revendeur" ? REVENDEUR_STATUSES : modele === "applicateur" ? [] : PROJECT_STATUSES;
+      console.log("MODELE:", modele, "| STATUT:", body.statut, "| ALLOWED:", allowed);
+      if (allowed.length > 0 && !allowed.includes(body.statut)) {
+        return res.status(400).json({
+          success: false,
+          message: `Statut invalide pour ${modele}. Valeurs acceptées : ${allowed.join(", ")}`,
+        });
+      }
+    }
+
     const fields = [
       "nomProjet",
       "dateDemarrage",
