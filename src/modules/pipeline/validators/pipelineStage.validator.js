@@ -16,6 +16,7 @@ const createSchema = Joi.object({
   isWonStage: Joi.boolean().optional(),
   isLostStage: Joi.boolean().optional(),
   autoCreateAction: Joi.boolean().optional(),
+  isCustom: Joi.boolean().optional(),
 });
 
 const updateSchema = Joi.object({
@@ -29,6 +30,7 @@ const updateSchema = Joi.object({
   isWonStage: Joi.boolean().optional(),
   isLostStage: Joi.boolean().optional(),
   autoCreateAction: Joi.boolean().optional(),
+  isCustom: Joi.boolean().optional(),
 });
 
 const reorderSchema = Joi.object({

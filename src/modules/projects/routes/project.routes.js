@@ -29,6 +29,8 @@ router.put("/:id/owner", requireOwnerOrAdmin, validateAssignOwner, ctrl.assignOw
 
 // Specific sub-resource routes must come BEFORE the bare /:id catch-all
 router.put("/:id/status", ctrl.updateStatus);
+router.put("/:id/archive", ctrl.archiveProject);
+router.put("/:id/unarchive", ctrl.unarchiveProject);
 router.get("/:id/full", ctrl.getProjectFull);
 router.get("/:id/timeline", ctrl.getTimeline);
 router.get("/:id/notes", ctrl.getNotes);

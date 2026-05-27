@@ -43,6 +43,11 @@ const PipelineStage = sequelize.define(
       type: DataTypes.BOOLEAN,
       defaultValue: false,
     },
+    isCustom: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: true,
+    },
     createdBy: {
       type: DataTypes.UUID,
       allowNull: true,

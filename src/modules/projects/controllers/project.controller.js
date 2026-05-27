@@ -249,6 +249,13 @@ function listStatuses(req, res) {
   res.json({ success: true, projectModele: modele, statuses: getAvailableStatuses(modele) });
 }
 
+// ── Relance status helper ─────────────────────────────────
+
+function getRelanceStatus(nextRelanceDate) {
+  if (!nextRelanceDate) return "none";
+  return new Date(nextRelanceDate) < new Date() ? "late" : "ok";
+}
+
 // ── GET /projects/:id ─────────────────────────────────────
 
 async function getProject(req, res) {
@@ -284,6 +291,7 @@ async function getProject(req, res) {
       nextActionId:  lastAction?.actionTypeId ?? null,
       visitDate:     visitDateISO,
       dateVisite:    visitDateISO,
+      relanceStatus: getRelanceStatus(p.nextRelanceDate),
     };
 
     console.log("[PROJECT EDIT]", {
@@ -439,6 +447,7 @@ async function getProjectFull(req, res) {
           owner: p.owner
             ? { id: p.owner.id, email: p.owner.email, fullName: ownerProfile.name || p.owner.email || null, avatarUrl: ownerProfile.avatarUrl || null }
             : null,
+          relanceStatus: getRelanceStatus(p.nextRelanceDate),
         },
         notes: notes.map(toNoteShape),
         reminders: {
@@ -449,6 +458,58 @@ async function getProjectFull(req, res) {
         recentActivities: recentActivities.map(toActivityEvent),
       },
     });
+  } catch (err) {
+    handle(res, err);
+  }
+}
+
+// ── PUT /projects/:id/archive ─────────────────────────────
+
+async function archiveProject(req, res) {
+  try {
+    const { id } = req.params;
+    if (!await assertAccess(id, req, res)) return;
+
+    const project = await Project.findByPk(id, {
+      attributes: ["id", "isArchived", "ownerId"],
+    });
+    if (!project) return res.status(404).json({ message: "Projet introuvable" });
+
+    const { reason } = req.body;
+
+    await project.update({
+      isArchived: true,
+      archivedAt: new Date(),
+      archiveReason: reason || null,
+    });
+
+    res.json({
+      success: true,
+      message: "Projet archivé",
+      data: { id, isArchived: true, archiveReason: reason || null },
+    });
+  } catch (err) {
+    handle(res, err);
+  }
+}
+
+// ── PUT /projects/:id/unarchive ───────────────────────────
+
+async function unarchiveProject(req, res) {
+  try {
+    const { id } = req.params;
+    if (!await assertAccess(id, req, res)) return;
+
+    const project = await Project.findByPk(id, { attributes: ["id", "ownerId"] });
+    if (!project) return res.status(404).json({ message: "Projet introuvable" });
+
+    await project.update({
+      isArchived: false,
+      archivedAt: null,
+      archiveReason: null,
+    });
+
+    res.json({ success: true, message: "Projet désarchivé", data: { id, isArchived: false } });
   } catch (err) {
     handle(res, err);
   }
@@ -465,4 +526,6 @@ module.exports = {
   getNotes,
   createNote,
   getProjectFull,
+  archiveProject,
+  unarchiveProject,
 };

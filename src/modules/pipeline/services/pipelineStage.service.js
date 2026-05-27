@@ -30,6 +30,7 @@ async function createStage(data, userId) {
         isWonStage: Boolean(data.isWonStage),
         isLostStage: Boolean(data.isLostStage),
         autoCreateAction: Boolean(data.autoCreateAction),
+        isCustom: data.isCustom !== undefined ? Boolean(data.isCustom) : true,
         createdBy: userId || null,
       },
       t

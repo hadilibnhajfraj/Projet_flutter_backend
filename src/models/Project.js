@@ -74,6 +74,10 @@ const Project = sequelize.define(
 
     archivedAt: { type: DataTypes.DATE, allowNull: true },
 
+    archiveReason: { type: DataTypes.TEXT, allowNull: true },
+
+    nextRelanceDate: { type: DataTypes.DATE, allowNull: true },
+
     serviceTechnique: { type: DataTypes.STRING(200), allowNull: true },
 
     entreprise: { type: DataTypes.STRING(200), allowNull: true },
