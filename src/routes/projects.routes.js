@@ -1708,6 +1708,11 @@ router.get("/", authRequired, async (req, res) => {
       ];
     }
 
+    // projectModele filter — Projects / Revendeur / Applicateur sections
+    if (req.query.projectModele?.trim()) {
+      where.projectModele = req.query.projectModele.trim();
+    }
+
     // =========================
     // 🔥 ARCHIVE FILTER
     // =========================

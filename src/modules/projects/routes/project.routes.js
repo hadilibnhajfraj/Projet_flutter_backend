@@ -8,6 +8,13 @@ const { authRequired } = require("../../../middleware/auth.middleware");
 
 router.use(authRequired);
 
+// Guard: /:id and /:projectId params MUST be valid UUIDs.
+// Non-UUID segments (e.g. "my-projects", "applicateur") are skipped so the
+// legacy router mounted after this one can handle them.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+router.param("id",        (req, res, next, val) => UUID_RE.test(val) ? next() : next("router"));
+router.param("projectId", (req, res, next, val) => UUID_RE.test(val) ? next() : next("router"));
+
 // Enhanced project list: ?mine=true&stageId=X&search=X&page=1&limit=20&sortBy=createdAt
 router.get("/pipeline", validateListQuery, ctrl.listProjects);
 
