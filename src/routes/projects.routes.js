@@ -3001,52 +3001,8 @@ router.put("/:id", authRequired, async (req, res) => {
       up.dateLimiteIngenieur = null;
     }
 
-    const oldStage = item.pipelineStage;
-    const newStage = body.pipelineStage;
-
     await item.update(up);
     await item.reload();
-
-    // =========================
-    // AUTO ACTION
-    // =========================
-    if (newStage && newStage !== oldStage) {
-      const nextAction = getNextAction(newStage);
-
-      if (nextAction) {
-        await ProjectAction.create({
-          projectId: item.id,
-          typeAction: nextAction,
-          commentaire: "Next action automatique",
-          createdBy: req.user.sub,
-          dateAction: new Date(),
-        });
-      }
-    }
-
-    // =========================
-    // MANUAL ACTION
-    // =========================
-    if (body.firstAction !== undefined) {
-
-      if (!body.firstAction || reqStr(body.firstAction) === "") {
-        return res.status(400).json({ message: "Action invalide" });
-      }
-
-      if (!body.dateVisite) {
-        return res.status(400).json({
-          message: "dateVisite est obligatoire avec une action",
-        });
-      }
-
-      await ProjectAction.create({
-        projectId: item.id,
-        typeAction: body.firstAction,
-        commentaire: clean(body.commentaireAction),
-        createdBy: req.user.sub,
-        dateAction: body.dateVisite,
-      });
-    }
 
     const lastAction = await ProjectAction.findOne({
       where: { projectId: item.id },

@@ -45,20 +45,6 @@ async function createAction(projectId, body, userId) {
 
   console.log("LEGACY ACTION =", legacyAction);
 
-  // ── Duplicate detection (outside transaction — read-only) ─────────────
-  const duplicate = await actionRepo.findDuplicate(
-    projectId,
-    legacyAction,
-    body?.commentaire || null,
-    body?.dateAction || null
-  );
-  if (duplicate) {
-    throw {
-      status: 409,
-      message: "This action already exists for this project on this date",
-    };
-  }
-
   const t = await sequelize.transaction();
 
   try {
@@ -163,6 +149,8 @@ async function updateAction(id, body, userId) {
         if (err) console.warn("Could not delete old action file:", err.message);
       });
     }
+
+    console.log("[UPDATE ACTION]", { id: action.id, projectId: action.projectId, dateAction: patch.dateAction });
 
     await actionRepo.update(id, patch, t);
 
