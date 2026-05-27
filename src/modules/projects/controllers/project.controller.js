@@ -183,20 +183,32 @@ async function getProject(req, res) {
     const ownerProfile = p.owner?.profile || {};
     const lastAction = p.actions?.[0] ?? null;
 
+    const visitDateISO = lastAction?.dateAction ? new Date(lastAction.dateAction).toISOString() : null;
+
     const response = {
       ...p,
       title: p.nomProjet || p.comptoir || null,
       owner: p.owner
         ? { id: p.owner.id, email: p.owner.email, fullName: ownerProfile.name || p.owner.email || null, avatarUrl: ownerProfile.avatarUrl || null }
         : null,
+      // Dates — both keys so Flutter can use either
+      dateDemarrage: p.dateDemarrage ?? null,
+      startDate:     p.dateDemarrage ?? null,
       lastAction,
-      nextAction: lastAction?.typeAction_legacy ?? null,
-      nextActionId: lastAction?.actionTypeId ?? null,
-      visitDate: lastAction?.dateAction ? new Date(lastAction.dateAction).toISOString() : null,
-      dateVisite: lastAction?.dateAction ? new Date(lastAction.dateAction).toISOString() : null,
+      nextAction:    lastAction?.typeAction_legacy ?? null,
+      nextActionId:  lastAction?.actionTypeId ?? null,
+      visitDate:     visitDateISO,
+      dateVisite:    visitDateISO,
     };
 
-    console.log("[PROJECT EDIT]", { id: p.id, nextAction: response.nextAction, nextActionId: response.nextActionId, visitDate: response.visitDate });
+    console.log("[PROJECT EDIT]", {
+      id: p.id,
+      dateDemarrage: response.dateDemarrage,
+      startDate:     response.startDate,
+      nextAction:    response.nextAction,
+      nextActionId:  response.nextActionId,
+      visitDate:     response.visitDate,
+    });
 
     res.json(response);
   } catch (err) {

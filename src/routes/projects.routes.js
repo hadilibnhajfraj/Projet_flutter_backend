@@ -1522,6 +1522,8 @@ router.post("/", authRequired, async (req, res) => {
     // =========================
     // 🚀 CREATE
     // =========================
+    console.log("BODY =", req.body);
+    console.log("DATE DEMARRAGE =", body.dateDemarrage || body.startDate);
     const p = await Project.create({
       nomProjet,
       ownerId: req.user.sub,
@@ -1570,7 +1572,7 @@ router.post("/", authRequired, async (req, res) => {
       // =========================
       // ⚪ PROJECT NORMAL
       // =========================
-      dateDemarrage: body.dateDemarrage ?? new Date(),
+      dateDemarrage: body.dateDemarrage || body.startDate || null,
 
       statut: !isRevendeur && !isApplicateur
         ? body.statut || "Identification"
@@ -1676,9 +1678,34 @@ user_nom_custom: body.user_nom_custom || null,
       defaults: { permission: "owner" },
     });
 
+    // Reload with owner + profile so Flutter gets the full owner shape immediately
+    const created = await Project.findByPk(p.id, {
+      include: [
+        {
+          model: User,
+          as: "owner",
+          attributes: ["id", "email"],
+          include: [
+            { model: UserProfile, as: "profile", attributes: ["name", "avatarUrl"], required: false },
+          ],
+          required: false,
+        },
+      ],
+    });
+
+    const createdJson = created.toJSON();
+    const ownerProfile = createdJson.owner?.profile || {};
+
     return res.status(201).json({
-      ...p.toJSON(),
+      ...createdJson,
       permission: "owner",
+      title: createdJson.nomProjet || createdJson.comptoir || null,
+      owner: createdJson.owner ? {
+        id: createdJson.owner.id,
+        email: createdJson.owner.email,
+        fullName: ownerProfile.name || createdJson.owner.email || null,
+        avatarUrl: ownerProfile.avatarUrl || null,
+      } : null,
     });
 
   } catch (e) {
@@ -2833,6 +2860,12 @@ router.put("/:id", authRequired, async (req, res) => {
       body.architecteCustom !== undefined ||
       body.architecte !== undefined;
 
+    // Normalize Flutter aliases before processing fields
+    if (body.startDate !== undefined && body.dateDemarrage === undefined) {
+      body.dateDemarrage = body.startDate || null;
+    }
+    console.log("DATE DEMARRAGE =", body.dateDemarrage);
+
     const fields = [
       "nomProjet",
       "dateDemarrage",
@@ -2893,6 +2926,7 @@ router.put("/:id", authRequired, async (req, res) => {
         const allowed = [
           "nomProjet",
           "projectModele",
+          "dateDemarrage",
           "comptoir",
           "telephoneComptoir",
           "telephoneComptoir2",
@@ -2905,6 +2939,8 @@ router.put("/:id", authRequired, async (req, res) => {
           "adresseRevendeur",
           "validationStatut",
           "pipelineStage",
+          "montantMarche",
+          "pourcentageReussite",
         ];
 
         if (allowed.includes(f)) {
@@ -2920,6 +2956,7 @@ router.put("/:id", authRequired, async (req, res) => {
         const allowed = [
           "nomProjet",
           "projectModele",
+          "dateDemarrage",
           "dallagiste",
           "telephoneDallagiste",
           "emailDallagiste",
@@ -2930,6 +2967,7 @@ router.put("/:id", authRequired, async (req, res) => {
           "validationStatut",
           "pipelineStage",
           "montantMarche",
+          "pourcentageReussite",
         ];
 
         if (allowed.includes(f)) {
@@ -2950,7 +2988,6 @@ router.put("/:id", authRequired, async (req, res) => {
     // 🔥 RESET CHAMPS SI PAS CHANTIER
     // =========================
     if (!isChantier) {
-      up.dateDemarrage = null;
       up.typeAdresseChantier = null;
       up.latitude = null;
       up.longitude = null;

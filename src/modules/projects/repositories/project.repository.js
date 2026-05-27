@@ -119,6 +119,7 @@ const LIST_ATTRIBUTES = [
   "pourcentageReussite",
   "montantMarche",
   "adresse",
+  "dateDemarrage",
   "lastRelanceAt",
   "user_nom",
   "user_nom_custom",

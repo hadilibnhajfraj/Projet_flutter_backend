@@ -200,6 +200,8 @@ function toProjectCard(project) {
     montantMarche: p.montantMarche !== null ? parseFloat(p.montantMarche) : null,
 
     adresse: p.adresse || null,
+    dateDemarrage: p.dateDemarrage ?? null,
+    startDate:     p.dateDemarrage ?? null,
     lastRelanceAt: p.lastRelanceAt,
     createdAt: p.createdAt,
     updatedAt: p.updatedAt,
