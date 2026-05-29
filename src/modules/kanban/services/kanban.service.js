@@ -2,6 +2,7 @@ const PipelineStage = require("../../../models/PipelineStage");
 const projectRepo = require("../../projects/repositories/project.repository");
 const stageRepo = require("../../pipeline/repositories/pipelineStage.repository");
 const { sequelize } = require("../../../db");
+const { computeCompletion } = require("../../projects/utils/project.completion");
 
 // ── TTL cache for pipeline stages (60 s) ─────────────────────────────────────
 const _stageCache = { data: null, expiresAt: 0 };
@@ -203,8 +204,16 @@ function toProjectCard(project) {
     dateDemarrage: p.dateDemarrage ?? null,
     startDate:     p.dateDemarrage ?? null,
     lastRelanceAt: p.lastRelanceAt,
+    nextRelanceDate: p.nextRelanceDate ?? null,
+    relanceStatus: (() => {
+      if (!p.nextRelanceDate) return "none";
+      return new Date(p.nextRelanceDate) < new Date() ? "late" : "ok";
+    })(),
+    isArchived: p.isArchived || false,
     createdAt: p.createdAt,
     updatedAt: p.updatedAt,
+
+    ...computeCompletion(p),
   };
 }
 

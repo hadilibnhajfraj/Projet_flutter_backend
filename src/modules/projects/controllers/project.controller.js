@@ -1,5 +1,6 @@
 const svc = require("../services/project.service");
 const projectRepo = require("../repositories/project.repository");
+const { computeCompletion } = require("../utils/project.completion");
 const ProjectAction = require("../../../models/ProjectAction");
 const ProjectActionType = require("../../../models/ProjectActionType");
 const ProjectReminder = require("../../../models/ProjectReminder");
@@ -292,6 +293,7 @@ async function getProject(req, res) {
       visitDate:     visitDateISO,
       dateVisite:    visitDateISO,
       relanceStatus: getRelanceStatus(p.nextRelanceDate),
+      ...computeCompletion(p),
     };
 
     console.log("[PROJECT EDIT]", {
@@ -448,6 +450,7 @@ async function getProjectFull(req, res) {
             ? { id: p.owner.id, email: p.owner.email, fullName: ownerProfile.name || p.owner.email || null, avatarUrl: ownerProfile.avatarUrl || null }
             : null,
           relanceStatus: getRelanceStatus(p.nextRelanceDate),
+          ...computeCompletion(p),
         },
         notes: notes.map(toNoteShape),
         reminders: {
