@@ -25,7 +25,7 @@ function handle(res, err) {
 const REQUESTER_INCLUDE = {
   model: User,
   as: "requester",
-  attributes: ["id", "email"],
+  attributes: ["id", "email", "role"],
   include: [{ model: UserProfile, as: "profile", attributes: ["name", "avatarUrl"], required: false }],
   required: false,
 };
@@ -33,9 +33,61 @@ const REQUESTER_INCLUDE = {
 const PROJECT_INCLUDE = {
   model: Project,
   as: "archiveProject",
-  attributes: ["id", "nomProjet", "isArchived", "archiveReason"],
+  // Real DB columns — nomProjet is the project name field
+  attributes: ["id", "nomProjet", "comptoir", "isArchived", "archiveReason"],
   required: false,
 };
+
+// ── Response normalizer ───────────────────────────────────
+// Maps DB shape → shape Flutter expects (projectName, requester.name)
+
+function normalizeRequest(r) {
+  const j = r.toJSON ? r.toJSON() : r;
+  const p = j.archiveProject || null;
+  const u = j.requester || null;
+  const profile = u?.profile || {};
+
+  // Build display name from UserProfile.name (User has no name/firstName/lastName columns)
+  const displayName = profile.name || u?.email || "Utilisateur";
+
+  const normalized = {
+    id:        j.id,
+    subject:   j.subject,
+    message:   j.message,
+    status:    j.status,
+    projectId: j.projectId,
+    userId:    j.userId,
+    adminId:   j.adminId,
+    createdAt: j.createdAt,
+    updatedAt: j.updatedAt,
+
+    archiveProject: p ? {
+      id:          p.id,
+      nomProjet:   p.nomProjet,
+      projectName: p.nomProjet || p.comptoir || "Projet inconnu",
+      name:        p.nomProjet || p.comptoir || "Projet inconnu",
+      isArchived:  p.isArchived,
+      archiveReason: p.archiveReason,
+    } : null,
+
+    // Always non-null — fallback to userId so Flutter never sees null requester
+    requester: {
+      id:        u?.id    || j.userId || null,
+      email:     u?.email || "—",
+      name:      displayName,
+      firstName: displayName,
+      lastName:  "",
+      avatarUrl: profile.avatarUrl || null,
+    },
+  };
+
+  console.log("REQUEST FOUND", j.id);
+  console.log("PROJECT", normalized.archiveProject);
+  console.log("REQUESTER =", j.requester);      // raw value from DB join
+  console.log("REQUESTER NORMALIZED =", normalized.requester);
+
+  return normalized;
+}
 
 // ── POST /archive-requests ────────────────────────────────
 
@@ -87,7 +139,7 @@ async function getAllRequests(req, res) {
 
     console.log("ARCHIVE REQUESTS =", requests.length);
 
-    return res.json({ success: true, count: requests.length, data: requests });
+    return res.json({ success: true, count: requests.length, data: requests.map(normalizeRequest) });
   } catch (err) {
     handle(res, err);
   }
@@ -125,7 +177,7 @@ async function getMyRequests(req, res) {
 
     console.log("REQUESTS FOUND =", requests.length);
 
-    return res.status(200).json(requests);
+    return res.status(200).json(requests.map(normalizeRequest));
   } catch (err) {
     handle(res, err);
   }
@@ -145,9 +197,8 @@ async function getAdminRequests(req, res) {
     const requests = await svc.getAdminRequests(req.user.sub, req.query.status || null);
 
     console.log("REQUESTS FOUND =", requests.length);
-    console.log(requests.map((r) => ({ id: r.id, projectId: r.projectId, userId: r.userId, status: r.status })));
 
-    res.json({ success: true, count: requests.length, data: requests });
+    res.json({ success: true, count: requests.length, data: requests.map(normalizeRequest) });
   } catch (err) {
     handle(res, err);
   }
@@ -171,7 +222,7 @@ async function getPendingRequests(req, res) {
 
     console.log("PENDING REQUESTS FOUND =", requests.length);
 
-    res.json({ success: true, count: requests.length, data: requests });
+    res.json({ success: true, count: requests.length, data: requests.map(normalizeRequest) });
   } catch (err) {
     handle(res, err);
   }
@@ -207,11 +258,19 @@ async function addMessage(req, res) {
 
 async function approveRequest(req, res) {
   try {
+    console.log("APPROVE REQUEST");
+    console.log(req.params.id);
+    console.log("ADMIN =", req.user.sub, "ROLE =", req.user?.role);
+
     if (!ADMIN_ROLES.includes(req.user?.role)) {
       return res.status(403).json({ success: false, message: "Accès réservé aux administrateurs" });
     }
-    const data = await svc.approveRequest(req.user.sub, req.params.id);
-    res.json({ success: true, message: "Demande approuvée — projet désarchivé", data });
+
+    await svc.approveRequest(req.user.sub, req.params.id);
+
+    console.log("APPROVE OK — project unarchived");
+
+    res.json({ success: true, status: "approved" });
   } catch (err) {
     handle(res, err);
   }
@@ -221,11 +280,19 @@ async function approveRequest(req, res) {
 
 async function rejectRequest(req, res) {
   try {
+    console.log("REJECT REQUEST");
+    console.log(req.params.id);
+    console.log("ADMIN =", req.user.sub, "ROLE =", req.user?.role);
+
     if (!ADMIN_ROLES.includes(req.user?.role)) {
       return res.status(403).json({ success: false, message: "Accès réservé aux administrateurs" });
     }
-    const data = await svc.rejectRequest(req.user.sub, req.params.id, req.body.reason || null);
-    res.json({ success: true, message: "Demande refusée", data });
+
+    await svc.rejectRequest(req.user.sub, req.params.id, req.body.reason || null);
+
+    console.log("REJECT OK");
+
+    res.json({ success: true, status: "rejected" });
   } catch (err) {
     handle(res, err);
   }
