@@ -1,9 +1,11 @@
 require("dotenv").config();
+const http = require("http");
 const express = require("express");
 const helmet = require("helmet");
 const cors = require("cors");
 const cookieParser = require("cookie-parser");
 const { sequelize } = require("./db");
+const socket = require("./socket");
 require("./services/scheduler");
 
 const authRoutes = require("./routes/auth.routes");
@@ -34,6 +36,7 @@ const kanbanRoutes = require("./modules/kanban/routes/kanban.routes");
 const pipelineProjectRoutes = require("./modules/projects/routes/project.routes");
 const actionTypeRoutes = require("./modules/project-actions/routes/projectActionType.routes");
 const dashboardRoutes = require("./modules/dashboard/routes/dashboard.routes");
+const archiveRequestRoutes = require("./modules/archive-requests/routes/archiveRequest.routes");
 
 const app = express();
 
@@ -65,6 +68,7 @@ app.use("/pipeline", kanbanRoutes);
 app.use("/projects", pipelineProjectRoutes);
 app.use("/action-types", actionTypeRoutes);
 app.use("/dashboard", dashboardRoutes);
+app.use("/archive-requests", archiveRequestRoutes);
 
 // ── Existing routes (unchanged) ──────────────────────────
 app.use("/projects", projectRoutes);
@@ -100,7 +104,9 @@ async function start() {
     await syncPeopleFromProjects();
 
     const port = Number(process.env.PORT || 4000);
-    app.listen(port, () => console.log(`✅ API running on http://localhost:${port}`));
+    const httpServer = http.createServer(app);
+    socket.init(httpServer);
+    httpServer.listen(port, () => console.log(`✅ API running on http://localhost:${port}`));
   } catch (e) {
     console.error("❌ START_ERROR:", e);
     process.exit(1);

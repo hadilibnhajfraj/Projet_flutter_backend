@@ -15,15 +15,8 @@ const Notification = sequelize.define(
       allowNull: false,
     },
 
-    // 🔥 TYPE GLOBAL (TRÈS IMPORTANT)
     type: {
-      type: DataTypes.ENUM(
-        "PROJECT_COMMENT",
-        "PROJECT_UPDATE",
-        "FOLLOWUP",
-        "FOLLOWUP_MISSING",
-        "CONTACT_CREATED"
-      ),
+      type: DataTypes.STRING(80),
       allowNull: false,
     },
 

@@ -24,6 +24,8 @@ const CommercialProject = require("./CommercialProject");
 const PipelineStage = require("./PipelineStage");
 const ProjectActionType = require("./ProjectActionType");
 const ProjectActivity = require("./ProjectActivity");
+const ArchiveRequest = require("./ArchiveRequest");
+const ArchiveRequestMessage = require("./ArchiveRequestMessage");
 
 // ── PIPELINE STAGE <-> PROJECT ────────────────────────────
 
@@ -278,6 +280,25 @@ CommercialProject.belongsTo(CommercialContact, {
   as: "contact",
 });
 
+// ── ARCHIVE REQUESTS ──────────────────────────────────────
+
+Project.hasMany(ArchiveRequest, { foreignKey: "projectId", as: "archiveRequests", onDelete: "CASCADE" });
+// alias "archiveProject" — unique to avoid collision with ProjectActivity/Task/ProjectAction's "project" alias
+ArchiveRequest.belongsTo(Project, { foreignKey: "projectId", as: "archiveProject" });
+
+User.hasMany(ArchiveRequest, { foreignKey: "userId", as: "userArchiveRequests" });
+ArchiveRequest.belongsTo(User, { foreignKey: "userId", as: "requester" });
+
+ArchiveRequest.belongsTo(User, { foreignKey: "adminId", as: "assignedAdmin" });
+User.hasMany(ArchiveRequest, { foreignKey: "adminId", as: "assignedRequests" });
+
+ArchiveRequest.hasMany(ArchiveRequestMessage, { foreignKey: "requestId", as: "messages", onDelete: "CASCADE" });
+ArchiveRequestMessage.belongsTo(ArchiveRequest, { foreignKey: "requestId", as: "request" });
+ArchiveRequestMessage.belongsTo(User, { foreignKey: "senderId", as: "sender" });
+User.hasMany(ArchiveRequestMessage, { foreignKey: "senderId", as: "archiveRequestMessages" });
+
+console.log("ARCHIVE ASSOCIATIONS LOADED");
+
 // ── EXPORTS ───────────────────────────────────────────────
 
 module.exports = {
@@ -305,4 +326,6 @@ module.exports = {
   PipelineStage,
   ProjectActionType,
   ProjectActivity,
+  ArchiveRequest,
+  ArchiveRequestMessage,
 };
