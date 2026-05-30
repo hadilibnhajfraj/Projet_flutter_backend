@@ -1152,13 +1152,13 @@ router.get("/projectsusers", authRequired, async (req, res) => {
 
     if (typeof q === "string" && q.trim()) {
       const s = q.trim();
+      // validationStatut is an ENUM — never use ILIKE on it
       where[Op.or] = [
         { nomProjet: { [Op.iLike]: `%${s}%` } },
         { entreprise: { [Op.iLike]: `%${s}%` } },
         { promoteur: { [Op.iLike]: `%${s}%` } },
         { adresse: { [Op.iLike]: `%${s}%` } },
         { typeProjet: { [Op.iLike]: `%${s}%` } },
-        { validationStatut: { [Op.iLike]: `%${s}%` } },
       ];
     }
 
@@ -1297,8 +1297,8 @@ router.get("/admin/users-projects-count", authRequired, adminOnly, async (req, r
 
     return res.json(out);
   } catch (e) {
-    console.error("ADMIN_USERS_PROJECTS_COUNT_ERROR:", e);
-    return res.status(500).json({ message: e.message || "Server error" });
+    console.error("PROJECT FILTER ERROR", e);
+    return res.status(500).json({ success: false, message: e.message || "Server error" });
   }
 });
 router.get("/admin/user/:userId/projects", authRequired, adminOnly, async (req, res) => {
@@ -1312,13 +1312,13 @@ router.get("/admin/user/:userId/projects", authRequired, adminOnly, async (req, 
 
     if (typeof q === "string" && q.trim()) {
       const s = q.trim();
+      // validationStatut is an ENUM — never use ILIKE on it
       where[Op.or] = [
         { nomProjet: { [Op.iLike]: `%${s}%` } },
         { entreprise: { [Op.iLike]: `%${s}%` } },
         { promoteur: { [Op.iLike]: `%${s}%` } },
         { adresse: { [Op.iLike]: `%${s}%` } },
         { typeProjet: { [Op.iLike]: `%${s}%` } },
-        { validationStatut: { [Op.iLike]: `%${s}%` } },
       ];
     }
 
@@ -1380,8 +1380,8 @@ router.get("/admin/user/:userId/projects", authRequired, adminOnly, async (req, 
 
     return res.json(out);
   } catch (e) {
-    console.error("ADMIN_USER_PROJECTS_LIST_ERROR:", e);
-    return res.status(500).json({ message: e.message || "Server error" });
+    console.error("PROJECT FILTER ERROR", e);
+    return res.status(500).json({ success: false, message: e.message || "Server error" });
   }
 });
 /* ============================================================
@@ -1710,13 +1710,13 @@ router.get("/", authRequired, async (req, res) => {
 
     if (typeof q === "string" && q.trim()) {
       const s = q.trim();
+      // validationStatut is an ENUM — never use ILIKE on it
       where[Op.or] = [
         { nomProjet: { [Op.iLike]: `%${s}%` } },
         { entreprise: { [Op.iLike]: `%${s}%` } },
         { promoteur: { [Op.iLike]: `%${s}%` } },
         { adresse: { [Op.iLike]: `%${s}%` } },
         { typeProjet: { [Op.iLike]: `%${s}%` } },
-        { validationStatut: { [Op.iLike]: `%${s}%` } },
       ];
     }
 
@@ -1881,8 +1881,8 @@ router.get("/", authRequired, async (req, res) => {
 
     return res.json(out);
   } catch (e) {
-    console.error("PROJECT_LIST_ERROR:", e);
-    return res.status(500).json({ message: e.message || "Server error" });
+    console.error("PROJECT FILTER ERROR", e);
+    return res.status(500).json({ success: false, message: e.message || "Server error" });
   }
 });
 
