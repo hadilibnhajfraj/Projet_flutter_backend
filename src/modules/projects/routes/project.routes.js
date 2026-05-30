@@ -1,5 +1,6 @@
 const router = require("express").Router();
 const ctrl = require("../controllers/project.controller");
+const { exportProjects } = require("../controllers/projectExport.controller");
 const { validateMoveStage, validateAssignOwner, validateListQuery } = require("../validators/project.validator");
 const { requireOwnerOrAdmin } = require("../policies/project.policy");
 const activityRoutes = require("../../project-activities/routes/projectActivity.routes");
@@ -17,6 +18,10 @@ router.param("projectId", (req, res, next, val) => UUID_RE.test(val) ? next() : 
 
 // Available statuses for a given projectModele — static, no UUID needed
 router.get("/statuses", ctrl.listStatuses);
+
+// Excel export — must be before /:id catch-all
+// ?type=project|revendeur|applicateur &status=... &validation=... &startDate=... &endDate=...
+router.get("/export", exportProjects);
 
 // Enhanced project list: ?mine=true&stageId=X&search=X&page=1&limit=20&sortBy=createdAt
 router.get("/pipeline", validateListQuery, ctrl.listProjects);
