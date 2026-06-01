@@ -512,10 +512,17 @@ function getProjectColor(stage){
 
 router.get("/user-kpi", authRequired, async (req, res) => {
   try {
+    console.log("ROUTE CALLED");
+    console.log(req.originalUrl);
+
     const totalUsers = await User.count();
     const activeUsers = await User.count({ where: { isActive: true } });
     const activePercentage = totalUsers === 0 ? 0 : Number(((activeUsers / totalUsers) * 100).toFixed(2));
-    res.json({ activeUsers, totalUsers, activePercentage });
+
+    const response = { activeUsers, totalUsers, activePercentage };
+    console.log("KPI RESPONSE");
+    console.log(JSON.stringify(response, null, 2));
+    res.json(response);
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
@@ -636,7 +643,14 @@ router.get("/kpi/validation-by-location", authRequired, async (req, res) => {
 });
 router.get("/kpi/validation-status-count", authRequired, async (req, res) => {
   try {
+    console.log("ROUTE CALLED");
+    console.log(req.originalUrl);
+
+    const isAdmin = ADMIN_ROLES.includes(req.user?.role);
+    const ownerWhere = isAdmin ? {} : { ownerId: req.user.sub };
+
     const rows = await Project.findAll({
+      where: ownerWhere,
       attributes: [
         "validationStatut",
         [sequelize.fn("COUNT", sequelize.col("id")), "projectCount"],
@@ -645,21 +659,25 @@ router.get("/kpi/validation-status-count", authRequired, async (req, res) => {
       raw: true,
     });
 
-    res.json(
-      rows.map((r) => ({
-        validationStatut: r.validationStatut ?? "Non défini",
-        projectCount: Number(r.projectCount || 0),
-      }))
-    );
+    const response = rows.map((r) => ({
+      validationStatut: r.validationStatut ?? "Non défini",
+      projectCount: Number(r.projectCount || 0),
+    }));
+    console.log("KPI RESPONSE");
+    console.log(JSON.stringify(response, null, 2));
+    res.json(response);
   } catch (err) {
     res.status(500).json({ error: "KPI_VALIDATION_STATUS_COUNT_ERROR", details: err.message });
   }
 });
 router.get("/kpi/dashboard", authRequired, async (req, res) => {
   try {
-    const accessibleIds = await getAccessibleProjectIds(req.user);
-    const where = buildProjectWhere(accessibleIds);
-    const global = isGlobalKpiUser(req.user);
+    console.log("ROUTE CALLED");
+    console.log(req.originalUrl);
+
+    const global     = isGlobalKpiUser(req.user);
+    const ownerWhere = global ? {} : { ownerId: req.user.sub };
+    const where      = { ...ownerWhere, isArchived: false };
 
     const totalProjects = await Project.count({ where });
     const validatedProjects = await Project.count({ where: { ...where, validationStatut: "Validé" } });
@@ -743,8 +761,24 @@ router.get("/kpi/dashboard", authRequired, async (req, res) => {
       raw: true,
     });
 
-    return res.json({
-      summary: { totalProjects, validatedProjects, nonValidatedProjects, validatedPercentage },
+    const archivedProjects = await Project.count({ where: { ...ownerWhere, isArchived: true } });
+    const pendingProjects  = await Project.count({
+      where: { ...ownerWhere, isArchived: false, statut: { [Op.notIn]: ["Gagné", "Perdu"] } },
+    });
+    const successRate = totalProjects > 0
+      ? Number(((validatedProjects / totalProjects) * 100).toFixed(2))
+      : 0;
+
+    const response = {
+      summary: {
+        totalProjects,
+        validatedProjects,
+        nonValidatedProjects,
+        validatedPercentage,
+        archivedProjects,
+        pendingProjects,
+        successRate,
+      },
       validationStatusCount: validationStatusCount.map((r) => ({
         validationStatut: r.validationStatut ?? "Non défini",
         projectCount: Number(r.projectCount || 0),
@@ -753,8 +787,11 @@ router.get("/kpi/dashboard", authRequired, async (req, res) => {
       mapProjects,
       topUsers,
       latestProjects,
-      scope: global ? "GLOBAL" : "USER_ONLY", // (optionnel) utile pour debug frontend
-    });
+      scope: global ? "GLOBAL" : "USER_ONLY",
+    };
+    console.log("KPI RESPONSE");
+    console.log(JSON.stringify(response.summary, null, 2));
+    return res.json(response);
   } catch (err) {
     console.error("KPI_DASHBOARD_ERROR:", err);
     return res.status(500).json({ error: "KPI_DASHBOARD_ERROR", details: err.message });
@@ -763,50 +800,56 @@ router.get("/kpi/dashboard", authRequired, async (req, res) => {
 
 router.get("/kpi/map-projects", authRequired, async (req, res) => {
   try {
+    console.log("ROUTE CALLED");
+    console.log(req.originalUrl);
+
+    const isAdmin = ADMIN_ROLES.includes(req.user?.role);
+    const ownerWhere = isAdmin ? {} : { ownerId: req.user.sub };
+
     const items = await Project.findAll({
-      attributes: [
-        "id",
-        "nomProjet",
-        "latitude",
-        "longitude",
-        "validationStatut",
-        "statut",
-        "adresse",
-        "localisationCommentaire",
-        "createdAt",
-      ],
+      attributes: ["id", "nomProjet", "latitude", "longitude", "validationStatut", "statut", "adresse", "localisationCommentaire", "createdAt"],
       where: {
-        latitude: { [Op.ne]: null },
+        ...ownerWhere,
+        latitude:  { [Op.ne]: null },
         longitude: { [Op.ne]: null },
+        isArchived: false,
       },
       order: [["createdAt", "DESC"]],
       raw: true,
     });
 
+    console.log("KPI RESPONSE — map-projects count:", items.length);
     res.json(items);
   } catch (err) {
     res.status(500).json({ error: "KPI_MAP_PROJECTS_ERROR", details: err.message });
   }
 });
 
-// Nouvelle route pour récupérer le nombre de projets par statut
 router.get("/kpi/projects-by-status", authRequired, async (req, res) => {
   try {
+    console.log("ROUTE CALLED");
+    console.log(req.originalUrl);
+
+    const isAdmin = ADMIN_ROLES.includes(req.user?.role);
+    const ownerWhere = isAdmin ? {} : { ownerId: req.user.sub };
+
     const rows = await Project.findAll({
+      where: { ...ownerWhere, isArchived: false },
       attributes: [
-        "statut", // Le statut des projets
-        [sequelize.fn("COUNT", sequelize.col("id")), "projectCount"], // Nombre de projets pour chaque statut
+        "statut",
+        [sequelize.fn("COUNT", sequelize.col("id")), "projectCount"],
       ],
-      group: ["statut"], // Groupé par statut
+      group: ["statut"],
       raw: true,
     });
 
-    const result = rows.map((r) => ({
-      statut: r.statut, // "En cours", "Préparation", ou "Terminé"
-      projectCount: Number(r.projectCount || 0), // Nombre de projets pour chaque statut
+    const response = rows.map((r) => ({
+      statut: r.statut ?? "Sans statut",
+      projectCount: Number(r.projectCount || 0),
     }));
-
-    res.json(result); // Retourne les résultats au frontend
+    console.log("KPI RESPONSE");
+    console.log(JSON.stringify(response, null, 2));
+    res.json(response);
   } catch (err) {
     res.status(500).json({ error: "KPI_PROJECTS_BY_STATUS_ERROR", details: err.message });
   }
@@ -838,305 +881,235 @@ router.get("/kpi/projects-by-status-and-date", authRequired, async (req, res) =>
     res.status(500).json({ error: "KPI_PROJECTS_BY_STATUS_AND_DATE_ERROR", details: err.message });
   }
 });
-// ✅ Projets groupés par mois (dateDemarrage) avec % validé + moyenne pourcentageReussite
 router.get("/kpi/projects-by-month", authRequired, async (req, res) => {
   try {
-    // monthKey: 2026-01, 2026-02 ...
-    const rows = await Project.findAll({
-      attributes: [
-        [sequelize.fn("to_char", sequelize.col("dateDemarrage"), "YYYY-MM"), "monthKey"],
-        [sequelize.fn("COUNT", sequelize.col("id")), "totalProjects"],
-        [
-          sequelize.fn("SUM", sequelize.literal(`CASE WHEN "validationStatut" = 'Validé' THEN 1 ELSE 0 END`)),
-          "validatedProjects",
-        ],
-        [sequelize.fn("AVG", sequelize.cast(sequelize.col("pourcentageReussite"), "float")), "avgReussite"],
-      ],
-      group: [sequelize.fn("to_char", sequelize.col("dateDemarrage"), "YYYY-MM")],
-      order: [[sequelize.fn("to_char", sequelize.col("dateDemarrage"), "YYYY-MM"), "ASC"]],
-      raw: true,
-    });
+    console.log("ROUTE CALLED");
+    console.log(req.originalUrl);
 
-    const result = rows.map((r) => {
-      const total = Number(r.totalProjects || 0);
+    const isAdmin = ADMIN_ROLES.includes(req.user?.role);
+    const ownerClause = isAdmin ? "" : `AND "ownerId" = :userId`;
+    const userId = req.user.sub;
+
+    // Groups by createdAt month (12 months rolling window) with role filter
+    const ago12 = new Date();
+    ago12.setMonth(ago12.getMonth() - 11);
+    ago12.setDate(1);
+    ago12.setHours(0, 0, 0, 0);
+
+    const rows = await sequelize.query(
+      `SELECT TO_CHAR(DATE_TRUNC('month', "createdAt"), 'YYYY-MM') AS month,
+              COUNT(*)::int AS "totalProjects",
+              COUNT(*) FILTER (WHERE "validationStatut" = 'Validé')::int AS "validatedProjects",
+              COALESCE(AVG(CAST("pourcentageReussite" AS float)) FILTER (WHERE "pourcentageReussite" IS NOT NULL), 0)::float AS "avgReussite"
+       FROM projects
+       WHERE "isArchived" = false
+         AND "createdAt" >= :ago12
+         ${ownerClause}
+       GROUP BY DATE_TRUNC('month', "createdAt")
+       ORDER BY DATE_TRUNC('month', "createdAt") ASC`,
+      { replacements: { userId, ago12 }, type: "SELECT" }
+    );
+
+    const response = rows.map((r) => {
+      const total     = Number(r.totalProjects || 0);
       const validated = Number(r.validatedProjects || 0);
-      const validatedPercentage = total === 0 ? 0 : Number(((validated / total) * 100).toFixed(2));
-      const avgReussite = r.avgReussite == null ? 0 : Number(Number(r.avgReussite).toFixed(2));
-
       return {
-        month: String(r.monthKey),            // "2026-01"
-        totalProjects: total,
-        validatedProjects: validated,
-        validatedPercentage,
-        avgReussite,
+        month:              String(r.month),
+        totalProjects:      total,
+        validatedProjects:  validated,
+        validatedPercentage: total === 0 ? 0 : Number(((validated / total) * 100).toFixed(2)),
+        avgReussite:        Number(Number(r.avgReussite || 0).toFixed(2)),
       };
     });
 
-    res.json(result);
+    console.log("KPI RESPONSE — projects-by-month rows:", response.length);
+    res.json(response);
   } catch (err) {
     res.status(500).json({ error: "KPI_PROJECTS_BY_MONTH_ERROR", details: err.message });
   }
 });
 router.get("/kpi/latest-projects", authRequired, async (req, res) => {
   try {
+    console.log("ROUTE CALLED");
+    console.log(req.originalUrl);
+
+    const isAdmin = ADMIN_ROLES.includes(req.user?.role);
+    const ownerWhere = isAdmin ? {} : { ownerId: req.user.sub };
+
     const items = await Project.findAll({
+      where: { ...ownerWhere, isArchived: false },
       order: [["createdAt", "DESC"]],
       limit: 15,
-      attributes: ["id", "nomProjet", "dateDemarrage", "validationStatut", "statut", "createdAt"],
+      attributes: ["id", "nomProjet", "dateDemarrage", "validationStatut", "statut", "createdAt", "ownerId"],
       include: [
         {
-          model: UserProject,
+          model: User,
+          as: "owner",
           required: false,
-          attributes: ["permission", "userId"],
-          where: { permission: "owner" },
-          include: [{ model: User, attributes: ["id", "username", "email"] }],
+          attributes: ["id", "email"],
+          include: [{ model: UserProfile, as: "profile", attributes: ["name", "avatarUrl"], required: false }],
         },
       ],
     });
 
-    const out = items.map((p) => {
+    const response = items.map((p) => {
       const j = p.toJSON();
-      const ownerLink = j.UserProjects?.[0];
-      const ownerUser = ownerLink?.User;
-
+      const ownerRaw = j.owner;
       return {
-        ...j,
-        owner: ownerUser
-          ? { id: ownerUser.id, username: ownerUser.username, email: ownerUser.email }
-          : null,
-        permission: (["admin","superadmin"].includes(req.user.role)) ? "owner" : "viewer",
-        // NOTE: si tu veux vraie permission utilisateur connecté, fais une query UserProject sur req.user.sub
+        id:               j.id,
+        nomProjet:        j.nomProjet,
+        dateDemarrage:    j.dateDemarrage,
+        validationStatut: j.validationStatut,
+        statut:           j.statut,
+        createdAt:        j.createdAt,
+        owner: ownerRaw ? {
+          id:       ownerRaw.id,
+          email:    ownerRaw.email,
+          name:     ownerRaw.profile?.name || ownerRaw.email,
+          avatarUrl: ownerRaw.profile?.avatarUrl || null,
+        } : null,
       };
     });
 
-    res.json(out);
+    console.log("KPI RESPONSE — latest-projects count:", response.length);
+    res.json(response);
   } catch (err) {
     res.status(500).json({ error: "KPI_LATEST_PROJECTS_ERROR", details: err.message });
   }
 });
 router.get("/dashboard/kpi", authRequired, async (req, res) => {
   try {
+    console.log("ROUTE CALLED");
+    console.log(req.originalUrl);
 
-    const role = (req.user?.role || "").toLowerCase();
+    const role         = (req.user?.role || "").toLowerCase();
+    const isAdmin      = role === "admin" || role === "superadmin";
     const selectedUser = req.query.userId;
+    const userId       = req.user.sub;
 
-    let include = [];
+    // Resolved owner filter: admin can optionally scope to a selectedUser
+    const ownerFilter =
+      isAdmin && selectedUser ? { ownerId: selectedUser }
+      : isAdmin               ? {}
+      :                         { ownerId: userId };
 
-    // =========================
-    // 🔒 USER NORMAL
-    // =========================
-    if (role !== "admin" && role !== "superadmin") {
-      include = [
-        {
-          model: UserProject,
-          required: true,
-          where: { userId: req.user.sub },
-          attributes: [],
-        },
-      ];
-    }
-
-    // =========================
-    // 👑 ADMIN CLICK (PIE)
-    // =========================
-    if ((role === "admin" || role === "superadmin") && selectedUser) {
-      include = [
-        {
-          model: UserProject,
-          required: true,
-          where: { userId: selectedUser },
-          attributes: [],
-        },
-      ];
-    }
-
-    // =========================
-    // 🔥 FETCH PROJECTS
-    // =========================
-    const projects = await Project.findAll({
-      attributes: ["id", "statut", "projectModele"],
-      include,
+    // ── Statut distribution ───────────────────────────────
+    const statutRows = await Project.findAll({
+      where: { ...ownerFilter, isArchived: false },
+      attributes: [
+        [sequelize.literal(`COALESCE(NULLIF(statut,''), 'Sans statut')`), "statut"],
+        [sequelize.fn("COUNT", sequelize.col("id")), "count"],
+      ],
+      group: [sequelize.literal(`COALESCE(NULLIF(statut,''), 'Sans statut')`)],
       raw: true,
     });
+    const statutStats = statutRows.map((r) => ({ statut: r.statut, count: Number(r.count || 0) }));
 
-    // =========================
-    // 📊 STATUT
-    // =========================
-    const statutMap = {};
-
-    for (const p of projects) {
-
-      // 🔥 FIX N/A
-      const key = p.statut && p.statut !== "" ? p.statut : "Sans statut";
-
-      statutMap[key] = (statutMap[key] || 0) + 1;
-    }
-
-    const statutStats = Object.entries(statutMap).map(([k, v]) => ({
-      statut: k,
-      count: v,
-    }));
-
-    // =========================
-    // 🥧 PROJECT MODELE
-    // =========================
-    const modelMap = {};
-
-    for (const p of projects) {
-
-      const key = p.projectModele && p.projectModele !== ""
-        ? p.projectModele
-        : "Non défini";
-
-      modelMap[key] = (modelMap[key] || 0) + 1;
-    }
-
-    const modelStats = Object.entries(modelMap).map(([k, v]) => ({
-      projectModele: k,
-      count: v,
-    }));
-
-    // =========================
-    // 👑 ADMIN : USERS
-    // =========================
-    let userStats = [];
-
-    if (role === "admin" || role === "superadmin") {
-
-      const allProjects = await Project.findAll({
-        include: [
-          {
-            model: UserProject,
-            attributes: ["userId"],
-            required: true,
-            include: [
-              {
-                model: User,
-                attributes: ["id", "email"],
-              },
-            ],
-          },
-        ],
-        raw: true,
-      });
-
-      const userMap = {};
-      const userNameMap = {};
-
-      for (const p of allProjects) {
-
-        const uid = p["UserProjects.userId"];
-        const email = p["UserProjects.User.email"] || "Unknown";
-
-        if (!uid) continue;
-
-        if (!userMap[uid]) {
-          userMap[uid] = 0;
-          userNameMap[uid] = email;
-        }
-
-        userMap[uid]++;
-      }
-
-      userStats = Object.keys(userMap).map(uid => ({
-        userId: uid,
-        userName: userNameMap[uid],
-        count: userMap[uid],
-      }));
-    }
-
-    // =========================
-    // RESPONSE
-    // =========================
-    return res.json({
-      statutStats,
-      modelStats,
-      userStats,
+    // ── ProjectModele distribution ────────────────────────
+    const modelRows = await Project.findAll({
+      where: { ...ownerFilter, isArchived: false },
+      attributes: [
+        [sequelize.literal(`COALESCE("projectModele"::text, 'Non défini')`), "projectModele"],
+        [sequelize.fn("COUNT", sequelize.col("id")), "count"],
+      ],
+      group: [sequelize.literal(`COALESCE("projectModele"::text, 'Non défini')`)],
+      raw: true,
     });
+    const modelStats = modelRows.map((r) => ({ projectModele: r.projectModele, count: Number(r.count || 0) }));
+
+    // ── User stats (admin only, single SQL query) ─────────
+    let userStats = [];
+    if (isAdmin) {
+      userStats = await sequelize.query(
+        `SELECT p."ownerId" AS "userId",
+                u.email AS "userName",
+                COUNT(p.id)::int AS count
+         FROM projects p
+         INNER JOIN users u ON u.id = p."ownerId"
+         WHERE p."isArchived" = false
+         GROUP BY p."ownerId", u.email
+         ORDER BY count DESC`,
+        { type: "SELECT" }
+      );
+    }
+
+    const response = { statutStats, modelStats, userStats };
+    console.log("KPI RESPONSE");
+    console.log(JSON.stringify({ statutStats, modelStats, userStatsCount: userStats.length }, null, 2));
+    return res.json(response);
 
   } catch (e) {
     console.error("KPI_ERROR:", e);
-    return res.status(500).json({
-      message: e.message || "Server error",
-    });
+    return res.status(500).json({ message: e.message || "Server error" });
   }
 });
 router.get("/kpis/overview", authRequired, async (req, res) => {
   try {
+    console.log("ROUTE CALLED");
+    console.log(req.originalUrl);
+
     const { role, sub } = req.user;
-    const isAdmin = ["admin", "superadmin"].includes(role);
+    const isAdmin    = ["admin", "superadmin"].includes(role);
+    const ownerWhere = isAdmin ? {} : { ownerId: sub };
+    const ownerClause = isAdmin ? "" : `AND "ownerId" = :userId`;
 
-    // =========================
-    // 📊 TOTAL PROJECTS
-    // =========================
-    const totalProjects = isAdmin
-      ? await Project.count()
-      : await Project.count({
-          include: [
-            {
-              model: UserProject,
-              required: true,
-              where: { userId: sub },
-            },
-          ],
-        });
+    const [
+      totalProjects,
+      activeProjects,
+      archivedProjects,
+      validatedProjects,
+      totalContacts,
+    ] = await Promise.all([
+      Project.count({ where: ownerWhere }),
+      Project.count({ where: { ...ownerWhere, isArchived: false } }),
+      Project.count({ where: { ...ownerWhere, isArchived: true } }),
+      Project.count({ where: { ...ownerWhere, isArchived: false, validationStatut: "Validé" } }),
+      isAdmin
+        ? CommercialContact.count()
+        : CommercialContact.count({ where: { createdBy: sub } }),
+    ]);
 
-    // =========================
-    // 📊 TOTAL CONTACTS
-    // =========================
-    const totalContacts = isAdmin
-      ? await CommercialContact.count()
-      : await CommercialContact.count({
-          where: { createdBy: sub },
-        });
+    const nonValidatedProjects = activeProjects - validatedProjects;
+    const validationRate = activeProjects > 0
+      ? Number(((validatedProjects / activeProjects) * 100).toFixed(2))
+      : 0;
 
-    // =========================
-    // 📊 PROJECTS BY STATUS (FIX GROUP BY)
-    // =========================
+    // Projects grouped by validationStatut — filtered by role via ownerId
     const projectsByStatus = await sequelize.query(
-      `
-      SELECT p."validationStatut", COUNT(*) AS count
-      FROM projects p
-      INNER JOIN user_projects up ON up."projectId" = p.id
-      WHERE (:isAdmin = true OR up."userId" = :userId)
-      GROUP BY p."validationStatut"
-      `,
-      {
-        replacements: {
-          isAdmin,
-          userId: sub,
-        },
-        type: sequelize.QueryTypes.SELECT,
-      }
+      `SELECT COALESCE("validationStatut"::text, 'Non défini') AS "validationStatut",
+              COUNT(*)::int AS count
+       FROM projects
+       WHERE "isArchived" = false ${ownerClause}
+       GROUP BY "validationStatut"::text`,
+      { replacements: { userId: sub }, type: "SELECT" }
     );
 
-    // =========================
-    // 📊 CONTACTS BY STATUS
-    // =========================
     const contactsByStatus = await CommercialContact.findAll({
       where: isAdmin ? {} : { createdBy: sub },
-      attributes: [
-        "statut",
-        [sequelize.fn("COUNT", sequelize.col("id")), "count"],
-      ],
+      attributes: ["statut", [sequelize.fn("COUNT", sequelize.col("id")), "count"]],
       group: ["statut"],
       raw: true,
     });
 
-    // =========================
-    // 📦 RESPONSE KPI
-    // =========================
-    return res.json({
+    const response = {
       totals: {
-        projects: totalProjects,
+        projects:          totalProjects,
+        activeProjects,
+        archivedProjects,
+        validatedProjects,
+        nonValidatedProjects,
+        validationRate,
         commercialContacts: totalContacts,
-        global: totalProjects + totalContacts,
+        global:            totalProjects + totalContacts,
       },
       breakdown: {
         projectsByStatus,
         contactsByStatus,
       },
-    });
+    };
+    console.log("KPI RESPONSE");
+    console.log(JSON.stringify(response.totals, null, 2));
+    return res.json(response);
   } catch (e) {
     console.error("KPI_ERROR:", e);
     return res.status(500).json({ message: e.message });
