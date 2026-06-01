@@ -27,6 +27,7 @@ const listQuerySchema = Joi.object({
   sortBy: Joi.string().valid("createdAt", "nomProjet", "montantMarche", "pourcentageReussite").optional(),
   sortDir: Joi.string().valid("ASC", "DESC").optional(),
   ownerId: Joi.string().uuid().optional(),
+  userId: Joi.string().uuid().optional(),
   dateFrom: Joi.date().iso().optional(),
   dateTo: Joi.date().iso().optional(),
 });

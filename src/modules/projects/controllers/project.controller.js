@@ -139,7 +139,12 @@ function toNoteShape(n) {
 
 async function listProjects(req, res) {
   try {
-    res.json(await svc.listProjects(req.query, req.user.sub));
+    console.log("=== USER FILTER ===");
+    console.log(req.query.userId);
+    const result = await svc.listProjects(req.query, req.user.sub);
+    console.log("PROJECT COUNT AFTER FILTER");
+    console.log(result.stats?.total);
+    res.json(result);
   } catch (err) {
     handle(res, err);
   }

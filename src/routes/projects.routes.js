@@ -1705,13 +1705,27 @@ user_nom_custom: body.user_nom_custom || null,
 // ---------------- LIST ----------------
 router.get("/", authRequired, async (req, res) => {
   try {
+    console.log("SELECTED USER");
+    console.log(req.query.userId);
+
     const { q } = req.query;
-    const where = {};
+
+    // ── Pagination ────────────────────────────────────────
+    const page  = Math.max(parseInt(req.query.page)  || 1,  1);
+    const limit = Math.min(parseInt(req.query.limit) || 50, 500);
+    const offset = (page - 1) * limit;
+
+    // ── Base where clause ─────────────────────────────────
+    const whereClause = {};
+
+    // User filter — applied BEFORE count, pagination, stats, and export
+    if (req.query.userId) {
+      whereClause.ownerId = req.query.userId;
+    }
 
     if (typeof q === "string" && q.trim()) {
       const s = q.trim();
-      // validationStatut is an ENUM — never use ILIKE on it
-      where[Op.or] = [
+      whereClause[Op.or] = [
         { nomProjet: { [Op.iLike]: `%${s}%` } },
         { entreprise: { [Op.iLike]: `%${s}%` } },
         { promoteur: { [Op.iLike]: `%${s}%` } },
@@ -1720,38 +1734,47 @@ router.get("/", authRequired, async (req, res) => {
       ];
     }
 
-    // projectModele filter — Projects / Revendeur / Applicateur sections
+    // projectModele filter
     if (req.query.projectModele?.trim()) {
-      where.projectModele = req.query.projectModele.trim();
+      whereClause.projectModele = req.query.projectModele.trim();
     }
 
-    // Archive filter — controlled by ?isArchived=true|false
-    // If not supplied: return ALL projects (archived + non-archived)
+    // Archive filter — if not supplied return ALL projects (archived + non-archived)
     if (req.query.isArchived === "true") {
-      where.isArchived = true;
+      whereClause.isArchived = true;
     } else if (req.query.isArchived === "false") {
-      where.isArchived = false;
+      whereClause.isArchived = false;
     }
 
-    // ✅ safe attrs user
-    const wanted = [
-      "id",
-      "email",
-      "username",
-      "firstname",
-      "lastname",
-      "firstName",
-      "lastName",
-      "prenom",
-      "nom",
-      "name",
-      "fullName",
-    ];
+    // ── Stats (computed from same user filter, ignoring isArchived page param) ──
+    const statsBase = { ...whereClause };
+    delete statsBase.isArchived; // stats always span all archive states
+
+    const [totalProjects, activeProjects, archivedProjects] = await Promise.all([
+      Project.count({ where: statsBase }),
+      Project.count({ where: { ...statsBase, isArchived: false } }),
+      Project.count({ where: { ...statsBase, isArchived: true } }),
+    ]);
+
+    const pendingProjects = await Project.count({
+      where: {
+        ...statsBase,
+        isArchived: false,
+        statut: { [Op.notIn]: ["Gagné", "Perdu"] },
+      },
+    });
+
+    console.log("PROJECT COUNT AFTER FILTER");
+    console.log("total:", totalProjects, "| active:", activeProjects, "| archived:", archivedProjects, "| pending:", pendingProjects);
+
+    // ── safe attrs for user includes ──────────────────────
+    const wanted = ["id", "email", "username", "firstname", "lastname", "firstName", "lastName", "prenom", "nom", "name", "fullName"];
     const safeAttrs = wanted.filter((a) => !!User.rawAttributes?.[a]);
     const userAttrs = safeAttrs.length ? safeAttrs : ["id", "email"];
 
-    const items = await Project.findAll({
-      where,
+    // ── Paginated query ───────────────────────────────────
+    const { count, rows } = await Project.findAndCountAll({
+      where: whereClause,
       include: [
         {
           model: UserProject,
@@ -1759,7 +1782,6 @@ router.get("/", authRequired, async (req, res) => {
           attributes: ["permission", "userId", "createdAt"],
           include: [{ model: User, attributes: userAttrs }],
         },
-        // Owner via direct FK — includes UserProfile for fullName + avatar
         {
           model: User,
           as: "owner",
@@ -1774,71 +1796,35 @@ router.get("/", authRequired, async (req, res) => {
         },
       ],
       order: [["createdAt", "DESC"]],
+      limit,
+      offset,
+      distinct: true,
       attributes: {
         include: [
-          [
-            sequelize.literal(
-              `(SELECT COUNT(*) FROM project_comments pc WHERE pc."projectId" = "Project"."id")`
-            ),
-            "commentCount",
-          ],
-          [
-            sequelize.literal(
-              `(SELECT COUNT(*) FROM tasks t WHERE t."projectId" = "Project"."id")`
-            ),
-            "taskCount",
-          ],
-          [
-            sequelize.literal(
-              `(SELECT COUNT(*) FROM project_devis d WHERE d."projectId" = "Project"."id")`
-            ),
-            "devisCount",
-          ],
-          [
-            sequelize.literal(
-              `(SELECT COUNT(*) FROM project_bon_de_commande bc WHERE bc."projectId" = "Project"."id")`
-            ),
-            "bonCommandeCount",
-          ],
+          [sequelize.literal(`(SELECT COUNT(*) FROM project_comments pc WHERE pc."projectId" = "Project"."id")`), "commentCount"],
+          [sequelize.literal(`(SELECT COUNT(*) FROM tasks t WHERE t."projectId" = "Project"."id")`), "taskCount"],
+          [sequelize.literal(`(SELECT COUNT(*) FROM project_devis d WHERE d."projectId" = "Project"."id")`), "devisCount"],
+          [sequelize.literal(`(SELECT COUNT(*) FROM project_bon_de_commande bc WHERE bc."projectId" = "Project"."id")`), "bonCommandeCount"],
         ],
       },
     });
 
     const displayName = (u) =>
-      u?.username ||
-      u?.firstname ||
-      u?.firstName ||
-      u?.prenom ||
-      u?.lastname ||
-      u?.lastName ||
-      u?.nom ||
-      u?.name ||
-      u?.fullName ||
-      u?.email ||
-      "Inconnu";
+      u?.username || u?.firstname || u?.firstName || u?.prenom ||
+      u?.lastname || u?.lastName || u?.nom || u?.name ||
+      u?.fullName || u?.email || "Inconnu";
 
-    const out = items.map((p) => {
+    const out = rows.map((p) => {
       const json = p.toJSON();
 
-      const meLink = (json.UserProjects || []).find(
-        (up) => up.userId === req.user.sub
-      );
+      const meLink = (json.UserProjects || []).find((up) => up.userId === req.user.sub);
+      const perm = ["admin", "superadmin"].includes(req.user.role) ? "owner" : meLink?.permission || "viewer";
+      const ownerLink = (json.UserProjects || []).find((up) => up.permission === "owner");
 
-      const perm = ["admin", "superadmin"].includes(req.user.role)
-        ? "owner"
-        : meLink?.permission || "viewer";
+      const ownerName = ownerLink?.User
+        ? displayName(ownerLink.User)
+        : (json.user_nom_custom || json.user_nom || "Inconnu");
 
-      const ownerLink = (json.UserProjects || []).find(
-        (up) => up.permission === "owner"
-      );
-
-      // Legacy flat string — kept for backwards compat
-      const ownerName =
-        ownerLink?.User
-          ? displayName(ownerLink.User)
-          : (json.user_nom_custom || json.user_nom || "Inconnu");
-
-      // Structured owner — built from the ownerId FK (User + UserProfile)
       const ownerRaw = json.owner;
       const ownerProfile = ownerRaw?.profile || {};
       const fullName =
@@ -1849,26 +1835,18 @@ router.get("/", authRequired, async (req, res) => {
         null;
 
       const owner = ownerRaw
-        ? {
-            id: ownerRaw.id,
-            email: ownerRaw.email,
-            fullName,
-            name: fullName,
-            avatar: ownerProfile.avatarUrl || null,
-          }
+        ? { id: ownerRaw.id, email: ownerRaw.email, fullName, name: fullName, avatar: ownerProfile.avatarUrl || null }
         : (json.user_nom_custom || json.user_nom
             ? { id: null, email: null, fullName: json.user_nom_custom || json.user_nom, name: json.user_nom_custom || json.user_nom, avatar: null }
             : null);
 
       delete json.UserProjects;
-      delete json.owner; // replaced by the structured shape above
+      delete json.owner;
 
       return {
         ...json,
-        // Display name alias — Flutter uses title to render the card title
         title: json.nomProjet || json.comptoir || null,
         owner,
-        // Kept for existing consumers that read the flat string
         ownerName: fullName || ownerName,
         permission: perm,
         isEditable: ADMIN_ROLES.includes(req.user.role) || json.ownerId === req.user.sub,
@@ -1879,7 +1857,19 @@ router.get("/", authRequired, async (req, res) => {
       };
     });
 
-    return res.json(out);
+    return res.json({
+      items: out,
+      total: count,
+      page,
+      totalPages: Math.ceil(count / limit),
+      limit,
+      stats: {
+        totalProjects,
+        activeProjects,
+        archivedProjects,
+        pendingProjects,
+      },
+    });
   } catch (e) {
     console.error("PROJECT FILTER ERROR", e);
     return res.status(500).json({ success: false, message: e.message || "Server error" });

@@ -147,8 +147,8 @@ const LIST_ATTRIBUTES = [
 
 // ── Where clause builder ──────────────────────────────────
 
-function buildWhere(filters) {
-  const where = { isArchived: Boolean(filters.isArchived) };
+function buildBaseWhere(filters) {
+  const where = {};
 
   if (filters.mine && filters.userId) {
     where.ownerId = filters.userId;
@@ -175,6 +175,20 @@ function buildWhere(filters) {
   }
 
   return where;
+}
+
+function buildWhere(filters) {
+  return { isArchived: Boolean(filters.isArchived), ...buildBaseWhere(filters) };
+}
+
+async function countStats(filters) {
+  const base = buildBaseWhere(filters);
+  const [total, active, archived] = await Promise.all([
+    Project.count({ where: base }),
+    Project.count({ where: { ...base, isArchived: false } }),
+    Project.count({ where: { ...base, isArchived: true } }),
+  ]);
+  return { total, active, archived };
 }
 
 // ── Public API ────────────────────────────────────────────
@@ -303,4 +317,4 @@ function findAllForKanban({ projectModele, ownerId, search }) {
   });
 }
 
-module.exports = { findPaginated, findById, findByIdFull, update, findAllForKanban };
+module.exports = { findPaginated, findById, findByIdFull, update, findAllForKanban, countStats };

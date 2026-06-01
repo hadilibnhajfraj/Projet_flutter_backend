@@ -18,29 +18,42 @@ async function listProjects(query, userId) {
   const sortBy = SORTABLE.includes(query.sortBy) ? query.sortBy : "createdAt";
   const sortDir = query.sortDir === "ASC" ? "ASC" : "DESC";
 
-  // Accept both ?mine=true and ?myProjects=true so Flutter and web clients work.
   const mine = query.mine === "true" || query.myProjects === "true";
+  // Accept both ?ownerId=... and ?userId=... from any client
+  const ownerId = query.ownerId || query.userId || null;
 
-  console.log("[listProjects] userId =", userId, "| mine =", mine, "| raw query =", { mine: query.mine, myProjects: query.myProjects, ownerId: query.ownerId });
+  console.log("=== USER FILTER ===");
+  console.log("query.userId =", query.userId, "| query.ownerId =", query.ownerId, "| resolved ownerId =", ownerId);
+  console.log("[listProjects] authUserId =", userId, "| mine =", mine);
 
-  const { count, rows } = await projectRepo.findPaginated(
-    {
-      mine,
-      userId,
-      stageId: query.stageId || null,
-      projectModele: query.projectModele || null,
-      search: query.search || null,
-      isArchived: query.isArchived === "true",
-      ownerId: query.ownerId || null,
-      dateFrom: query.dateFrom || null,
-      dateTo: query.dateTo || null,
-    },
-    { limit, offset, sortBy, sortDir }
-  );
+  const filters = {
+    mine,
+    userId,
+    stageId: query.stageId || null,
+    projectModele: query.projectModele || null,
+    search: query.search || null,
+    isArchived: query.isArchived === "true",
+    ownerId,
+    dateFrom: query.dateFrom || null,
+    dateTo: query.dateTo || null,
+  };
+
+  const [{ count, rows }, stats] = await Promise.all([
+    projectRepo.findPaginated(filters, { limit, offset, sortBy, sortDir }),
+    projectRepo.countStats(filters),
+  ]);
+
+  console.log("PROJECT COUNT AFTER FILTER");
+  console.log("page count =", count, "| total =", stats.total, "| active =", stats.active, "| archived =", stats.archived);
 
   return {
     data: rows.map((r) => toProjectCard(r)),
     total: count,
+    stats: {
+      total: stats.total,
+      active: stats.active,
+      archived: stats.archived,
+    },
     page,
     pages: Math.ceil(count / limit),
     limit,
