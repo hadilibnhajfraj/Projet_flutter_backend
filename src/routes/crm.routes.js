@@ -11,365 +11,300 @@ const ADMIN_ROLES = ["admin", "superadmin"];
 /**
  * GET /crm/upcoming-followups
  *
- * Aggregates relances from 3 sources:
- *   1. project_reminders.dateRelance
- *   2. project_actions.dateRelance  (only when no project_reminder exists for same action)
+ * Returns one entry per project that needs a follow-up.
+ * count = unique projects needing attention (not rows in project_reminders).
+ *
+ * Primary date priority per project:
+ *   1. earliest project_reminder.dateRelance in window
+ *   2. earliest project_actions.dateRelance  in window (not already covered by a reminder)
  *   3. projects.nextRelanceDate
+ *   4. null (admin only — project has no date scheduled → classified as overdue)
  *
- * Each item is enriched with: project, pipeline stage, action type, owner.
- *
- * Role-based:
- *   admin/superadmin → all projects
- *   user/commercial  → WHERE p."ownerId" = :userId
- *
- * isArchived is NOT filtered — relances appear regardless of project archive status.
+ * Role filter:
+ *   user        → active projects WHERE ownerId = req.user.sub
+ *   admin       → all active projects NOT in a won/lost pipeline stage
+ *   superadmin  → same as admin (ownerFilter = null)
  *
  * Query params:
- *   days=30   look-ahead window in days (default 30, max 365)
+ *   days=30   forward look-ahead window (default 30, max 365)
  */
 router.get("/upcoming-followups", authRequired, async (req, res) => {
   try {
     const userId  = req.user.sub;
-    const role    = req.user.role;
+    const role    = (req.user.role || "").toLowerCase().trim();
     const isAdmin = ADMIN_ROLES.includes(role);
 
-    console.log("USER_ID",  userId);
-    console.log("ROLE",     role);
-    console.log("IS_ADMIN", isAdmin);
+    console.log("ROLE =",         role);
+    console.log("USER_ID =",      userId);
+    console.log("IS_ADMIN =",     isAdmin);
+    console.log("OWNER_FILTER =", isAdmin ? null : userId);
 
-    // ── Time window ────────────────────────────────────────────────────────
-    const days = Math.min(Math.max(parseInt(req.query.days) || 30, 1), 365);
-
+    const days      = Math.min(Math.max(parseInt(req.query.days) || 30, 1), 365);
     const now        = new Date();
     const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(),  0,  0,  0,   0);
     const todayEnd   = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
     const windowEnd  = new Date(todayStart);
     windowEnd.setDate(windowEnd.getDate() + days);
-
-    // Always look 90 days back to capture overdue reminders
+    // look 90 days back to capture overdue items
     const fromDate = new Date(todayStart);
     fromDate.setDate(fromDate.getDate() - 90);
 
-    console.log("TIME_WINDOW", fromDate.toISOString(), "→", windowEnd.toISOString());
-
-    // ── Role-based owner clause (table always aliased as "p") ──────────────
-    const ownerClauseP = isAdmin ? "" : `AND p."ownerId" = :userId`;
-    const replacements = { userId, fromDate, windowEnd };
-
-    // ── Shared SELECT columns for project + pipeline + owner ───────────────
-    // Reused across all 3 sources to keep queries DRY in comments.
-    // Each source adds its own action/reminder-specific columns.
-
     // ══════════════════════════════════════════════════════════════════════
-    // SOURCE 1 — project_reminders
+    // STEP 1 — Fetch relevant projects
     //
-    // SELECT pr.id, pr."dateRelance", pr.message,
-    //        pr."projectId", pr."actionId",
-    //        pa.id, pa."typeAction_legacy", pa.commentaire, pa."dateAction", pa."statut",
-    //        pat.id, pat.name, pat.icon, pat.color,
-    //        p.id, p."nomProjet", p."statut", p."promoteur", p."priority",
-    //          p."isArchived", p."projectModele"::text, p."validationStatut"::text,
-    //          p."ownerId", p."pipelineStageId",
-    //        ps.id, ps.name, ps.color, ps.position,
-    //        u.id, u.email,
-    //        up.name, up."avatarUrl"
-    // FROM project_reminders pr
-    // INNER JOIN projects p              ON p.id   = pr."projectId"
-    // LEFT  JOIN project_actions pa      ON pa.id  = pr."actionId"
-    // LEFT  JOIN project_action_types pat ON pat.id = pa."actionTypeId"
-    // LEFT  JOIN pipeline_stages ps      ON ps.id  = p."pipelineStageId"
-    // LEFT  JOIN users u                 ON u.id   = p."ownerId"
-    // LEFT  JOIN user_profiles up        ON up."userId" = u.id
-    // WHERE pr."dateRelance" BETWEEN :fromDate AND :windowEnd
-    //   [AND p."ownerId" = :userId]
-    // ORDER BY pr."dateRelance" ASC
+    // User:  owns the project + not archived
+    // Admin: not archived + stage is not a terminal (won/lost) stage
+    //        → isWonStage = false AND isLostStage = false
+    //        This is more robust than hardcoding stage names: works even if
+    //        stages are renamed, and covers all active pipeline positions.
     // ══════════════════════════════════════════════════════════════════════
-    const reminderRows = await sequelize.query(
+    const projectWhere = isAdmin
+      ? `WHERE p."isArchived" = false
+           AND ps."isWonStage"  = false
+           AND ps."isLostStage" = false
+           AND ps."deletedAt"   IS NULL`
+      : `WHERE p."isArchived" = false
+           AND p."ownerId" = :userId`;
+
+    const projects = await sequelize.query(
       `SELECT
-         pr.id::text                  AS "sourceId",
-         'reminder'                   AS source,
-         pr."dateRelance",
-         pr.message,
-         pr."projectId",
-         pr."actionId",
-         -- action fields
-         pa."typeAction_legacy"       AS "actionLegacy",
-         pa.commentaire               AS "actionCommentaire",
-         pa."dateAction",
-         pa.statut                    AS "actionStatut",
-         -- action type
-         pat.id::text                 AS "actionTypeId",
-         pat.name                     AS "actionTypeName",
-         pat.icon                     AS "actionTypeIcon",
-         pat.color                    AS "actionTypeColor",
-         -- project fields
+         p.id::text                  AS id,
          p."nomProjet",
          p."statut",
          p."promoteur",
          p."priority",
          p."isArchived",
-         p."projectModele"::text      AS "projectModele",
-         p."validationStatut"::text   AS "validationStatut",
-         p."ownerId",
-         -- pipeline stage
-         ps.id::text                  AS "stageId",
-         ps.name                      AS "stageName",
-         ps.color                     AS "stageColor",
-         ps.position                  AS "stagePosition",
-         -- owner
-         u.id::text                   AS "ownerId",
-         u.email                      AS "ownerEmail",
-         up.name                      AS "ownerName",
-         up."avatarUrl"               AS "ownerAvatarUrl"
-       FROM   project_reminders pr
-       INNER JOIN projects p               ON p.id   = pr."projectId"
-       LEFT  JOIN project_actions pa       ON pa.id  = pr."actionId"
-       LEFT  JOIN project_action_types pat ON pat.id = pa."actionTypeId"
-       LEFT  JOIN pipeline_stages ps       ON ps.id  = p."pipelineStageId"
-       LEFT  JOIN users u                  ON u.id   = p."ownerId"
-       LEFT  JOIN user_profiles up         ON up."userId" = u.id
-       WHERE  pr."dateRelance" >= :fromDate
-         AND  pr."dateRelance" <= :windowEnd
-         ${ownerClauseP}
-       ORDER BY pr."dateRelance" ASC`,
-      { replacements, type: "SELECT" }
+         p."projectModele"::text     AS "projectModele",
+         p."validationStatut"::text  AS "validationStatut",
+         p."nextRelanceDate",
+         ps.id::text                 AS "stageId",
+         ps.name                     AS "stageName",
+         ps.color                    AS "stageColor",
+         ps.position                 AS "stagePosition",
+         u.id::text                  AS "ownerId",
+         u.email                     AS "ownerEmail",
+         up.name                     AS "ownerName",
+         up."avatarUrl"              AS "ownerAvatarUrl"
+       FROM   projects p
+       JOIN   pipeline_stages ps     ON ps.id       = p."pipelineStageId"
+       JOIN   users u                ON u.id         = p."ownerId"
+       LEFT JOIN user_profiles up    ON up."userId"  = u.id
+       ${projectWhere}
+       ORDER BY p."nomProjet" ASC`,
+      { replacements: { userId }, type: "SELECT" }
     );
 
-    console.log("REMINDERS_FOUND", reminderRows.length);
+    console.log("PROJECTS =", projects.length);
+
+    if (projects.length === 0) {
+      return res.json({
+        count: 0, today: [], upcoming: [], overdue: [],
+        meta: {
+          role, userId, isAdmin,
+          daysWindow:  days,
+          fromDate:    fromDate.toISOString(),
+          toDate:      windowEnd.toISOString(),
+          ownerFilter: isAdmin ? null : userId,
+          sources:     { projects: 0, reminders: 0, actions: 0 },
+        },
+      });
+    }
+
+    const projectIds = projects.map(p => p.id);
 
     // ══════════════════════════════════════════════════════════════════════
-    // SOURCE 2 — project_actions.dateRelance
-    // (excluded when a project_reminder already covers the same action)
+    // STEP 2 — Fetch reminders in the date window for those projects
     //
-    // SELECT pa.id, pa."dateRelance", pa.commentaire, pa."dateAction", pa."statut",
-    //        pa."projectId",
-    //        pa."typeAction_legacy",
-    //        pat.id, pat.name, pat.icon, pat.color,
-    //        p ... ps ... u ... up  (same as source 1)
-    // FROM project_actions pa
-    // INNER JOIN projects p              ON p.id  = pa."projectId"
-    // LEFT  JOIN project_action_types pat ON pat.id = pa."actionTypeId"
-    // LEFT  JOIN pipeline_stages ps       ON ps.id  = p."pipelineStageId"
-    // LEFT  JOIN users u                  ON u.id   = p."ownerId"
-    // LEFT  JOIN user_profiles up         ON up."userId" = u.id
-    // WHERE pa."dateRelance" IS NOT NULL
-    //   AND pa."dateRelance" BETWEEN :fromDate AND :windowEnd
-    //   AND NOT EXISTS (SELECT 1 FROM project_reminders pr WHERE pr."actionId" = pa.id)
-    //   [AND p."ownerId" = :userId]
-    // ORDER BY pa."dateRelance" ASC
+    // sequelize.query() with type:"SELECT" returns rows[] directly.
+    // Never double-destructure with [[x]] — plain object is not iterable.
     // ══════════════════════════════════════════════════════════════════════
-    const actionRows = await sequelize.query(
+    const reminders = await sequelize.query(
       `SELECT
-         pa.id::text                  AS "sourceId",
-         'action'                     AS source,
-         pa."dateRelance",
-         pa.commentaire               AS message,
-         pa."projectId",
-         pa.id                        AS "actionId",
-         -- action fields
-         pa."typeAction_legacy"       AS "actionLegacy",
-         pa.commentaire               AS "actionCommentaire",
+         pr.id::text                 AS id,
+         pr."projectId"::text        AS "projectId",
+         pr."dateRelance",
+         pr.message,
+         pr."actionId"::text         AS "actionId",
+         pa."typeAction_legacy"      AS "actionLegacy",
+         pa.commentaire              AS "actionCommentaire",
          pa."dateAction",
-         pa.statut                    AS "actionStatut",
-         -- action type
-         pat.id::text                 AS "actionTypeId",
-         pat.name                     AS "actionTypeName",
-         pat.icon                     AS "actionTypeIcon",
-         pat.color                    AS "actionTypeColor",
-         -- project fields
-         p."nomProjet",
-         p."statut",
-         p."promoteur",
-         p."priority",
-         p."isArchived",
-         p."projectModele"::text      AS "projectModele",
-         p."validationStatut"::text   AS "validationStatut",
-         p."ownerId",
-         -- pipeline stage
-         ps.id::text                  AS "stageId",
-         ps.name                      AS "stageName",
-         ps.color                     AS "stageColor",
-         ps.position                  AS "stagePosition",
-         -- owner
-         u.id::text                   AS "ownerId",
-         u.email                      AS "ownerEmail",
-         up.name                      AS "ownerName",
-         up."avatarUrl"               AS "ownerAvatarUrl"
+         pa.statut                   AS "actionStatut",
+         pat.id::text                AS "actionTypeId",
+         pat.name                    AS "actionTypeName",
+         pat.icon                    AS "actionTypeIcon",
+         pat.color                   AS "actionTypeColor"
+       FROM   project_reminders pr
+       LEFT JOIN project_actions pa       ON pa.id  = pr."actionId"
+       LEFT JOIN project_action_types pat ON pat.id = pa."actionTypeId"
+       WHERE  pr."projectId"::text IN (:projectIds)
+         AND  pr."dateRelance" >= :fromDate
+         AND  pr."dateRelance" <= :windowEnd
+       ORDER BY pr."dateRelance" ASC`,
+      { replacements: { projectIds, fromDate, windowEnd }, type: "SELECT" }
+    );
+
+    console.log("REMINDERS =", reminders.length);
+
+    // ══════════════════════════════════════════════════════════════════════
+    // STEP 3 — Fetch actions with dateRelance not already covered by a reminder
+    // ══════════════════════════════════════════════════════════════════════
+    const actions = await sequelize.query(
+      `SELECT
+         pa.id::text                 AS id,
+         pa."projectId"::text        AS "projectId",
+         pa."dateRelance",
+         pa.commentaire              AS message,
+         pa."typeAction_legacy"      AS "actionLegacy",
+         pa.commentaire              AS "actionCommentaire",
+         pa."dateAction",
+         pa.statut                   AS "actionStatut",
+         pat.id::text                AS "actionTypeId",
+         pat.name                    AS "actionTypeName",
+         pat.icon                    AS "actionTypeIcon",
+         pat.color                   AS "actionTypeColor"
        FROM   project_actions pa
-       INNER JOIN projects p               ON p.id  = pa."projectId"
-       LEFT  JOIN project_action_types pat ON pat.id = pa."actionTypeId"
-       LEFT  JOIN pipeline_stages ps       ON ps.id  = p."pipelineStageId"
-       LEFT  JOIN users u                  ON u.id   = p."ownerId"
-       LEFT  JOIN user_profiles up         ON up."userId" = u.id
-       WHERE  pa."dateRelance" IS NOT NULL
+       LEFT JOIN project_action_types pat ON pat.id = pa."actionTypeId"
+       WHERE  pa."projectId"::text IN (:projectIds)
+         AND  pa."dateRelance" IS NOT NULL
          AND  pa."dateRelance" >= :fromDate
          AND  pa."dateRelance" <= :windowEnd
          AND  NOT EXISTS (
-                SELECT 1 FROM project_reminders pr
-                WHERE  pr."actionId" = pa.id
+                SELECT 1 FROM project_reminders pr WHERE pr."actionId" = pa.id
               )
-         ${ownerClauseP}
        ORDER BY pa."dateRelance" ASC`,
-      { replacements, type: "SELECT" }
+      { replacements: { projectIds, fromDate, windowEnd }, type: "SELECT" }
     );
 
-    console.log("ACTIONS_FOUND", actionRows.length);
+    console.log("ACTIONS =", actions.length);
 
     // ══════════════════════════════════════════════════════════════════════
-    // SOURCE 3 — projects.nextRelanceDate
-    //
-    // SELECT p.id, p."nextRelanceDate" AS "dateRelance",
-    //        p ... ps ... u ... up  (same project/stage/owner block)
-    //        NULLs for action-specific columns
-    // FROM projects p
-    // LEFT JOIN pipeline_stages ps ON ps.id = p."pipelineStageId"
-    // LEFT JOIN users u            ON u.id  = p."ownerId"
-    // LEFT JOIN user_profiles up   ON up."userId" = u.id
-    // WHERE p."nextRelanceDate" IS NOT NULL
-    //   AND p."nextRelanceDate" BETWEEN :fromDate AND :windowEnd
-    //   [AND p."ownerId" = :userId]
-    // ORDER BY p."nextRelanceDate" ASC
+    // STEP 4 — Group reminders and actions by projectId (O(n))
     // ══════════════════════════════════════════════════════════════════════
-    const projectRows = await sequelize.query(
-      `SELECT
-         ('project-' || p.id)::text   AS "sourceId",
-         'project'                    AS source,
-         p."nextRelanceDate"          AS "dateRelance",
-         NULL::text                   AS message,
-         p.id                         AS "projectId",
-         NULL::uuid                   AS "actionId",
-         -- action fields (null for project-level relances)
-         NULL::text                   AS "actionLegacy",
-         NULL::text                   AS "actionCommentaire",
-         NULL::timestamptz            AS "dateAction",
-         NULL::text                   AS "actionStatut",
-         -- action type (null)
-         NULL::text                   AS "actionTypeId",
-         NULL::text                   AS "actionTypeName",
-         NULL::text                   AS "actionTypeIcon",
-         NULL::text                   AS "actionTypeColor",
-         -- project fields
-         p."nomProjet",
-         p."statut",
-         p."promoteur",
-         p."priority",
-         p."isArchived",
-         p."projectModele"::text      AS "projectModele",
-         p."validationStatut"::text   AS "validationStatut",
-         p."ownerId",
-         -- pipeline stage
-         ps.id::text                  AS "stageId",
-         ps.name                      AS "stageName",
-         ps.color                     AS "stageColor",
-         ps.position                  AS "stagePosition",
-         -- owner
-         u.id::text                   AS "ownerId",
-         u.email                      AS "ownerEmail",
-         up.name                      AS "ownerName",
-         up."avatarUrl"               AS "ownerAvatarUrl"
-       FROM   projects p
-       LEFT   JOIN pipeline_stages ps  ON ps.id        = p."pipelineStageId"
-       LEFT   JOIN users u             ON u.id          = p."ownerId"
-       LEFT   JOIN user_profiles up    ON up."userId"   = u.id
-       WHERE  p."nextRelanceDate" IS NOT NULL
-         AND  p."nextRelanceDate" >= :fromDate
-         AND  p."nextRelanceDate" <= :windowEnd
-         ${ownerClauseP}
-       ORDER BY p."nextRelanceDate" ASC`,
-      { replacements, type: "SELECT" }
-    );
+    const remindersByProject = {};
+    for (const r of reminders) {
+      if (!remindersByProject[r.projectId]) remindersByProject[r.projectId] = [];
+      remindersByProject[r.projectId].push(r);
+    }
 
-    console.log("PROJECTS_FOUND", projectRows.length);
-    console.log("TOTAL_SOURCES", reminderRows.length + actionRows.length + projectRows.length);
+    const actionsByProject = {};
+    for (const a of actions) {
+      if (!actionsByProject[a.projectId]) actionsByProject[a.projectId] = [];
+      actionsByProject[a.projectId].push(a);
+    }
 
-    // ── Normalize all sources into a single unified shape ──────────────────
-    const normalize = (r) => {
-      const date     = new Date(r.dateRelance);
-      const isToday  = date >= todayStart && date <= todayEnd;
-      const isLate   = date < todayStart;
-      const daysUntil = Math.ceil((date - now) / 86400000);
+    // ══════════════════════════════════════════════════════════════════════
+    // STEP 5 — Build one followup entry per project
+    // ══════════════════════════════════════════════════════════════════════
+    const followups = [];
 
-      return {
-        // ── identifiers ─────────────────────────────────────────
-        id:        r.sourceId,
-        source:    r.source,       // "reminder" | "action" | "project"
-        projectId: r.projectId,
-        actionId:  r.actionId || null,
-        projectUrl:   `/forms/project?id=${r.projectId}`,
-        timelineUrl:  `/forms/project-timeline?projectId=${r.projectId}`,
+    for (const project of projects) {
+      const pid     = project.id;
+      const projRem = remindersByProject[pid] || [];
+      const projAct = actionsByProject[pid]   || [];
 
-        // ── project info ─────────────────────────────────────────
-        nomProjet:        r.nomProjet,
-        statut:           r.statut,
-        promoteur:        r.promoteur    || null,
-        priority:         r.priority     || null,
-        validationStatut: r.validationStatut,
-        isArchived:       r.isArchived,
-        projectModele:    r.projectModele,
+      let primaryDate = null;
+      let source      = "project";
+      let sourceData  = null;
 
-        // ── pipeline stage ────────────────────────────────────────
-        pipelineStage: r.stageId
-          ? {
-              id:       r.stageId,
-              name:     r.stageName,
-              color:    r.stageColor    || null,
-              position: r.stagePosition ?? null,
-            }
-          : null,
+      if (projRem.length > 0) {
+        // Priority 1: earliest reminder in window (already sorted ASC)
+        sourceData  = projRem[0];
+        primaryDate = new Date(sourceData.dateRelance);
+        source      = "reminder";
+      } else if (projAct.length > 0) {
+        // Priority 2: earliest action with dateRelance
+        sourceData  = projAct[0];
+        primaryDate = new Date(sourceData.dateRelance);
+        source      = "action";
+      } else if (project.nextRelanceDate) {
+        // Priority 3: project-level nextRelanceDate
+        primaryDate = new Date(project.nextRelanceDate);
+        // User: skip if the date is completely outside our window
+        if (!isAdmin && (primaryDate < fromDate || primaryDate > windowEnd)) continue;
+      } else if (!isAdmin) {
+        // User: no followup data in range → skip this project
+        continue;
+      }
+      // Admin/superadmin: include even with no date at all (null → overdue)
 
-        // ── action type ───────────────────────────────────────────
-        actionType: r.actionTypeId
-          ? {
-              id:    r.actionTypeId,
-              name:  r.actionTypeName,
-              icon:  r.actionTypeIcon  || null,
-              color: r.actionTypeColor || null,
-            }
-          : (r.actionLegacy
-              ? { id: null, name: r.actionLegacy, icon: null, color: null }
-              : null),
+      let isToday   = false;
+      let isLate    = false;
+      let daysUntil = null;
 
-        // ── relance / action dates ────────────────────────────────
-        message:     r.message           || null,
-        commentaire: r.actionCommentaire || null,
-        dateRelance: r.dateRelance,
-        dateAction:  r.dateAction        || null,
-        actionStatut: r.actionStatut     || null,
+      if (primaryDate) {
+        isToday   = primaryDate >= todayStart && primaryDate <= todayEnd;
+        isLate    = primaryDate < todayStart;
+        daysUntil = Math.ceil((primaryDate - now) / 86400000);
+      } else {
+        isLate = true;  // no date scheduled → needs immediate attention
+      }
 
-        // ── timing helpers ────────────────────────────────────────
+      followups.push({
+        id:          sourceData?.id || `project-${pid}`,
+        source,
+        projectId:   pid,
+        actionId:    sourceData?.actionId || null,
+        projectUrl:  `/forms/project?id=${pid}`,
+        timelineUrl: `/forms/project-timeline?projectId=${pid}`,
+
+        nomProjet:        project.nomProjet,
+        statut:           project.statut           || null,
+        promoteur:        project.promoteur        || null,
+        priority:         project.priority         || null,
+        validationStatut: project.validationStatut || null,
+        isArchived:       project.isArchived,
+        projectModele:    project.projectModele    || null,
+
+        pipelineStage: project.stageId ? {
+          id:       project.stageId,
+          name:     project.stageName,
+          color:    project.stageColor    || null,
+          position: project.stagePosition ?? null,
+        } : null,
+
+        actionType: sourceData?.actionTypeId
+          ? { id: sourceData.actionTypeId, name: sourceData.actionTypeName, icon: sourceData.actionTypeIcon || null, color: sourceData.actionTypeColor || null }
+          : sourceData?.actionLegacy
+            ? { id: null, name: sourceData.actionLegacy, icon: null, color: null }
+            : null,
+
+        message:        sourceData?.message           || null,
+        commentaire:    sourceData?.actionCommentaire || null,
+        dateRelance:    primaryDate ? primaryDate.toISOString() : null,
+        dateAction:     sourceData?.dateAction        || null,
+        actionStatut:   sourceData?.actionStatut      || null,
+
+        remindersCount: projRem.length,
+        actionsCount:   projAct.length,
+
         daysUntil,
         isToday,
         isLate,
 
-        // ── owner ─────────────────────────────────────────────────
-        owner: r.ownerEmail
-          ? {
-              id:        r.ownerId,
-              email:     r.ownerEmail,
-              name:      r.ownerName || r.ownerEmail,
-              avatarUrl: r.ownerAvatarUrl || null,
-            }
-          : null,
-      };
-    };
+        owner: project.ownerEmail ? {
+          id:        project.ownerId,
+          email:     project.ownerEmail,
+          name:      project.ownerName || project.ownerEmail,
+          avatarUrl: project.ownerAvatarUrl || null,
+        } : null,
+      });
+    }
 
-    // ── Merge + sort by dateRelance ASC ───────────────────────────────────
-    const all = [
-      ...reminderRows.map(normalize),
-      ...actionRows.map(normalize),
-      ...projectRows.map(normalize),
-    ].sort((a, b) => new Date(a.dateRelance) - new Date(b.dateRelance));
+    // Sort ASC by date; null dates sink to the bottom of overdue
+    followups.sort((a, b) => {
+      if (!a.dateRelance && !b.dateRelance) return 0;
+      if (!a.dateRelance) return 1;
+      if (!b.dateRelance) return -1;
+      return new Date(a.dateRelance) - new Date(b.dateRelance);
+    });
 
-    const todayList  = all.filter((r) =>  r.isToday);
-    const upcoming   = all.filter((r) => !r.isToday && !r.isLate);
-    const overdue    = all.filter((r) =>  r.isLate);
-    const count      = all.length;
+    const todayList = followups.filter(f =>  f.isToday);
+    const upcoming  = followups.filter(f => !f.isToday && !f.isLate);
+    const overdue   = followups.filter(f =>  f.isLate);
+    const count     = followups.length;   // one entry per project
 
     console.log(
-      `RELANCES_FOUND ${count}`,
-      `| today=${todayList.length}`,
-      `| upcoming=${upcoming.length}`,
-      `| overdue=${overdue.length}`
+      `RELANCES_FOUND = ${count} | today=${todayList.length} upcoming=${upcoming.length} overdue=${overdue.length}`
     );
 
     return res.json({
@@ -378,15 +313,17 @@ router.get("/upcoming-followups", authRequired, async (req, res) => {
       upcoming,
       overdue,
       meta: {
-        role:       isAdmin ? "admin" : "user",
+        role,
         userId,
-        daysWindow: days,
-        fromDate:   fromDate.toISOString(),
-        toDate:     windowEnd.toISOString(),
+        isAdmin,
+        daysWindow:  days,
+        fromDate:    fromDate.toISOString(),
+        toDate:      windowEnd.toISOString(),
+        ownerFilter: isAdmin ? null : userId,
         sources: {
-          reminders: reminderRows.length,
-          actions:   actionRows.length,
-          projects:  projectRows.length,
+          projects:  projects.length,
+          reminders: reminders.length,
+          actions:   actions.length,
         },
       },
     });
