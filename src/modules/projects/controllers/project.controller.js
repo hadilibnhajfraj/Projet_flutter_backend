@@ -9,9 +9,44 @@ const ProjectComment = require("../../../models/ProjectComment");
 const Project = require("../../../models/Project");
 const User = require("../../../models/User");
 const UserProfile = require("../../../models/UserProfile");
+const { sequelize } = require("../../../db");
 require("../../../models/associations");
 
 const ADMIN_ROLES = ["admin", "superadmin"];
+
+// ── Field definitions for GET /projects/missing-fields ───────────────────────
+
+const VALID_FIELDS = ["bureauControle", "architecte", "ingenieur", "telephone", "adresse"];
+
+// SQL fragment that evaluates to TRUE when the field is considered "missing"
+const FIELD_MISSING_SQL = {
+  bureauControle: `("bureauControle" IS NULL OR TRIM("bureauControle") = '')`,
+  architecte:     `("architecte"     IS NULL OR TRIM("architecte")     = '')`,
+  ingenieur:      `("ingenieurResponsable" IS NULL OR TRIM("ingenieurResponsable") = '')`,
+  // telephone: project has NO phone at all (every phone column is blank)
+  telephone: `(
+    ("telephoneIngenieur"  IS NULL OR TRIM("telephoneIngenieur")  = '') AND
+    ("telephoneArchitecte" IS NULL OR TRIM("telephoneArchitecte") = '') AND
+    ("telephoneComptoir"   IS NULL OR TRIM("telephoneComptoir")   = '') AND
+    ("telephoneDallagiste" IS NULL OR TRIM("telephoneDallagiste") = '')
+  )`,
+  adresse: `("adresse" IS NULL OR TRIM("adresse") = '')`,
+};
+
+// JS predicate used to label each row after the DB query
+const FIELD_MISSING_JS = {
+  bureauControle: (r) => !r.bureauControle       || String(r.bureauControle).trim()       === "",
+  architecte:     (r) => !r.architecte           || String(r.architecte).trim()           === "",
+  ingenieur:      (r) => !r.ingenieurResponsable || String(r.ingenieurResponsable).trim() === "",
+  telephone:      (r) =>
+    (!r.telephoneIngenieur  || String(r.telephoneIngenieur).trim()  === "") &&
+    (!r.telephoneArchitecte || String(r.telephoneArchitecte).trim() === "") &&
+    (!r.telephoneComptoir   || String(r.telephoneComptoir).trim()   === "") &&
+    (!r.telephoneDallagiste || String(r.telephoneDallagiste).trim() === ""),
+  adresse: (r) => !r.adresse || String(r.adresse).trim() === "",
+};
+
+const SORTABLE_FIELDS = ["createdAt", "nomProjet", "statut", "updatedAt", "projectModele"];
 
 function handle(res, err) {
   const status = err.status || 500;
@@ -485,16 +520,26 @@ async function archiveProject(req, res) {
 
     const { reason } = req.body;
 
+    // archiveReason is required for voluntary archives so we can distinguish them
+    // from auto-archives and audit the history properly
+    const archiveReason = (reason || "").trim() || "Archivé manuellement";
+
+    console.log("ARCHIVE PROJECT");
+    console.log("PROJECT_ID",     id);
+    console.log("USER_ID",        req.user?.sub);
+    console.log("ARCHIVE_REASON", archiveReason);
+    console.log("DATE",           new Date().toISOString());
+
     await project.update({
-      isArchived: true,
-      archivedAt: new Date(),
-      archiveReason: reason || null,
+      isArchived:    true,
+      archivedAt:    new Date(),
+      archiveReason,
     });
 
     res.json({
       success: true,
       message: "Projet archivé",
-      data: { id, isArchived: true, archiveReason: reason || null },
+      data: { id, isArchived: true, archiveReason },
     });
   } catch (err) {
     handle(res, err);
@@ -523,6 +568,170 @@ async function unarchiveProject(req, res) {
   }
 }
 
+// ── GET /projects/missing-fields ─────────────────────────────────────────────
+// Returns projects where one or more specified fields are NULL or empty.
+// Query params:
+//   field=bureauControle|architecte|ingenieur|telephone|adresse  (repeatable)
+//   page, limit, sortBy, sortDir, search
+
+async function getMissingFields(req, res) {
+  try {
+    const isAdmin = ADMIN_ROLES.includes(req.user?.role);
+    const userId  = req.user.sub;
+
+    // ── 1. Validate field params ──────────────────────────
+    const rawFields = [].concat(req.query.field || []);
+    const fields    = rawFields.filter((f) => VALID_FIELDS.includes(f));
+
+    if (!fields.length) {
+      return res.status(400).json({
+        message: `Au moins un paramètre field est requis. Valeurs acceptées : ${VALID_FIELDS.join(", ")}`,
+      });
+    }
+
+    // ── 2. Pagination ─────────────────────────────────────
+    const page   = Math.max(parseInt(req.query.page)  || 1,  1);
+    const limit  = Math.min(parseInt(req.query.limit) || 20, 100);
+    const offset = (page - 1) * limit;
+
+    // ── 3. Sorting (whitelist) ────────────────────────────
+    const sortBy  = SORTABLE_FIELDS.includes(req.query.sortBy) ? req.query.sortBy : "createdAt";
+    const sortDir = req.query.sortDir === "ASC" ? "ASC" : "DESC";
+
+    // ── 4. Search ─────────────────────────────────────────
+    const search = typeof req.query.search === "string" && req.query.search.trim()
+      ? req.query.search.trim()
+      : null;
+
+    // ── 5. Build WHERE clauses ────────────────────────────
+    const ownerClause  = isAdmin ? "" : `AND p."ownerId" = :userId`;
+    const searchClause = search
+      ? `AND (p."nomProjet"  ILIKE :search
+          OR p."entreprise"  ILIKE :search
+          OR p."adresse"     ILIKE :search
+          OR p."promoteur"   ILIKE :search)`
+      : "";
+
+    // Projects missing ANY of the requested fields (OR)
+    const fieldCondition = fields
+      .map((f) => FIELD_MISSING_SQL[f])
+      .join("\n      OR ");
+
+    const baseWhere = `
+      WHERE p."isArchived" = false
+        AND (${fieldCondition})
+        ${ownerClause}
+        ${searchClause}
+    `;
+
+    const replacements = {
+      userId,
+      limit,
+      offset,
+      ...(search ? { search: `%${search}%` } : {}),
+    };
+
+    // ── 6. Total count ────────────────────────────────────
+    const [countRow] = await sequelize.query(
+      `SELECT COUNT(*)::int AS count FROM projects p ${baseWhere}`,
+      { replacements, type: "SELECT" }
+    );
+    const total = Number(countRow?.count || 0);
+
+    // ── 7. Per-field missing counts (single query) ────────
+    const filterClauses = VALID_FIELDS
+      .map((f) => `COUNT(*) FILTER (WHERE ${FIELD_MISSING_SQL[f]})::int AS "${f}"`)
+      .join(",\n      ");
+
+    const [countsRow] = await sequelize.query(
+      `SELECT ${filterClauses} FROM projects p ${baseWhere}`,
+      { replacements, type: "SELECT" }
+    );
+    const missingCounts = {};
+    for (const f of VALID_FIELDS) {
+      missingCounts[f] = Number(countsRow?.[f] || 0);
+    }
+
+    // ── 8. Paginated rows ─────────────────────────────────
+    const rows = await sequelize.query(
+      `SELECT p.id,
+              p."nomProjet",
+              p."projectModele"::text       AS "projectModele",
+              p."statut",
+              p."validationStatut"::text    AS "validationStatut",
+              p."isArchived",
+              p."ownerId",
+              p."createdAt",
+              p."updatedAt",
+              p."bureauControle",
+              p."architecte",
+              p."ingenieurResponsable",
+              p."telephoneIngenieur",
+              p."telephoneArchitecte",
+              p."telephoneComptoir",
+              p."telephoneDallagiste",
+              p."adresse",
+              u.email                       AS "ownerEmail",
+              up.name                       AS "ownerName",
+              up."avatarUrl"                AS "ownerAvatarUrl"
+       FROM projects p
+       LEFT JOIN users u          ON u.id          = p."ownerId"
+       LEFT JOIN user_profiles up ON up."userId"   = u.id
+       ${baseWhere}
+       ORDER BY p."${sortBy}" ${sortDir}
+       LIMIT :limit OFFSET :offset`,
+      { replacements, type: "SELECT" }
+    );
+
+    // ── 9. Annotate each row with its missing fields ──────
+    const items = rows.map((r) => ({
+      id:                   r.id,
+      nomProjet:            r.nomProjet,
+      projectModele:        r.projectModele,
+      statut:               r.statut,
+      validationStatut:     r.validationStatut,
+      ownerId:              r.ownerId,
+      owner: r.ownerEmail
+        ? { email: r.ownerEmail, name: r.ownerName || r.ownerEmail, avatarUrl: r.ownerAvatarUrl || null }
+        : null,
+      createdAt:            r.createdAt,
+      updatedAt:            r.updatedAt,
+      missingFields:        fields.filter((f) => FIELD_MISSING_JS[f](r)),
+      // Raw field values so the frontend can display what IS filled
+      fields: {
+        bureauControle:       r.bureauControle       || null,
+        architecte:           r.architecte           || null,
+        ingenieurResponsable: r.ingenieurResponsable || null,
+        telephoneIngenieur:   r.telephoneIngenieur   || null,
+        telephoneArchitecte:  r.telephoneArchitecte  || null,
+        adresse:              r.adresse              || null,
+      },
+    }));
+
+    const response = {
+      total,
+      page,
+      pages: Math.ceil(total / limit),
+      limit,
+      missingCounts,
+      items,
+    };
+
+    console.log("ROUTE CALLED", req.originalUrl);
+    console.log("KPI RESPONSE", JSON.stringify({
+      fields,
+      total,
+      page,
+      missingCounts,
+    }));
+
+    return res.json(response);
+  } catch (err) {
+    console.error("MISSING_FIELDS_ERROR:", err);
+    return res.status(500).json({ message: err.message || "Server error" });
+  }
+}
+
 module.exports = {
   listProjects,
   moveStage,
@@ -536,4 +745,5 @@ module.exports = {
   getProjectFull,
   archiveProject,
   unarchiveProject,
+  getMissingFields,
 };

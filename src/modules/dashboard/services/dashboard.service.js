@@ -209,42 +209,194 @@ async function getAdminKPIs() {
 // ─── User KPIs (GET /dashboard/kpi) ──────────────────────────────────────────
 
 async function getUserKPIs(userId) {
-  const now = new Date();
+  const now     = new Date();
+  const today   = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+  const weekEnd = new Date(today);
+  weekEnd.setDate(weekEnd.getDate() + 7);
 
-  const [myProjects, myValidated, myNonValidated, myArchived, myPending] = await Promise.all([
-    Project.count({ where: { ownerId: userId, isArchived: false } }),
-    Project.count({ where: { ownerId: userId, isArchived: false, validationStatut: "Validé" } }),
-    Project.count({ where: { ownerId: userId, isArchived: false, validationStatut: "Non validé" } }),
-    Project.count({ where: { ownerId: userId, isArchived: true } }),
-    Project.count({ where: { ownerId: userId, isArchived: false, statut: { [Op.notIn]: ["Gagné", "Perdu"] } } }),
+  console.log("USER_ID", userId);
+
+  // ── 0. DB health check — runs first, shows isArchived breakdown ───────────
+  const [[hc]] = await sequelize.query(
+    `SELECT
+       COUNT(*)::int                                        AS total,
+       COUNT(*) FILTER (WHERE "isArchived" = false)::int   AS active,
+       COUNT(*) FILTER (WHERE "isArchived" = true)::int    AS archived,
+       COUNT(*) FILTER (WHERE "isArchived" IS NULL)::int   AS null_val
+     FROM projects WHERE "ownerId" = :userId`,
+    { replacements: { userId }, type: "SELECT" }
+  );
+  console.log(`DB_HEALTH total=${hc?.total} active=${hc?.active} archived=${hc?.archived} null=${hc?.null_val}`);
+  if (Number(hc?.archived) > 0 && Number(hc?.active) === 0) {
+    console.warn(
+      `⚠️  ALL PROJECTS ARCHIVED for user ${userId}. Run:\n` +
+      `   UPDATE projects SET "isArchived"=false,"archivedAt"=NULL,"archiveReason"=NULL ` +
+      `WHERE "ownerId"='${userId}' AND "isArchived"=true AND "archiveReason" IS NULL;`
+    );
+  }
+
+  // ── 1. Project counts — pure raw SQL to guarantee correct results ─────────
+  const [
+    [totalRow], [validatedRow], [nonValidatedRow], [archivedRow], [pendingRow], [surfaceRow],
+  ] = await Promise.all([
+    sequelize.query(
+      `SELECT COUNT(*)::int AS count FROM projects
+       WHERE "ownerId" = :userId AND "isArchived" = false`,
+      { replacements: { userId }, type: "SELECT" }
+    ),
+    sequelize.query(
+      `SELECT COUNT(*)::int AS count FROM projects
+       WHERE "ownerId" = :userId AND "isArchived" = false AND "validationStatut" = 'Validé'`,
+      { replacements: { userId }, type: "SELECT" }
+    ),
+    sequelize.query(
+      `SELECT COUNT(*)::int AS count FROM projects
+       WHERE "ownerId" = :userId AND "isArchived" = false AND "validationStatut" = 'Non validé'`,
+      { replacements: { userId }, type: "SELECT" }
+    ),
+    sequelize.query(
+      `SELECT COUNT(*)::int AS count FROM projects
+       WHERE "ownerId" = :userId AND "isArchived" = true`,
+      { replacements: { userId }, type: "SELECT" }
+    ),
+    sequelize.query(
+      `SELECT COUNT(*)::int AS count FROM projects
+       WHERE "ownerId" = :userId AND "isArchived" = false
+         AND statut NOT IN ('Gagné', 'Perdu')`,
+      { replacements: { userId }, type: "SELECT" }
+    ),
+    sequelize.query(
+      `SELECT COALESCE(SUM("surfaceProspectee"), 0)::float AS total FROM projects
+       WHERE "ownerId" = :userId AND "isArchived" = false`,
+      { replacements: { userId }, type: "SELECT" }
+    ),
   ]);
 
-  const myValidationRate =
-    myProjects > 0 ? Math.round((myValidated / myProjects) * 10000) / 100 : 0;
+  const myProjects      = Number(totalRow?.count      || 0);
+  const myValidated     = Number(validatedRow?.count  || 0);
+  const myNonValidated  = Number(nonValidatedRow?.count || 0);
+  const myArchived      = Number(archivedRow?.count   || 0);
+  const myPending       = Number(pendingRow?.count    || 0);
+  const mySurface       = parseFloat(surfaceRow?.total || 0);
 
-  const [surfaceRow] = await sequelize.query(
-    `SELECT COALESCE(SUM("surfaceProspectee"), 0) AS total
-     FROM projects WHERE "ownerId" = :userId AND "isArchived" = false`,
-    { replacements: { userId }, type: "SELECT" }
+  console.log("PROJECTS_FOUND",    myProjects);
+  console.log("VALIDATIONS_FOUND", myValidated);
+  console.log("SURFACE_TOTAL",     mySurface);
+
+  // ── 2. Taux de réussite = validatedProjects * 100 / totalProjects ─────────
+  const successRate = myProjects > 0
+    ? Math.round((myValidated / myProjects) * 10000) / 100
+    : 0;
+
+  // ── 3. Relances — JOIN project_actions → projects ON projects.ownerId ──────
+  //    NEVER filter by createdBy; always filter by project ownership
+  const relanceBase = `
+    FROM project_actions pa
+    INNER JOIN projects p ON p.id = pa."projectId"
+    WHERE pa."dateRelance" IS NOT NULL
+      AND p."ownerId"    = :userId
+      AND p."isArchived" = false`;
+
+  const [
+    [upcomingCountRow], [todayCountRow], [weekCountRow], [lateCountRow],
+  ] = await Promise.all([
+    sequelize.query(
+      `SELECT COUNT(*)::int AS count ${relanceBase} AND pa."dateRelance" >= :today`,
+      { replacements: { userId, today }, type: "SELECT" }
+    ),
+    sequelize.query(
+      `SELECT COUNT(*)::int AS count ${relanceBase} AND DATE(pa."dateRelance") = CURRENT_DATE`,
+      { replacements: { userId }, type: "SELECT" }
+    ),
+    sequelize.query(
+      `SELECT COUNT(*)::int AS count ${relanceBase}
+       AND pa."dateRelance" >= :today AND pa."dateRelance" <= :weekEnd`,
+      { replacements: { userId, today, weekEnd }, type: "SELECT" }
+    ),
+    sequelize.query(
+      `SELECT COUNT(*)::int AS count ${relanceBase} AND pa."dateRelance" < :today`,
+      { replacements: { userId, today }, type: "SELECT" }
+    ),
+  ]);
+
+  const myRelances     = Number(upcomingCountRow?.count || 0);
+  const myRelancesToday = Number(todayCountRow?.count   || 0);
+  const myRelancesWeek  = Number(weekCountRow?.count    || 0);
+  const myRelancesLate  = Number(lateCountRow?.count    || 0);
+
+  console.log("RELANCES_FOUND", myRelances,
+    "| today:", myRelancesToday,
+    "| week:", myRelancesWeek,
+    "| late:", myRelancesLate
   );
-  const mySurface = parseFloat(surfaceRow?.total || 0);
 
-  const [relanceRow] = await sequelize.query(
-    `SELECT COUNT(*)::int AS count
-     FROM project_reminders pr
-     INNER JOIN projects p ON p.id = pr."projectId"
-     WHERE p."ownerId" = :userId AND pr."dateRelance" >= NOW()`,
-    { replacements: { userId }, type: "SELECT" }
+  // ── 4. Liste complète des relances à venir ────────────────────────────────
+  //    Sorted ASC by dateRelance, showing project info + days remaining
+  const upcomingRelancesRaw = await sequelize.query(
+    `SELECT
+       pa.id                       AS "actionId",
+       pa."dateRelance",
+       pa."typeAction_legacy"      AS "typeAction",
+       pa.commentaire,
+       pa.statut                   AS "actionStatut",
+       p.id                        AS "projectId",
+       p."nomProjet",
+       p."statut"                  AS "projectStatut",
+       p."priority",
+       p."projectModele"::text     AS "projectModele",
+       p."validationStatut"::text  AS "validationStatut",
+       pat.name                    AS "actionTypeName",
+       pat.icon                    AS "actionTypeIcon",
+       pat.color                   AS "actionTypeColor",
+       CEIL(EXTRACT(EPOCH FROM (pa."dateRelance" - NOW())) / 86400)::int AS "daysRemaining"
+     FROM project_actions pa
+     INNER JOIN projects p              ON p.id   = pa."projectId"
+     LEFT  JOIN project_action_types pat ON pat.id = pa."actionTypeId"
+     WHERE pa."dateRelance" IS NOT NULL
+       AND pa."dateRelance" >= :today
+       AND p."ownerId"    = :userId
+       AND p."isArchived" = false
+     ORDER BY pa."dateRelance" ASC`,
+    { replacements: { userId, today }, type: "SELECT" }
   );
-  const myRelances = Number(relanceRow?.count || 0);
 
+  const upcomingRelances = upcomingRelancesRaw.map((r) => ({
+    actionId:         r.actionId,
+    projectId:        r.projectId,
+    nomProjet:        r.nomProjet,
+    dateRelance:      r.dateRelance,
+    typeAction:       r.actionTypeName || r.typeAction || null,
+    commentaire:      r.commentaire    || null,
+    actionStatut:     r.actionStatut,
+    projectStatut:    r.projectStatut,
+    priority:         r.priority,
+    projectModele:    r.projectModele,
+    validationStatut: r.validationStatut,
+    actionType: r.actionTypeName
+      ? { name: r.actionTypeName, icon: r.actionTypeIcon, color: r.actionTypeColor }
+      : null,
+    daysRemaining: Math.max(0, Number(r.daysRemaining ?? 0)),
+  }));
+
+  if (upcomingRelances.length > 0) {
+    console.log("[KPI USER] next relance =",
+      upcomingRelances[0].nomProjet, "@", upcomingRelances[0].dateRelance,
+      "dans", upcomingRelances[0].daysRemaining, "jour(s)"
+    );
+  }
+
+  // ── 5. Recent projects ────────────────────────────────────────────────────
   const recentRows = await Project.findAll({
     where: { ownerId: userId },
     order: [["createdAt", "DESC"]],
     limit: 10,
-    attributes: ["id", "nomProjet", "projectModele", "statut", "validationStatut", "isArchived", "createdAt", "surfaceProspectee"],
+    attributes: [
+      "id", "nomProjet", "projectModele", "statut", "validationStatut",
+      "isArchived", "createdAt", "surfaceProspectee", "priority",
+    ],
   });
 
+  // ── 8. Charts ─────────────────────────────────────────────────────────────
   const ago = new Date(now);
   ago.setMonth(ago.getMonth() - 11);
   ago.setDate(1);
@@ -255,25 +407,45 @@ async function getUserKPIs(userId) {
       `SELECT TO_CHAR(DATE_TRUNC('month', "createdAt"), 'YYYY-MM') AS month,
               COUNT(*)::int AS total,
               COUNT(*) FILTER (WHERE "validationStatut" = 'Validé')::int AS validated
-       FROM projects WHERE "ownerId" = :userId AND "createdAt" >= :ago
+       FROM projects
+       WHERE "ownerId" = :userId AND "createdAt" >= :ago
        GROUP BY DATE_TRUNC('month', "createdAt")
        ORDER BY DATE_TRUNC('month', "createdAt")`,
       { replacements: { userId, ago }, type: "SELECT" }
     ),
     sequelize.query(
       `SELECT COALESCE(statut, 'Sans statut') AS statut, COUNT(*)::int AS count
-       FROM projects WHERE "ownerId" = :userId AND "isArchived" = false
+       FROM projects
+       WHERE "ownerId" = :userId AND "isArchived" = false
        GROUP BY statut ORDER BY count DESC`,
       { replacements: { userId }, type: "SELECT" }
     ),
   ]);
 
+  console.log("[KPI USER] monthlyEvolution =", myMonthlyEvolution.length, "months");
+
   return {
     role: "user",
     stats: {
-      myProjects, myValidated, myNonValidated, myArchived, myPending,
-      myValidationRate, mySurface, myRelances,
+      // Project counts
+      myProjects,
+      myValidated,
+      myNonValidated,
+      myArchived,
+      myPending,
+      // Rates
+      successRate,
+      myValidationRate: successRate,
+      // Surface
+      mySurface,
+      // Relances (all filtered by projects.ownerId = userId, NOT by createdBy)
+      myRelances,
+      myRelancesToday,
+      myRelancesWeek,
+      myRelancesLate,
     },
+    upcomingRelances,
+    upcomingRelancesMessage: upcomingRelances.length === 0 ? "Aucune relance planifiée" : null,
     charts: { myStatusDistribution, myMonthlyEvolution },
     recentProjects: recentRows.map((p) => p.toJSON()),
     topUsers: [],

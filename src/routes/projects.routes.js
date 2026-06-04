@@ -979,63 +979,248 @@ router.get("/kpi/latest-projects", authRequired, async (req, res) => {
 });
 router.get("/dashboard/kpi", authRequired, async (req, res) => {
   try {
-    console.log("ROUTE CALLED");
-    console.log(req.originalUrl);
-
     const role         = (req.user?.role || "").toLowerCase();
     const isAdmin      = role === "admin" || role === "superadmin";
     const selectedUser = req.query.userId;
     const userId       = req.user.sub;
 
-    // Resolved owner filter: admin can optionally scope to a selectedUser
-    const ownerFilter =
-      isAdmin && selectedUser ? { ownerId: selectedUser }
-      : isAdmin               ? {}
-      :                         { ownerId: userId };
+    console.log("ROUTE CALLED", req.originalUrl);
+    console.log("USER_ID", userId);
+    console.log("ROLE", role);
+    console.log("IS_ADMIN", isAdmin);
 
-    // ── Statut distribution ───────────────────────────────
-    const statutRows = await Project.findAll({
-      where: { ...ownerFilter, isArchived: false },
-      attributes: [
-        [sequelize.literal(`COALESCE(NULLIF(statut,''), 'Sans statut')`), "statut"],
-        [sequelize.fn("COUNT", sequelize.col("id")), "count"],
-      ],
-      group: [sequelize.literal(`COALESCE(NULLIF(statut,''), 'Sans statut')`)],
-      raw: true,
-    });
-    const statutStats = statutRows.map((r) => ({ statut: r.statut, count: Number(r.count || 0) }));
+    // Admin can optionally scope to a selectedUser via ?userId=
+    const effectiveOwnerId =
+      isAdmin && selectedUser ? selectedUser
+      : isAdmin               ? null   // no owner filter → all projects
+      :                         userId;
 
-    // ── ProjectModele distribution ────────────────────────
-    const modelRows = await Project.findAll({
-      where: { ...ownerFilter, isArchived: false },
-      attributes: [
-        [sequelize.literal(`COALESCE("projectModele"::text, 'Non défini')`), "projectModele"],
-        [sequelize.fn("COUNT", sequelize.col("id")), "count"],
-      ],
-      group: [sequelize.literal(`COALESCE("projectModele"::text, 'Non défini')`)],
-      raw: true,
-    });
-    const modelStats = modelRows.map((r) => ({ projectModele: r.projectModele, count: Number(r.count || 0) }));
+    // ownerClause uses "ownerId" column directly (no table alias needed in flat queries)
+    const ownerClause  = effectiveOwnerId ? `AND "ownerId" = :ownerId`   : "";
+    // ownerClauseP uses table alias "p" for JOIN queries
+    const ownerClauseP = effectiveOwnerId ? `AND p."ownerId" = :ownerId` : "";
+    const replacements = { ownerId: effectiveOwnerId };
 
-    // ── User stats (admin only, single SQL query) ─────────
+    console.log("EFFECTIVE_OWNER_ID", effectiveOwnerId);
+
+    // ══════════════════════════════════════════════════════════════════════
+    // CORE KPI COUNTS — NO isArchived filter
+    // User wants COUNT(*) across ALL projects (archived + active)
+    // archivedProjects is tracked separately as COUNT(isArchived=true)
+    // ══════════════════════════════════════════════════════════════════════
+    const [
+      [totalRow],
+      [validatedRow],
+      [archivedRow],
+      [surfaceRow],
+      [successRow],
+    ] = await Promise.all([
+
+      // totalProjects = COUNT(*) — ALL projects regardless of archive status
+      // SQL: SELECT COUNT(*)::int AS count FROM projects WHERE "ownerId" = :ownerId
+      sequelize.query(
+        `SELECT COUNT(*)::int AS count FROM projects WHERE 1=1 ${ownerClause}`,
+        { replacements, type: "SELECT" }
+      ),
+
+      // validatedProjects = COUNT(validationStatut = 'Validé') — no archive filter
+      // SQL: SELECT COUNT(*)::int AS count FROM projects WHERE "validationStatut" = 'Validé' AND "ownerId" = :ownerId
+      sequelize.query(
+        `SELECT COUNT(*)::int AS count FROM projects
+         WHERE "validationStatut" = 'Validé' ${ownerClause}`,
+        { replacements, type: "SELECT" }
+      ),
+
+      // archivedProjects = COUNT(isArchived = true)
+      // SQL: SELECT COUNT(*)::int AS count FROM projects WHERE "isArchived" = true AND "ownerId" = :ownerId
+      sequelize.query(
+        `SELECT COUNT(*)::int AS count FROM projects
+         WHERE "isArchived" = true ${ownerClause}`,
+        { replacements, type: "SELECT" }
+      ),
+
+      // surfaceTotal = SUM(surfaceProspectee) — no archive filter
+      // SQL: SELECT COALESCE(SUM("surfaceProspectee"),0)::float AS total FROM projects WHERE "ownerId" = :ownerId
+      sequelize.query(
+        `SELECT COALESCE(SUM("surfaceProspectee"), 0)::float AS total FROM projects
+         WHERE 1=1 ${ownerClause}`,
+        { replacements, type: "SELECT" }
+      ),
+
+      // successRate = AVG(pourcentageReussite) — no archive filter
+      // SQL: SELECT COALESCE(AVG("pourcentageReussite"::float),0)::float AS avg FROM projects WHERE "ownerId" = :ownerId
+      sequelize.query(
+        `SELECT COALESCE(AVG("pourcentageReussite"::float), 0)::float AS avg FROM projects
+         WHERE "pourcentageReussite" IS NOT NULL ${ownerClause}`,
+        { replacements, type: "SELECT" }
+      ),
+    ]);
+
+    const totalProjects     = Number(totalRow?.count   || 0);
+    const validatedProjects = Number(validatedRow?.count || 0);
+    const archivedProjects  = Number(archivedRow?.count  || 0);
+    const activeProjects    = totalProjects - archivedProjects;
+    const surfaceTotal      = parseFloat(surfaceRow?.total || 0);
+    const successRate       = parseFloat(Number(successRow?.avg || 0).toFixed(2));
+
+    console.log("PROJECTS_FOUND",    totalProjects);
+    console.log("ACTIVE_PROJECTS",   activeProjects);
+    console.log("ARCHIVED_PROJECTS", archivedProjects);
+    console.log("VALIDATIONS_FOUND", validatedProjects);
+    console.log("SURFACE_TOTAL",     surfaceTotal);
+    console.log("SUCCESS_RATE_AVG",  successRate);
+
+    // ══════════════════════════════════════════════════════════════════════
+    // STATUT DISTRIBUTION — GROUP BY statut, no isArchived filter
+    // SQL: SELECT COALESCE(NULLIF(statut,''),'Sans statut') AS statut,
+    //             COUNT(*)::int AS count,
+    //             SUM(CASE WHEN "isArchived"=true THEN 1 ELSE 0 END)::int AS archived
+    //      FROM projects WHERE "ownerId" = :ownerId
+    //      GROUP BY ... ORDER BY count DESC
+    // ══════════════════════════════════════════════════════════════════════
+    const statutStats = await sequelize.query(
+      `SELECT
+         COALESCE(NULLIF(statut, ''), 'Sans statut') AS statut,
+         COUNT(*)::int                               AS count,
+         SUM(CASE WHEN "isArchived" = true  THEN 1 ELSE 0 END)::int AS archived,
+         SUM(CASE WHEN "isArchived" = false THEN 1 ELSE 0 END)::int AS active
+       FROM projects
+       WHERE 1=1 ${ownerClause}
+       GROUP BY COALESCE(NULLIF(statut, ''), 'Sans statut')
+       ORDER BY count DESC`,
+      { replacements, type: "SELECT" }
+    );
+
+    console.log("STATUT_STATS rows =", statutStats.length);
+
+    // ══════════════════════════════════════════════════════════════════════
+    // MODEL DISTRIBUTION — no isArchived filter
+    // ══════════════════════════════════════════════════════════════════════
+    const modelStats = await sequelize.query(
+      `SELECT
+         "projectModele"::text AS "projectModele",
+         COUNT(*)::int         AS count,
+         SUM(CASE WHEN "isArchived" = true  THEN 1 ELSE 0 END)::int AS archived,
+         SUM(CASE WHEN "isArchived" = false THEN 1 ELSE 0 END)::int AS active
+       FROM projects
+       WHERE 1=1 ${ownerClause}
+       GROUP BY "projectModele"::text
+       ORDER BY count DESC`,
+      { replacements, type: "SELECT" }
+    );
+
+    // ══════════════════════════════════════════════════════════════════════
+    // USER STATS — admin only, no isArchived filter
+    // ══════════════════════════════════════════════════════════════════════
     let userStats = [];
     if (isAdmin) {
       userStats = await sequelize.query(
-        `SELECT p."ownerId" AS "userId",
-                u.email AS "userName",
-                COUNT(p.id)::int AS count
+        `SELECT
+           p."ownerId"       AS "userId",
+           u.email           AS "userName",
+           up.name           AS "displayName",
+           COUNT(p.id)::int  AS count,
+           SUM(CASE WHEN p."isArchived" = true THEN 1 ELSE 0 END)::int AS archived
          FROM projects p
-         INNER JOIN users u ON u.id = p."ownerId"
-         WHERE p."isArchived" = false
-         GROUP BY p."ownerId", u.email
+         INNER JOIN users u          ON u.id         = p."ownerId"
+         LEFT  JOIN user_profiles up ON up."userId"  = u.id
+         GROUP BY p."ownerId", u.email, up.name
          ORDER BY count DESC`,
         { type: "SELECT" }
       );
     }
 
-    const response = { statutStats, modelStats, userStats };
-    console.log("KPI RESPONSE");
-    console.log(JSON.stringify({ statutStats, modelStats, userStatsCount: userStats.length }, null, 2));
+    // ══════════════════════════════════════════════════════════════════════
+    // RELANCES — from project_actions, no isArchived filter
+    // SQL: SELECT COUNT(*)::int AS count
+    //      FROM project_actions pa INNER JOIN projects p ON p.id = pa."projectId"
+    //      WHERE pa."dateRelance" IS NOT NULL AND pa."dateRelance" >= :today
+    //        AND p."ownerId" = :ownerId
+    // ══════════════════════════════════════════════════════════════════════
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const weekEnd = new Date(today);
+    weekEnd.setDate(weekEnd.getDate() + 7);
+
+    const relRepl = { ownerId: effectiveOwnerId, today, weekEnd };
+
+    const [
+      [relUpcomingRow], [relTodayRow], [relWeekRow], [relLateRow],
+    ] = await Promise.all([
+      sequelize.query(
+        `SELECT COUNT(*)::int AS count
+         FROM project_actions pa
+         INNER JOIN projects p ON p.id = pa."projectId"
+         WHERE pa."dateRelance" IS NOT NULL
+           AND pa."dateRelance" >= :today
+           ${ownerClauseP}`,
+        { replacements: relRepl, type: "SELECT" }
+      ),
+      sequelize.query(
+        `SELECT COUNT(*)::int AS count
+         FROM project_actions pa
+         INNER JOIN projects p ON p.id = pa."projectId"
+         WHERE pa."dateRelance" IS NOT NULL
+           AND DATE(pa."dateRelance") = CURRENT_DATE
+           ${ownerClauseP}`,
+        { replacements: relRepl, type: "SELECT" }
+      ),
+      sequelize.query(
+        `SELECT COUNT(*)::int AS count
+         FROM project_actions pa
+         INNER JOIN projects p ON p.id = pa."projectId"
+         WHERE pa."dateRelance" IS NOT NULL
+           AND pa."dateRelance" >= :today
+           AND pa."dateRelance" <= :weekEnd
+           ${ownerClauseP}`,
+        { replacements: relRepl, type: "SELECT" }
+      ),
+      sequelize.query(
+        `SELECT COUNT(*)::int AS count
+         FROM project_actions pa
+         INNER JOIN projects p ON p.id = pa."projectId"
+         WHERE pa."dateRelance" IS NOT NULL
+           AND pa."dateRelance" < :today
+           ${ownerClauseP}`,
+        { replacements: relRepl, type: "SELECT" }
+      ),
+    ]);
+
+    const relances = {
+      upcoming: Number(relUpcomingRow?.count || 0),
+      today:    Number(relTodayRow?.count    || 0),
+      week:     Number(relWeekRow?.count     || 0),
+      late:     Number(relLateRow?.count     || 0),
+    };
+
+    console.log("RELANCES_FOUND", relances.upcoming,
+      "| today:", relances.today,
+      "| week:", relances.week,
+      "| late:", relances.late
+    );
+
+    const response = {
+      totalProjects,
+      activeProjects,
+      validatedProjects,
+      archivedProjects,
+      surfaceTotal,
+      successRate,
+      statutStats,
+      modelStats,
+      userStats,
+      relances,
+    };
+
+    console.log("KPI RESPONSE", JSON.stringify({
+      totalProjects, activeProjects, validatedProjects, archivedProjects,
+      surfaceTotal, successRate,
+      statutStatsCount: statutStats.length,
+      modelStatsCount:  modelStats.length,
+      userStatsCount:   userStats.length,
+      relances,
+    }, null, 2));
+
     return res.json(response);
 
   } catch (e) {

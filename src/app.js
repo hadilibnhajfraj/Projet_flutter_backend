@@ -16,9 +16,9 @@ const userProfileRoutes = require("./routes/userProfile.routes");
 const taskRoutes = require("./routes/tasks.routes");
 require("./cron/checkProjects");
 require("./cron/projectCron");
-const { checkProjects } = require("./cron/projectCron");
+// DO NOT call checkProjects() at startup — it triggers archiveProjects() immediately.
+// The cron schedule in projectCron.js handles execution (daily at 08:00).
 const metabaseRoutes = require("./routes/metabase");
-checkProjects();
 const commercialRoutes = require("./routes/commercial_contacts.routes");
 const clientRoutes = require("./routes/client.routes");
 const companyRoutes = require("./routes/company.routes");
@@ -37,6 +37,7 @@ const pipelineProjectRoutes = require("./modules/projects/routes/project.routes"
 const actionTypeRoutes = require("./modules/project-actions/routes/projectActionType.routes");
 const dashboardRoutes = require("./modules/dashboard/routes/dashboard.routes");
 const archiveRequestRoutes = require("./modules/archive-requests/routes/archiveRequest.routes");
+const crmRoutes = require("./routes/crm.routes");
 
 const app = express();
 
@@ -69,6 +70,7 @@ app.use("/projects", pipelineProjectRoutes);
 app.use("/action-types", actionTypeRoutes);
 app.use("/dashboard", dashboardRoutes);
 app.use("/archive-requests", archiveRequestRoutes);
+app.use("/crm", crmRoutes);
 
 // ── Existing routes (unchanged) ──────────────────────────
 app.use("/projects", projectRoutes);

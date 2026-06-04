@@ -26,6 +26,11 @@ router.get("/export", exportProjects);
 // Enhanced project list: ?mine=true&stageId=X&search=X&page=1&limit=20&sortBy=createdAt
 router.get("/pipeline", validateListQuery, ctrl.listProjects);
 
+// Projects with missing required fields
+// ?field=bureauControle|architecte|ingenieur|telephone|adresse (repeatable, OR logic)
+// ?page=1 &limit=20 &sortBy=createdAt &sortDir=DESC &search=...
+router.get("/missing-fields", ctrl.getMissingFields);
+
 // Move project to new pipeline stage (Drag & Drop)
 router.put("/:id/move-stage", requireOwnerOrAdmin, validateMoveStage, ctrl.moveStage);
 
