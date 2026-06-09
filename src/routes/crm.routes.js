@@ -2,11 +2,96 @@
 
 const express = require("express");
 const { sequelize } = require("../db");
-const { authRequired } = require("../middleware/auth.middleware");
+const { authRequired }  = require("../middleware/auth.middleware");
+const { kpiRoleGuard }  = require("../middleware/kpiRoleGuard");
 
 const router = express.Router();
 
 const ADMIN_ROLES = ["admin", "superadmin"];
+
+// ══════════════════════════════════════════════════════════════════════════════
+// GET /crm/kpi/global — KPI globaux plateforme (admin / superadmin uniquement)
+// ══════════════════════════════════════════════════════════════════════════════
+router.get("/kpi/global", authRequired, kpiRoleGuard, async (req, res) => {
+  try {
+    const rows = await sequelize.query(
+      `SELECT
+         (SELECT COUNT(*)::int  FROM projects     WHERE "isArchived" = false)            AS "totalProjects",
+         (SELECT COUNT(*)::int  FROM projects     WHERE "isArchived" = false
+           AND "validationStatut" = 'Validé')                                            AS "validatedProjects",
+         (SELECT COUNT(*)::int  FROM users        WHERE "isActive"   = true)             AS "activeUsers",
+         (SELECT COUNT(*)::int  FROM users)                                               AS "totalUsers",
+         (SELECT COALESCE(SUM(p."montantMarche"), 0)::float
+            FROM projects p
+            JOIN pipeline_stages ps ON ps.id = p."pipelineStageId"
+            WHERE ps."isWonStage" = true AND p."isArchived" = false)                     AS "totalRevenue"`,
+      { type: "SELECT" }
+    );
+    const data = rows[0] ?? {};
+    res.json({ success: true, data });
+  } catch (err) {
+    console.error("CRM_KPI_GLOBAL_ERROR:", err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// ══════════════════════════════════════════════════════════════════════════════
+// GET /crm/kpi/projects — KPI projets par étape pipeline (admin / superadmin)
+// ══════════════════════════════════════════════════════════════════════════════
+router.get("/kpi/projects", authRequired, kpiRoleGuard, async (req, res) => {
+  try {
+    const data = await sequelize.query(
+      `SELECT
+         ps.name                                    AS stage,
+         ps.color,
+         ps."isWonStage",
+         ps."isLostStage",
+         COUNT(p.id)::int                           AS count,
+         COALESCE(SUM(p."montantMarche"), 0)::float AS revenue
+       FROM pipeline_stages ps
+       LEFT JOIN projects p
+         ON p."pipelineStageId" = ps.id AND p."isArchived" = false
+       WHERE ps."deletedAt" IS NULL
+       GROUP BY ps.id, ps.name, ps.color, ps.position, ps."isWonStage", ps."isLostStage"
+       ORDER BY ps.position`,
+      { type: "SELECT" }
+    );
+    res.json({ success: true, data });
+  } catch (err) {
+    console.error("CRM_KPI_PROJECTS_ERROR:", err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// ══════════════════════════════════════════════════════════════════════════════
+// GET /crm/kpi/users — Performance par utilisateur (admin / superadmin)
+// ══════════════════════════════════════════════════════════════════════════════
+router.get("/kpi/users", authRequired, kpiRoleGuard, async (req, res) => {
+  try {
+    const data = await sequelize.query(
+      `SELECT
+         u.id,
+         u.email,
+         u.role,
+         u."isActive",
+         COUNT(p.id)::int                                                     AS "totalProjects",
+         COUNT(p.id) FILTER (WHERE p."isArchived" = false)::int              AS "activeProjects",
+         COUNT(p.id) FILTER (WHERE p."validationStatut" = 'Validé')::int     AS "validatedProjects",
+         COALESCE(SUM(p."montantMarche") FILTER (
+           WHERE p."isArchived" = false
+         ), 0)::float                                                         AS "totalRevenue"
+       FROM users u
+       LEFT JOIN projects p ON p."ownerId" = u.id
+       GROUP BY u.id, u.email, u.role, u."isActive"
+       ORDER BY "activeProjects" DESC`,
+      { type: "SELECT" }
+    );
+    res.json({ success: true, data });
+  } catch (err) {
+    console.error("CRM_KPI_USERS_ERROR:", err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
 
 /**
  * GET /crm/upcoming-followups

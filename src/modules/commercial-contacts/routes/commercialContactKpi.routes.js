@@ -3,15 +3,43 @@
 const router = require("express").Router();
 const ctrl = require("../controllers/commercialContactKpi.controller");
 const { authRequired } = require("../../../middleware/auth.middleware");
-const { requireRole } = require("../../../middleware/requireRole");
+const { requireRole }  = require("../../../middleware/requireRole");
 
-console.log("[CommercialContactKPI] middleware loaded:", { authRequired: typeof authRequired, requireRole: typeof requireRole });
+// ── GET /commercial-contacts/kpi ─────────────────────────────────────────────
+// admin / superadmin → KPI globaux (tous contacts, tous commerciaux)
+// commercial        → KPI personnels (filtré WHERE createdBy = userId)
+router.get(
+  "/kpi",
+  authRequired,
+  requireRole("admin", "superadmin", "commercial"),
+  ctrl.getKPI
+);
 
-// ── admin / superadmin — données complètes ou filtrées selon rôle ─────────────
-router.get("/kpi",       authRequired, requireRole("admin", "superadmin", "commercial"), ctrl.getKPI);
-router.get("/analytics", authRequired, requireRole("admin", "superadmin", "commercial"), ctrl.getAnalytics);
+// ── GET /commercial-contacts/my-kpi ──────────────────────────────────────────
+// commercial / admin / superadmin → accès autorisé (données du user connecté)
+// user / accueil / autres          → 403 Access denied
+router.get(
+  "/my-kpi",
+  authRequired,
+  requireRole("admin", "superadmin", "commercial"),
+  ctrl.getMyKpiEndpoint
+);
 
-// ── /kpi/me — vue personnelle, filtrée sur l'utilisateur connecté ─────────────
-router.get("/kpi/me",    authRequired, requireRole("admin", "superadmin", "commercial"), ctrl.getMyKPI);
+// ── GET /commercial-contacts/analytics ───────────────────────────────────────
+// admin / superadmin → global ; commercial → filtré
+router.get(
+  "/analytics",
+  authRequired,
+  requireRole("admin", "superadmin", "commercial"),
+  ctrl.getAnalytics
+);
+
+// ── GET /commercial-contacts/kpi/me — legacy ─────────────────────────────────
+router.get(
+  "/kpi/me",
+  authRequired,
+  requireRole("admin", "superadmin", "commercial"),
+  ctrl.getKPIMe
+);
 
 module.exports = router;

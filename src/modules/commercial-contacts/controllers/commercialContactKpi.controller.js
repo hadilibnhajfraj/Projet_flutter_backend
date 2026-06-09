@@ -10,57 +10,93 @@ function handle(res, err) {
   res.status(status).json({ success: false, message: err.message || "Internal server error" });
 }
 
-// Retourne null pour admin/superadmin (toutes données), userId pour commercial (ses données)
-function _scopeUserId(req) {
-  return svc.ADMIN_ROLES.includes(req.user.role) ? null : req.user.sub;
-}
-
+// ── GET /commercial-contacts/kpi ──────────────────────────────────────────────
+// admin / superadmin → KPI globaux (tous les contacts, tous les commerciaux)
+// commercial        → KPI personnels (WHERE createdBy = userId)
 async function getKPI(req, res) {
   try {
-    const { role, sub: userId, email } = req.user;
+    const { role: rawRole, sub: userId, email } = req.user;
 
-    console.log("ROLE =", role);
-    console.log("USER =", email);
+    // Normaliser la casse pour éviter "Admin" vs "admin"
+    const role = rawRole?.toLowerCase() ?? "unknown";
 
-    // ── Commercial → dashboard personnel ─────────────────────────────────────
-    if (!svc.ADMIN_ROLES.includes(role)) {
-      const stats = await svc.getPersonalKPISummary(userId);
+    const isAdmin = svc.ADMIN_ROLES.includes(role);
+    const whereFilter = isAdmin ? "{} — aucun filtre (KPI global)" : `WHERE "createdBy" = '${userId}'`;
 
-      console.log("PERSONAL CONTACTS =", stats.totalContacts);
+    console.log("========== KPI DEBUG ==========");
+    console.log("ROLE RAW     =", rawRole);
+    console.log("ROLE NORM    =", role);
+    console.log("USER ID      =", userId);
+    console.log("IS ADMIN     =", isAdmin);
+    console.log("WHERE FILTER =", whereFilter);
+
+    // ── Admin / Superadmin → KPI globaux ────────────────────────────────────
+    if (isAdmin) {
+      console.log("[KPI] Branche ADMIN → appel getCommercialContactKPI(null)");
+      const raw = await svc.getCommercialContactKPI(null);
+
+      console.log("CONTACTS FOUND =", raw.global.totalContacts);
+      console.log("================================");
 
       return res.json({
         success: true,
         data: {
-          isPersonalDashboard: true,
-          commercial: {
-            id:    userId,
-            email: email ?? null,
-            name:  email ? email.split("@")[0] : null,
-          },
-          stats,
+          isPersonalDashboard: false,
+          totalContacts:       raw.global.totalContacts,
+          totalCalls:          raw.global.totalCalls,
+          totalCompanies:      raw.global.totalCompanies,
+          totalCommercials:    raw.global.totalUsers,
+          contactsByStatus:    raw.statusDistribution,
+          contactsByType:      raw.typeDistribution,
+          topCommercials:      raw.topUsers,
         },
       });
     }
 
-    // ── Admin / superadmin → statistiques globales ───────────────────────────
-    const data = await svc.getCommercialContactKPI(null);
-    res.json({ success: true, data: { isPersonalDashboard: false, ...data } });
+    // ── Commercial → données filtrées sur ses propres contacts ───────────────
+    console.log("[KPI] Branche COMMERCIAL → appel getPersonalKPISummary(userId)");
+    const stats = await svc.getPersonalKPISummary(userId);
+
+    console.log("CONTACTS FOUND =", stats.totalContacts);
+    console.log("================================");
+
+    return res.json({
+      success: true,
+      data: {
+        isPersonalDashboard: true,
+        commercial: {
+          id:    userId,
+          email: email  ?? null,
+          name:  email  ? email.split("@")[0] : null,
+        },
+        totalContacts:    stats.totalContacts,
+        totalCalls:       stats.totalCalls,
+        totalCompanies:   stats.totalCompanies,
+        validationRate:   stats.validationRate,
+        contactsByStatus: stats.contactsByStatus,
+        contactsByType:   stats.contactsByType,
+      },
+    });
   } catch (err) {
     handle(res, err);
   }
 }
 
+// ── GET /commercial-contacts/analytics ───────────────────────────────────────
+// admin / superadmin → global ; commercial → filtré
 async function getAnalytics(req, res) {
   try {
-    const data = await svc.getCommercialContactAnalytics(_scopeUserId(req));
+    const role   = req.user.role?.toLowerCase() ?? "unknown";
+    const userId = svc.ADMIN_ROLES.includes(role) ? null : req.user.sub;
+    const data   = await svc.getCommercialContactAnalytics(userId);
     res.json({ success: true, data });
   } catch (err) {
     handle(res, err);
   }
 }
 
-// Vue personnelle — toujours filtrée sur l'utilisateur connecté
-async function getMyKPI(req, res) {
+// ── GET /commercial-contacts/kpi/me — legacy ─────────────────────────────────
+async function getKPIMe(req, res) {
   try {
     const userId = req.user.sub;
     if (!userId) return res.status(401).json({ success: false, message: "Unauthorized" });
@@ -71,4 +107,26 @@ async function getMyKPI(req, res) {
   }
 }
 
-module.exports = { getKPI, getAnalytics, getMyKPI };
+// ── GET /commercial-contacts/my-kpi — commercial uniquement ──────────────────
+// Retourne uniquement les KPI du commercial connecté.
+// WHERE "createdBy" = userId (voir service getPersonalKPISummary)
+async function getMyKpiEndpoint(req, res) {
+  try {
+    const { sub: userId, role } = req.user;
+
+    // sub = identifiant utilisateur issu du JWT (équivalent de req.user.id)
+    console.log("MY KPI ACCESS", userId, role);
+
+    if (!userId) return res.status(401).json({ success: false, message: "Unauthorized" });
+
+    const data = await svc.getPersonalKPISummary(userId);
+
+    console.log("PERSONAL CONTACTS =", data.totalContacts);
+
+    res.json({ success: true, data });
+  } catch (err) {
+    handle(res, err);
+  }
+}
+
+module.exports = { getKPI, getAnalytics, getKPIMe, getMyKpiEndpoint };

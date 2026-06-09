@@ -20,6 +20,8 @@ function _rep(userId)      { return userId ? { userId }                        :
 // ═══════════════════════════════════════════════════════════════════════════════
 
 async function _getGlobalKPIs(userId) {
+  const whereClause = _where(userId);
+  console.log(`${LOG} [_getGlobalKPIs] userId=${userId ?? "null (global)"} | WHERE="${whereClause || "AUCUN FILTRE"}"`);
   const [row] = await sequelize.query(
     `SELECT
        COUNT(*)::int                                                                  AS "totalContacts",
@@ -33,7 +35,7 @@ async function _getGlobalKPIs(userId) {
          ELSE 0
        END                                                                           AS "averageCallsPerContact"
      FROM commercial_contacts
-     ${_where(userId)}`,
+     ${whereClause}`,
     { replacements: _rep(userId), type: "SELECT" }
   );
   return {
@@ -494,12 +496,12 @@ async function getPersonalKPISummary(userId) {
   console.log(`${LOG} [PersonalKPI] Done in ${Date.now() - t0}ms | contacts=${row.totalContacts ?? 0}`);
 
   return {
-    totalContacts:     row.totalContacts     ?? 0,
-    totalCalls:        row.totalCalls        ?? 0,
-    totalCompanies:    row.totalCompanies    ?? 0,
-    validationRate:    parseFloat(row.validationRate ?? 0),
-    statusDistribution,
-    typeDistribution,
+    totalContacts:    row.totalContacts     ?? 0,
+    totalCalls:       row.totalCalls        ?? 0,
+    totalCompanies:   row.totalCompanies    ?? 0,
+    validationRate:   parseFloat(row.validationRate ?? 0),
+    contactsByStatus: statusDistribution,
+    contactsByType:   typeDistribution,
   };
 }
 
