@@ -38,6 +38,7 @@ const actionTypeRoutes = require("./modules/project-actions/routes/projectAction
 const dashboardRoutes = require("./modules/dashboard/routes/dashboard.routes");
 const archiveRequestRoutes = require("./modules/archive-requests/routes/archiveRequest.routes");
 const crmRoutes = require("./routes/crm.routes");
+const commercialContactKpiRoutes = require("./modules/commercial-contacts/routes/commercialContactKpi.routes");
 
 const app = express();
 
@@ -87,6 +88,7 @@ app.use("/api/clients", clientRoutes);
 app.use("/companies", companyRoutes);
 app.use("/engineers", engineerRoutes);
 app.use("/architects", architectRoutes);
+app.use("/commercial-contacts", commercialContactKpiRoutes);
 app.use("/commercial-contacts", commercialRoutes);
 app.use("/projetactions", projectActionRoutes);
 app.use("/metabase", metabaseRoutes);

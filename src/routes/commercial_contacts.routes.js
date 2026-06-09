@@ -71,19 +71,19 @@ router.get("/", authRequired, async (req, res) => {
     // =============================
     // 🔥 USER FILTER PRIORITY
     // =============================
-  if (user_nom && user_nom.trim()) {
-  const cleanUser = user_nom.trim();
+    // NOTE : le filtre createdBy a été retiré de la liste.
+    // Il appartient uniquement à GET /commercial-contacts/kpi/me.
+    // La liste est accessible à tous les rôles ; le filtrage se fait via user_nom.
+    console.log("ROLE =", req.user.role);
+    console.log("USER =", req.user.sub);
 
-  const allowedUsers = ["najeh", "mooemen", "mayssa"];
-
-  if (allowedUsers.includes(cleanUser)) {
-    where.user_nom = cleanUser;
-  } else {
-    where.user_nom_custom = cleanUser;
-  }
-}else {
-      if (!["admin", "superadmin"].includes(req.user.role)) {
-        where.createdBy = req.user.sub;
+    if (user_nom && user_nom.trim()) {
+      const cleanUser = user_nom.trim();
+      const allowedUsers = ["najeh", "mooemen", "mayssa"];
+      if (allowedUsers.includes(cleanUser)) {
+        where.user_nom = cleanUser;
+      } else {
+        where.user_nom_custom = cleanUser;
       }
     }
 
@@ -142,6 +142,7 @@ router.get("/", authRequired, async (req, res) => {
     });
 
     console.log("🔥 WHERE FINAL:", JSON.stringify(where, null, 2));
+    console.log("CONTACTS FOUND =", rows.length);
 
     const result = rows.map((row) => {
   const r = row.toJSON();
