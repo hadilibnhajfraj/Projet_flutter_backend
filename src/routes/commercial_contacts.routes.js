@@ -39,25 +39,62 @@ function mapStageToAction(stage) {
 }
 router.get("/user-names/list", authRequired, async (req, res) => {
   try {
-    const DEFAULT_USERS = ["najeh", "mooemen", "mayssa"];
+    const DEFAULT_USERS = ["najeh", "mooemen", "mayssa", "wajdi"];
 
     const rows = await CommercialContact.findAll({
       attributes: ["user_nom", "user_nom_custom"],
     });
 
     const dbUsers = [];
-
     rows.forEach((r) => {
       if (r.user_nom) dbUsers.push(r.user_nom);
       if (r.user_nom_custom) dbUsers.push(r.user_nom_custom);
     });
 
-    const allUsers = [...new Set([...DEFAULT_USERS, ...dbUsers])];
+    const allNames = [...new Set([...DEFAULT_USERS, ...dbUsers])];
 
-    return res.json(allUsers);
-
+    return res.json(allNames);
   } catch (err) {
     console.error("❌ GET USER NAMES ERROR:", err);
+    res.status(500).json({ message: err.message });
+  }
+});
+
+router.post("/select-commercial", authRequired, async (req, res) => {
+  try {
+    const { commercialName } = req.body;
+
+    console.log("ROLE =", req.user.role);
+    console.log("SELECTED COMMERCIAL =", commercialName);
+
+    if (!commercialName || !String(commercialName).trim()) {
+      return res.status(400).json({ message: "commercialName is required" });
+    }
+
+    const name = String(commercialName).trim();
+    const DEFAULT_USERS = ["najeh", "mooemen", "mayssa", "wajdi"];
+
+    let exists = DEFAULT_USERS.includes(name);
+
+    if (!exists) {
+      const ENUM_USERS = ["najeh", "mooemen", "mayssa"];
+      const conditions = [{ user_nom_custom: name }];
+      if (ENUM_USERS.includes(name)) conditions.push({ user_nom: name });
+
+      const row = await CommercialContact.findOne({
+        where: { [Op.or]: conditions },
+        attributes: ["id"],
+      });
+      exists = !!row;
+    }
+
+    if (!exists) {
+      return res.status(404).json({ message: `Commercial '${name}' introuvable` });
+    }
+
+    return res.json({ success: true, commercialName: name });
+  } catch (err) {
+    console.error("❌ SELECT COMMERCIAL ERROR:", err);
     res.status(500).json({ message: err.message });
   }
 });

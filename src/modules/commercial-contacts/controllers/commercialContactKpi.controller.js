@@ -108,18 +108,21 @@ async function getKPIMe(req, res) {
 }
 
 // ── GET /commercial-contacts/my-kpi — commercial uniquement ──────────────────
-// Retourne uniquement les KPI du commercial connecté.
-// WHERE "createdBy" = userId (voir service getPersonalKPISummary)
+// ?commercialName=najeh  →  filtre par user_nom / user_nom_custom
+// sans paramètre         →  filtre par createdBy = userId
 async function getMyKpiEndpoint(req, res) {
   try {
     const { sub: userId, role } = req.user;
+    const commercialName = req.query.commercialName
+      ? String(req.query.commercialName).trim()
+      : null;
 
-    // sub = identifiant utilisateur issu du JWT (équivalent de req.user.id)
-    console.log("MY KPI ACCESS", userId, role);
+    console.log("ROLE =", role);
+    console.log("SELECTED COMMERCIAL =", commercialName);
 
     if (!userId) return res.status(401).json({ success: false, message: "Unauthorized" });
 
-    const data = await svc.getPersonalKPISummary(userId);
+    const data = await svc.getPersonalKPISummary(userId, commercialName);
 
     console.log("PERSONAL CONTACTS =", data.totalContacts);
 

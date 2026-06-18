@@ -448,9 +448,18 @@ async function getMyKPI(userId) {
 // ═══════════════════════════════════════════════════════════════════════════════
 // /kpi  — vue personnelle commercial (réponse enrichie)
 // ═══════════════════════════════════════════════════════════════════════════════
-async function getPersonalKPISummary(userId) {
+async function getPersonalKPISummary(userId, commercialName = null) {
   const t0 = Date.now();
-  console.log(`${LOG} [PersonalKPI] Starting... userId=${userId}`);
+  console.log(`${LOG} [PersonalKPI] Starting... userId=${userId} commercialName=${commercialName ?? "none"}`);
+
+  // Si commercialName fourni : filtre par user_nom / user_nom_custom
+  // Sinon : filtre par createdBy = userId (comportement historique)
+  const whereClause = commercialName
+    ? `WHERE ("user_nom" = :commercialName OR "user_nom_custom" = :commercialName)`
+    : `WHERE "createdBy" = :userId`;
+  const replacements = commercialName
+    ? { userId, commercialName }
+    : { userId };
 
   const [globalRows, statusDistribution, typeDistribution] = await Promise.all([
     sequelize.query(
@@ -466,28 +475,28 @@ async function getPersonalKPISummary(userId) {
            ELSE 0
          END                                                                   AS "validationRate"
        FROM commercial_contacts
-       WHERE "createdBy" = :userId`,
-      { replacements: { userId }, type: "SELECT" }
+       ${whereClause}`,
+      { replacements, type: "SELECT" }
     ),
     sequelize.query(
       `SELECT
          statut        AS status,
          COUNT(*)::int AS count
        FROM commercial_contacts
-       WHERE "createdBy" = :userId
+       ${whereClause}
        GROUP BY statut
        ORDER BY count DESC`,
-      { replacements: { userId }, type: "SELECT" }
+      { replacements, type: "SELECT" }
     ),
     sequelize.query(
       `SELECT
          "typeClient"    AS "clientType",
          COUNT(*)::int   AS count
        FROM commercial_contacts
-       WHERE "createdBy" = :userId
+       ${whereClause}
        GROUP BY "typeClient"
        ORDER BY count DESC`,
-      { replacements: { userId }, type: "SELECT" }
+      { replacements, type: "SELECT" }
     ),
   ]);
 
