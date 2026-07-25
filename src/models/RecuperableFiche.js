@@ -13,6 +13,7 @@ const RecuperableFiche = sequelize.define(
     id: { type: DataTypes.UUID, defaultValue: DataTypes.UUIDV4, primaryKey: true },
 
     module: { type: DataTypes.ENUM("PROBAR", "PROMESH"), allowNull: false },
+    
     machine: { type: DataTypes.STRING(50), allowNull: false },
     ligne: { type: DataTypes.ENUM("L1", "L2", "L3", "L4"), allowNull: false },
     poste: { type: DataTypes.ENUM("matin", "soir"), allowNull: false },

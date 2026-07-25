@@ -13,6 +13,7 @@ const TrustedDevice = sequelize.define(
   "TrustedDevice",
   {
     id: { type: DataTypes.UUID, defaultValue: DataTypes.UUIDV4, primaryKey: true },
+    
 
     userId: {
       type: DataTypes.UUID,

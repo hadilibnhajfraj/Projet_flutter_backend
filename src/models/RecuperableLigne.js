@@ -10,6 +10,7 @@ const RecuperableLigne = sequelize.define(
   "RecuperableLigne",
   {
     id: { type: DataTypes.UUID, defaultValue: DataTypes.UUIDV4, primaryKey: true },
+    
 
     ficheId: { type: DataTypes.UUID, allowNull: false },
 

@@ -11,6 +11,7 @@ const ArchiveRequest = sequelize.define(
       defaultValue: DataTypes.UUIDV4,
       primaryKey: true,
     },
+    
     projectId: {
       type: DataTypes.UUID,
       allowNull: false,

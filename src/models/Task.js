@@ -21,6 +21,7 @@ const Task = sequelize.define(
       allowNull: true,
     },
 
+    
     // ✅ qui a créé (commercial)
     createdBy: { type: DataTypes.UUID, allowNull: false },
   // ✅ NEW: task liée à un projet
