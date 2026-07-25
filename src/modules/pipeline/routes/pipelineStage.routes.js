@@ -8,9 +8,9 @@ router.use(authRequired);
 
 router.get("/", ctrl.getAll);
 router.get("/:id", ctrl.getById);
-router.post("/", requireRole("admin", "superadmin"), validateCreate, ctrl.create);
-router.put("/reorder", requireRole("admin", "superadmin"), validateReorder, ctrl.reorder);
-router.put("/:id", requireRole("admin", "superadmin"), validateUpdate, ctrl.update);
-router.delete("/:id", requireRole("admin", "superadmin"), ctrl.remove);
+router.post("/", requireRole("admin", "superadmin", "superadmin2"), validateCreate, ctrl.create);
+router.put("/reorder", requireRole("admin", "superadmin", "superadmin2"), validateReorder, ctrl.reorder);
+router.put("/:id", requireRole("admin", "superadmin", "superadmin2"), validateUpdate, ctrl.update);
+router.delete("/:id", requireRole("admin", "superadmin", "superadmin2"), ctrl.remove);
 
 module.exports = router;

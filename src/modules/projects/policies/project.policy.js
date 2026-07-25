@@ -1,6 +1,6 @@
 const Project = require("../../../models/Project");
 
-const ADMIN_ROLES = ["admin", "superadmin"];
+const ADMIN_ROLES = ["admin", "superadmin", "superadmin2"];
 
 async function canEdit(userId, role, projectId) {
   if (ADMIN_ROLES.includes(role)) return true;

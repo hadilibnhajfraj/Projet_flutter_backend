@@ -7,6 +7,15 @@ const User = require("../models/User");
 
 const { sendRelanceEmail } = require("../utils/sendRelanceEmail");
 
+// ─── Kill switch for all automatic email cron jobs ────────────────────────────
+// Default: DISABLED. Set AUTO_EMAIL_JOBS_ENABLED=true in .env to re-enable.
+// Note: this file is not currently require()'d from app.js, so it is dead code
+// today — this guard is a safety net in case it gets wired up later.
+const AUTO_EMAIL_JOBS_ENABLED = process.env.AUTO_EMAIL_JOBS_ENABLED === "true";
+
+if (!AUTO_EMAIL_JOBS_ENABLED) {
+  console.log("[reminderService] AUTO_EMAIL_JOBS_ENABLED=false — cron NOT scheduled.");
+} else {
 cron.schedule("0 8 * * *", async () => {
 
   console.log("⏰ CRON RELANCE START");
@@ -88,3 +97,4 @@ cron.schedule("0 8 * * *", async () => {
   }
 
 });
+}

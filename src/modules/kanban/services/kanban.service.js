@@ -169,6 +169,8 @@ function toProjectCard(project) {
     typeProjet: p.typeProjet || null,
     statut: p.statut || null,
     projectModele: p.projectModele,
+    productFamily: p.productFamily || null,
+    diameterMm: p.diameterMm ?? null,
 
     // Priority
     priority: priorityKey,

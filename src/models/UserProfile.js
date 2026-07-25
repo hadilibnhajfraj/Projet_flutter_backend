@@ -25,6 +25,15 @@ const UserProfile = sequelize.define(
 
     // ✅ avatar
     avatarUrl: { type: DataTypes.STRING(500), allowNull: true }, // exemple: /uploads/avatars/xxx.png
+
+    // ✅ champs RH — auto-remplissage du module "Demandes" (congé / sortie),
+    // renseignés une fois par un administrateur, jamais saisis par l'employé.
+    nom: { type: DataTypes.STRING(120), allowNull: true },
+    prenom: { type: DataTypes.STRING(120), allowNull: true },
+    matricule: { type: DataTypes.STRING(50), allowNull: true },
+    qualification: { type: DataTypes.STRING(150), allowNull: true },
+    departement: { type: DataTypes.STRING(150), allowNull: true },
+    service: { type: DataTypes.STRING(150), allowNull: true },
   },
   {
     tableName: "user_profiles",

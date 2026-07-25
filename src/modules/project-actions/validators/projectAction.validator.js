@@ -34,6 +34,9 @@ const createSchema = Joi.object({
   reminderMessage: Joi.string().max(500).allow(null, "").optional(),
   statut: Joi.string().valid("A faire", "En cours", "Terminé", "Annulé").optional(),
   fileUrl: Joi.string().uri().allow(null, "").optional(),
+  // Calendrier CRM / Google Calendar (voir projectActionCalendarSync.service.js)
+  dateFin: Joi.date().iso().allow(null).optional(),
+  priorite: Joi.string().valid("basse", "normale", "haute", "urgente").optional(),
 })
   // Require at least one action-type field to be present
   .or("actionTypeId", "typeAction", "typeAction_legacy", "firstAction")
@@ -54,6 +57,8 @@ const updateSchema = Joi.object({
   dateRelance: Joi.date().iso().allow(null).optional(),
   statut: Joi.string().valid("A faire", "En cours", "Terminé", "Annulé").optional(),
   fileUrl: Joi.string().uri().allow(null, "").optional(),
+  dateFin: Joi.date().iso().allow(null).optional(),
+  priorite: Joi.string().valid("basse", "normale", "haute", "urgente").optional(),
 });
 
 function validate(schema) {

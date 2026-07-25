@@ -9,7 +9,13 @@ const CommercialContactRelance = require("../models/CommercialContactRelance");
 const CommercialContactAction = require("../models/CommercialContactAction");
 const CommercialContactReminder = require("../models/CommercialContactReminder");
 const User = require("../models/User");
+const UserProfile = require("../models/UserProfile");
+const CommercialContactStatusHistory = require("../models/CommercialContactStatusHistory");
 const uploads = require("../middleware/uploads");
+const { runFollowupAutomation } = require("../services/followupAutomation.service");
+const { recordStatusChange } = require("../services/commercialContactHistory.service");
+const { isCommercialEligibleRole } = require("../constants/commercialRoles");
+const { resolveFullName } = require("../utils/userDisplay");
 function mapStageToAction(stage) {
   switch (stage) {
     case "Prospect":
@@ -37,6 +43,61 @@ function mapStageToAction(stage) {
       return "Visite";
   }
 }
+
+// ═══════════════════════════════════════════════════════════════════════
+// AUTOMATISATION FOLLOW-UP — calendrier / notifications / email / WhatsApp
+// Déclenchée uniquement quand l'utilisateur connecté est
+// info@probardistribution.com ET que le Follow-up a date + heure.
+// Ne modifie rien pour tous les autres comptes (comportement inchangé).
+// ═══════════════════════════════════════════════════════════════════════
+const FOLLOWUP_AUTOMATION_EMAIL = "info@probardistribution.com";
+
+function _isFollowupAutomationActor(req) {
+  return (req.user?.email || "").toLowerCase().trim() === FOLLOWUP_AUTOMATION_EMAIL;
+}
+
+// Retourne un message d'erreur si le champ "Commercial" est obligatoire et
+// manquant, sinon null. N'exige rien pour les comptes autres qu'info@.
+function _validateCommercialField(req, body) {
+  if (!_isFollowupAutomationActor(req)) return null;
+  if (!(body.dateRelance && body.heureRelance)) return null;
+  if (!body.commercialId) return "Commercial requis";
+  return null;
+}
+
+// Résout commercialName/commercialEmail côté serveur à partir de
+// commercialId — ne fait jamais confiance à un nom/email envoyé par le
+// client. Accepte tout utilisateur éligible (voir NON_COMMERCIAL_ROLES),
+// pas seulement role==="commercial" — cohérent avec GET /users/commercials.
+async function _resolveCommercial(commercialId) {
+  if (!commercialId) return null;
+  const user = await User.findOne({
+    where: { id: commercialId },
+    attributes: ["id", "email", "role"],
+    include: [{ model: UserProfile, as: "profile", attributes: ["name", "nom", "prenom"], required: false }],
+  });
+  if (!user || !isCommercialEligibleRole(user.role)) return null;
+  return { id: user.id, email: user.email || null, name: resolveFullName(user) };
+}
+
+// Point d'entrée unique appelé après la création/mise à jour d'une relance.
+// No-op silencieux pour tout le monde sauf info@probardistribution.com.
+async function _maybeRunFollowupAutomation(req, contact, relance) {
+  if (!_isFollowupAutomationActor(req)) return null;
+  if (!(relance.dateRelance && relance.heureRelance)) return null;
+
+  try {
+    return await runFollowupAutomation({
+      relance,
+      contact,
+      actorUser: { id: req.user.sub, email: req.user.email },
+    });
+  } catch (err) {
+    console.error("❌ [FollowupAutomation] Erreur inattendue:", err.message);
+    return null;
+  }
+}
+
 router.get("/user-names/list", authRequired, async (req, res) => {
   try {
     const DEFAULT_USERS = ["najeh", "mooemen", "mayssa", "wajdi"];
@@ -59,6 +120,10 @@ router.get("/user-names/list", authRequired, async (req, res) => {
     res.status(500).json({ message: err.message });
   }
 });
+
+// NOTE: la liste des commerciaux pour le dropdown Follow-up est servie par
+// GET /users/commercials (users.routes.js) — chargée dynamiquement depuis
+// la table users, sans filtre restreint à role==="commercial".
 
 router.post("/select-commercial", authRequired, async (req, res) => {
   try {
@@ -98,8 +163,14 @@ router.post("/select-commercial", authRequired, async (req, res) => {
     res.status(500).json({ message: err.message });
   }
 });
+// Rôles voyant TOUJOURS l'intégralité des contacts, sans aucun filtre de
+// périmètre. superadmin2 est le rôle technique utilisé pour les comptes
+// "superadmin1"/"superadmin2" côté métier — même enum, même traitement.
+const PRIVILEGED_ROLES = ["admin", "superadmin", "superadmin2"];
+
 // LIST
 router.get("/", authRequired, async (req, res) => {
+  const reqId = Math.random().toString(36).slice(2, 8);
   try {
     const where = {};
 
@@ -111,6 +182,7 @@ router.get("/", authRequired, async (req, res) => {
     // NOTE : le filtre createdBy a été retiré de la liste.
     // Il appartient uniquement à GET /commercial-contacts/kpi/me.
     // La liste est accessible à tous les rôles ; le filtrage se fait via user_nom.
+    console.log(`\n========== GET /commercial-contacts [${reqId}] ==========`);
     console.log("ROLE =", req.user.role);
     console.log("USER =", req.user.sub);
 
@@ -160,6 +232,69 @@ router.get("/", authRequired, async (req, res) => {
       where.statut = statut.trim();
     }
 
+    // NOTE audit : JSON.stringify() n'affiche PAS les clés Symbol (Op.and,
+    // Op.in, ...) — ce log est donc volontairement complété plus bas par un
+    // log texte explicite du filtre id/commercial réellement appliqué, et
+    // par le SQL généré (voir "SQL GENERATED"), seule source 100% fiable.
+    console.log("WHERE BEFORE =", JSON.stringify(where, null, 2));
+
+    // =============================
+    // 🔐 SCOPE PAR RÔLE — logique définitive
+    //
+    // - admin / superadmin / superadmin2 : vue complète, aucun filtre de
+    //   périmètre (comportement historique, jamais touché).
+    // - commercial : voit l'UNION (OR) de 3 critères, JAMAIS un seul :
+    //     1) createdBy   == utilisateur connecté (contacts qu'il a créés)
+    //     2) commercialId == utilisateur connecté (affectation directe et
+    //        persistante, colonne commercial_contacts.commercialId —
+    //        posée par le backfill historique ou par l'action admin
+    //        "Affecter des contacts")
+    //     3) id IN (assignedContactIds) (affectation via au moins une
+    //        relance CommercialContactRelance.commercialId)
+    //   Si assignedContactIds est vide, on NE court-circuite JAMAIS : les
+    //   critères 1) et 2) restent évalués normalement par la requête SQL.
+    //   where={} reste interdit pour ce rôle (toujours au moins le OR
+    //   ci-dessus), mais l'absence de résultat n'est plus jamais décidée
+    //   en dehors de la base — c'est Postgres qui tranche.
+    // - tout autre rôle (user, accueil, ...) : vue complète, comportement
+    //   historique inchangé (aucune restriction définie pour eux ici).
+    // =============================
+    let assignedContactIds = null; // null = non applicable à ce rôle
+
+    if (req.user.role === "commercial") {
+      const relanceRows = await CommercialContactRelance.findAll({
+        where: { commercialId: req.user.sub },
+        attributes: ["commercialContactId"],
+      });
+      assignedContactIds = [
+        ...new Set(relanceRows.map((r) => r.commercialContactId).filter(Boolean)),
+      ];
+
+      console.log("assignedContactIds =", assignedContactIds);
+
+      const orConditions = [
+        { createdBy: req.user.sub },
+        { commercialId: req.user.sub },
+      ];
+      if (assignedContactIds.length) {
+        orConditions.push({ id: { [Op.in]: assignedContactIds } });
+      }
+
+      where[Op.and] = [...(where[Op.and] || []), { [Op.or]: orConditions }];
+    } else if (PRIVILEGED_ROLES.includes(req.user.role)) {
+      console.log("assignedContactIds = N/A (rôle privilégié — vue complète)");
+    } else {
+      console.log(`assignedContactIds = N/A (rôle "${req.user.role}" non restreint ici — vue complète, comportement historique)`);
+    }
+
+    console.log(
+      "WHERE AFTER =",
+      JSON.stringify(where, null, 2),
+      req.user.role === "commercial"
+        ? `+ OR[createdBy=${req.user.sub}, commercialId=${req.user.sub}${assignedContactIds.length ? `, id IN (${assignedContactIds.length} ids)` : ""}]`
+        : ""
+    );
+
     // =============================
     // FETCH DATA
     // =============================
@@ -176,10 +311,11 @@ router.get("/", authRequired, async (req, res) => {
           required: false,
         },
       ],
+      logging: (sql) => console.log("SQL GENERATED =", sql),
     });
 
-    console.log("🔥 WHERE FINAL:", JSON.stringify(where, null, 2));
     console.log("CONTACTS FOUND =", rows.length);
+    console.log(`========== FIN [${reqId}] ==========\n`);
 
     const result = rows.map((row) => {
   const r = row.toJSON();
@@ -197,6 +333,83 @@ return res.json(result);
     return res.status(500).json({ message: e.message || "Server error" });
   }
 });
+
+// ═══════════════════════════════════════════════════════════════════════
+// ADMIN — "Affecter des contacts" : attribue en masse une liste de
+// contacts à un commercial (renseigne commercial_contacts.commercialId).
+// Réservé aux rôles privilégiés (admin/superadmin/superadmin2).
+// ═══════════════════════════════════════════════════════════════════════
+router.post("/assign", authRequired, async (req, res) => {
+  try {
+    console.log("ROLE =", req.user.role);
+    console.log("USER =", req.user.sub);
+
+    if (!PRIVILEGED_ROLES.includes(req.user.role)) {
+      return res.status(403).json({ message: "Réservé aux administrateurs" });
+    }
+
+    const { contactIds, commercialId } = req.body || {};
+
+    if (!Array.isArray(contactIds) || contactIds.length === 0) {
+      return res.status(400).json({ message: "contactIds requis (liste non vide)" });
+    }
+    if (!commercialId || typeof commercialId !== "string") {
+      return res.status(400).json({ message: "commercialId requis" });
+    }
+
+    const commercial = await User.findOne({
+      where: { id: commercialId },
+      attributes: ["id", "role"],
+    });
+    if (!commercial || !isCommercialEligibleRole(commercial.role)) {
+      return res.status(400).json({ message: "Commercial invalide ou introuvable" });
+    }
+
+    console.log("ASSIGN — contactIds:", contactIds.length, "→ commercialId:", commercialId);
+
+    const [updatedCount] = await CommercialContact.update(
+      { commercialId },
+      { where: { id: { [Op.in]: contactIds } } }
+    );
+
+    console.log(`✅ ASSIGN CONTACTS — ${updatedCount}/${contactIds.length} contact(s) mis à jour`);
+
+    return res.json({ ok: true, updatedCount, requested: contactIds.length });
+  } catch (e) {
+    console.error("❌ ASSIGN CONTACTS ERROR:", e);
+    return res.status(500).json({ message: e.message || "Server error" });
+  }
+});
+
+// GET /commercial-contacts/:id — fiche complète d'un contact, avec
+// l'historique des statuts (statusHistory), le plus récent en premier.
+router.get("/:id", authRequired, async (req, res) => {
+  try {
+    const contact = await CommercialContact.findByPk(req.params.id, {
+      include: [
+        { model: CommercialContactProduct, as: "products" },
+        { model: CommercialContactRelance, as: "relances" },
+        { model: CommercialProject, as: "projects" },
+        {
+          model: CommercialContactStatusHistory,
+          as: "statusHistory",
+          separate: true, // nécessaire pour que `order` s'applique à ce hasMany
+          order: [["createdAt", "DESC"]],
+        },
+      ],
+    });
+
+    if (!contact) {
+      return res.status(404).json({ message: "Contact introuvable" });
+    }
+
+    return res.json(contact);
+  } catch (e) {
+    console.error("❌ GET CONTACT ERROR:", e);
+    return res.status(500).json({ message: e.message || "Server error" });
+  }
+});
+
 router.get("/:id/actions", authRequired, async (req, res) => {
   try {
     console.log("📥 GET ACTIONS");
@@ -331,7 +544,7 @@ router.get("/calendar/relances", authRequired, async (req, res) => {
   try {
     const where = {};
 
-    if (!["admin", "superadmin"].includes(req.user.role)) {
+    if (!["admin", "superadmin", "superadmin2"].includes(req.user.role)) {
       where.createdBy = req.user.sub;
     }
 
@@ -356,6 +569,8 @@ router.get("/calendar/relances", authRequired, async (req, res) => {
             "prenom",
             "nomSociete",
             "telephone",
+            "email",
+            "localisation",
             "statut",
             "nbAppels",
             "sujetDiscussion",
@@ -364,7 +579,32 @@ router.get("/calendar/relances", authRequired, async (req, res) => {
       ],
     });
 
-    return res.json(relances);
+    // Nom du projet le plus ancien par contact — même règle que
+    // resolveProjectName() (followupAutomation.service.js), en une seule
+    // requête groupée pour éviter le N+1 sur la liste calendrier.
+    const contactIds = [...new Set(relances.map((r) => r.commercialContactId).filter(Boolean))];
+    const projects = contactIds.length
+      ? await CommercialProject.findAll({
+          where: { commercialContactId: contactIds },
+          order: [["createdAt", "ASC"]],
+          attributes: ["commercialContactId", "nomProjet"],
+        })
+      : [];
+
+    const projectNameByContact = {};
+    for (const p of projects) {
+      if (!projectNameByContact[p.commercialContactId]) {
+        projectNameByContact[p.commercialContactId] = p.nomProjet;
+      }
+    }
+
+    const result = relances.map((r) => {
+      const json = r.toJSON();
+      json.projectName = projectNameByContact[r.commercialContactId] || null;
+      return json;
+    });
+
+    return res.json(result);
   } catch (e) {
     return res.status(500).json({ message: e.message || "Server error" });
   }
@@ -460,6 +700,20 @@ if (body.user_nom) {
     // =============================
     const contact = await CommercialContact.create(payload);
     console.log("✅ CONTACT CREATED:", contact.id);
+
+    // =============================
+    // HISTORIQUE STATUT INITIAL — une SEULE entrée type=CREATED (toujours
+    // présente, même si le contact n'est jamais modifié ensuite).
+    // =============================
+    await recordStatusChange({
+      contactId: contact.id,
+      field: "statut",
+      oldValue: null,
+      newValue: payload.statut,
+      actorUserId: req.user.sub,
+      type: "CREATED",
+      commentaire: "Création du contact",
+    });
 
     // =============================
     // CREATE PRODUITS
@@ -572,13 +826,21 @@ router.put("/:id", authRequired, async (req, res) => {
 
     // 🔐 SECURITY
     if (
-      !["admin", "superadmin"].includes(req.user.role) &&
+      !["admin", "superadmin", "superadmin2"].includes(req.user.role) &&
       row.createdBy !== req.user.sub
     ) {
       return res.status(403).json({ message: "Forbidden" });
     }
 
     const body = req.body || {};
+
+    // ── Commercial obligatoire (info@probardistribution.com uniquement),
+    // validé avant toute écriture pour éviter un état partiel.
+    const commercialValidationError = _validateCommercialField(req, body);
+    if (commercialValidationError) {
+      return res.status(400).json({ message: commercialValidationError });
+    }
+
     const up = {};
 
     // =============================
@@ -649,7 +911,43 @@ if (body.user_nom !== undefined) {
 }
 }
 
+    // Snapshot AVANT écriture — seule façon fiable de savoir si statut/
+    // pipelineStage changent réellement (comparaison après row.update()
+    // donnerait toujours "égal" puisque l'instance serait déjà mutée).
+    const oldStatut = row.statut;
+    const oldPipelineStage = row.pipelineStage;
+
     await row.update(up);
+
+    // =============================
+    // HISTORIQUE STATUT — une ligne par champ réellement modifié, jamais
+    // si le statut ne change pas (comparaison stricte ancien/nouveau).
+    // =============================
+    const statusChangeComment =
+      body.statusComment || body.commentaire || body.commentaireRelance || null;
+
+    if (up.statut != null) {
+      await recordStatusChange({
+        contactId: id,
+        field: "statut",
+        oldValue: oldStatut,
+        newValue: up.statut,
+        actorUserId: req.user.sub,
+        commentaire: statusChangeComment,
+        type: "STATUS_CHANGED",
+      });
+    }
+    if (up.pipelineStage != null) {
+      await recordStatusChange({
+        contactId: id,
+        field: "pipelineStage",
+        oldValue: oldPipelineStage,
+        newValue: up.pipelineStage,
+        actorUserId: req.user.sub,
+        commentaire: statusChangeComment,
+        type: "STATUS_CHANGED",
+      });
+    }
 
     // =============================
     // UPDATE PRODUCTS
@@ -696,6 +994,7 @@ if (body.user_nom !== undefined) {
     // =============================
     // UPDATE RELANCE
     // =============================
+    let automationResult = null;
     if (
       ["ok", "rappeler_plus_tard"].includes(
         body.statut != null ? String(body.statut).trim() : row.statut
@@ -707,22 +1006,37 @@ if (body.user_nom !== undefined) {
         order: [["createdAt", "DESC"]],
       });
 
+      const commercial = await _resolveCommercial(body.commercialId);
+      const commercialFields = commercial
+        ? {
+            commercialId: commercial.id,
+            commercialName: commercial.name,
+            commercialEmail: commercial.email,
+          }
+        : {};
+
+      let savedRelance;
       if (existingRelance) {
         await existingRelance.update({
           dateRelance: body.dateRelance,
           heureRelance: body.heureRelance || null,
           commentaire: body.commentaire || body.commentaireRelance || null,
+          ...commercialFields,
         });
+        savedRelance = existingRelance;
       } else {
-        await CommercialContactRelance.create({
+        savedRelance = await CommercialContactRelance.create({
           commercialContactId: id,
           dateRelance: body.dateRelance,
           heureRelance: body.heureRelance || null,
           commentaire:
             body.commentaire || body.commentaireRelance || null,
           createdBy: req.user.sub,
+          ...commercialFields,
         });
       }
+
+      automationResult = await _maybeRunFollowupAutomation(req, row, savedRelance);
     }
 
     // =============================
@@ -736,7 +1050,9 @@ if (body.user_nom !== undefined) {
       ],
     });
 
-    return res.json(full);
+    // `automation` est un champ additif — n'affecte pas le parsing existant
+    // côté Flutter, qui ignore les clés qu'il ne connaît pas.
+    return res.json({ ...full.toJSON(), automation: automationResult });
 
   } catch (e) {
     console.error("❌ UPDATE CONTACT ERROR:", e);
@@ -766,7 +1082,7 @@ router.post("/:id/relances", authRequired, async (req, res) => {
     }
 
     if (
-      !["admin", "superadmin"].includes(req.user.role) &&
+      !["admin", "superadmin", "superadmin2"].includes(req.user.role) &&
       contact.createdBy !== req.user.sub
     ) {
       return res.status(403).json({ message: "Forbidden" });
@@ -778,15 +1094,33 @@ router.post("/:id/relances", authRequired, async (req, res) => {
       return res.status(400).json({ message: "dateRelance obligatoire" });
     }
 
+    const commercialValidationError = _validateCommercialField(req, body);
+    if (commercialValidationError) {
+      return res.status(400).json({ message: commercialValidationError });
+    }
+
+    const commercial = await _resolveCommercial(body.commercialId);
+
     const relance = await CommercialContactRelance.create({
       commercialContactId: id,
       dateRelance: body.dateRelance,
       heureRelance: body.heureRelance || null,
       commentaire: body.commentaire || null,
       createdBy: req.user.sub,
+      ...(commercial
+        ? {
+            commercialId: commercial.id,
+            commercialName: commercial.name,
+            commercialEmail: commercial.email,
+          }
+        : {}),
     });
 
-    return res.status(201).json(relance);
+    const automation = await _maybeRunFollowupAutomation(req, contact, relance);
+
+    // Forme de réponse rétro-compatible : les champs de la relance restent
+    // au premier niveau (comme avant), `automation` est purement additif.
+    return res.status(201).json({ ...relance.toJSON(), automation });
   } catch (e) {
     return res.status(500).json({ message: e.message || "Server error" });
   }
@@ -811,21 +1145,40 @@ router.put("/:id/relances/:relanceId", authRequired, async (req, res) => {
     }
 
     if (
-      !["admin", "superadmin"].includes(req.user.role) &&
+      !["admin", "superadmin", "superadmin2"].includes(req.user.role) &&
       contact.createdBy !== req.user.sub
     ) {
       return res.status(403).json({ message: "Forbidden" });
     }
 
     const body = req.body || {};
+
+    const commercialValidationError = _validateCommercialField(req, body);
+    if (commercialValidationError) {
+      return res.status(400).json({ message: commercialValidationError });
+    }
+
+    const commercial = body.commercialId ? await _resolveCommercial(body.commercialId) : null;
+
     await relance.update({
       dateRelance: body.dateRelance ?? relance.dateRelance,
       heureRelance: body.heureRelance ?? relance.heureRelance,
       commentaire: body.commentaire ?? relance.commentaire,
       statutRelance: body.statutRelance ?? relance.statutRelance,
+      ...(commercial
+        ? {
+            commercialId: commercial.id,
+            commercialName: commercial.name,
+            commercialEmail: commercial.email,
+          }
+        : {}),
     });
 
-    return res.json(relance);
+    const automation = await _maybeRunFollowupAutomation(req, contact, relance);
+
+    // Forme de réponse rétro-compatible : les champs de la relance restent
+    // au premier niveau (comme avant), `automation` est purement additif.
+    return res.json({ ...relance.toJSON(), automation });
   } catch (e) {
     return res.status(500).json({ message: e.message || "Server error" });
   }
@@ -842,7 +1195,7 @@ router.delete("/:id", authRequired, async (req, res) => {
     }
 
     if (
-      !["admin", "superadmin"].includes(req.user.role) &&
+      !["admin", "superadmin", "superadmin2"].includes(req.user.role) &&
       row.createdBy !== req.user.sub
     ) {
       return res.status(403).json({ message: "Forbidden" });

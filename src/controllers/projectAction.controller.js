@@ -1,6 +1,6 @@
 const { ProjectAction, ProjectReminder, Project } = require("../models/associations");
 
-const ADMIN_ROLES = ["admin", "superadmin"];
+const ADMIN_ROLES = ["admin", "superadmin", "superadmin2"];
 
 async function assertProjectAccess(projectId, req, res) {
   if (ADMIN_ROLES.includes(req.user?.role)) return true;

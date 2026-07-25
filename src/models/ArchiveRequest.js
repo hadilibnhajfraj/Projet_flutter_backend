@@ -34,6 +34,13 @@ const ArchiveRequest = sequelize.define(
       allowNull: false,
       defaultValue: "pending",
     },
+    // ARCHIVAGE : demande d'archivage d'un projet actif.
+    // DESARCHIVAGE : demande de désarchivage (comportement historique).
+    type: {
+      type: DataTypes.ENUM("ARCHIVAGE", "DESARCHIVAGE"),
+      allowNull: false,
+      defaultValue: "DESARCHIVAGE",
+    },
     subject: {
       type: DataTypes.TEXT,
       allowNull: false,
@@ -41,6 +48,32 @@ const ArchiveRequest = sequelize.define(
     message: {
       type: DataTypes.TEXT,
       allowNull: false,
+    },
+    rejectionReason: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+    },
+    // Traçabilité explicite de l'action de validation/refus (indépendante de
+    // adminId, qui porte la sémantique "admin assigné" depuis la création).
+    approvedBy: {
+      type: DataTypes.UUID,
+      allowNull: true,
+      references: { model: "users", key: "id" },
+      onDelete: "SET NULL",
+    },
+    approvedAt: {
+      type: DataTypes.DATE,
+      allowNull: true,
+    },
+    rejectedBy: {
+      type: DataTypes.UUID,
+      allowNull: true,
+      references: { model: "users", key: "id" },
+      onDelete: "SET NULL",
+    },
+    rejectedAt: {
+      type: DataTypes.DATE,
+      allowNull: true,
     },
   },
   {
@@ -50,6 +83,7 @@ const ArchiveRequest = sequelize.define(
       { fields: ["projectId"] },
       { fields: ["userId"] },
       { fields: ["status"] },
+      { fields: ["type"] },
     ],
   }
 );

@@ -11,7 +11,7 @@ const { requireRole }  = require("../../../middleware/requireRole");
 router.get(
   "/kpi",
   authRequired,
-  requireRole("admin", "superadmin", "commercial"),
+  requireRole("admin", "superadmin", "superadmin2", "commercial"),
   ctrl.getKPI
 );
 
@@ -21,7 +21,7 @@ router.get(
 router.get(
   "/my-kpi",
   authRequired,
-  requireRole("admin", "superadmin", "commercial"),
+  requireRole("admin", "superadmin", "superadmin2", "commercial"),
   ctrl.getMyKpiEndpoint
 );
 
@@ -30,7 +30,7 @@ router.get(
 router.get(
   "/analytics",
   authRequired,
-  requireRole("admin", "superadmin", "commercial"),
+  requireRole("admin", "superadmin", "superadmin2", "commercial"),
   ctrl.getAnalytics
 );
 
@@ -38,7 +38,7 @@ router.get(
 router.get(
   "/kpi/me",
   authRequired,
-  requireRole("admin", "superadmin", "commercial"),
+  requireRole("admin", "superadmin", "superadmin2", "commercial"),
   ctrl.getKPIMe
 );
 

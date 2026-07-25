@@ -6,6 +6,7 @@ const { requireOwnerOrAdmin } = require("../policies/project.policy");
 const activityRoutes = require("../../project-activities/routes/projectActivity.routes");
 const actionRoutes = require("../../project-actions/routes/projectAction.routes");
 const { authRequired } = require("../../../middleware/auth.middleware");
+const { requireRootAdmin } = require("../../../middleware/requireRootAdmin");
 
 router.use(authRequired);
 
@@ -39,8 +40,11 @@ router.put("/:id/owner", requireOwnerOrAdmin, validateAssignOwner, ctrl.assignOw
 
 // Specific sub-resource routes must come BEFORE the bare /:id catch-all
 router.put("/:id/status", ctrl.updateStatus);
-router.put("/:id/archive", ctrl.archiveProject);
-router.put("/:id/unarchive", ctrl.unarchiveProject);
+// Archivage/désarchivage direct — réservé au root-admin (cbitunisia@cbi-tunisia.com).
+// Les autres utilisateurs doivent passer par le workflow de demande
+// (POST /archive-requests) validé/refusé depuis la page Administration > Demandes.
+router.put("/:id/archive", requireRootAdmin, ctrl.archiveProject);
+router.put("/:id/unarchive", requireRootAdmin, ctrl.unarchiveProject);
 router.get("/:id/full", ctrl.getProjectFull);
 router.get("/:id/timeline", ctrl.getTimeline);
 router.get("/:id/notes", ctrl.getNotes);

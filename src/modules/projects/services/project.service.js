@@ -6,6 +6,7 @@ const actionRepo = require("../../project-actions/repositories/projectAction.rep
 const { logActivity } = require("../../project-activities/services/projectActivity.service");
 const { toProjectCard } = require("../../kanban/services/kanban.service");
 const User = require("../../../models/User");
+const projectActionCalendarSync = require("../../../services/projectActionCalendarSync.service");
 
 const SORTABLE = ["createdAt", "nomProjet", "montantMarche", "pourcentageReussite", "updatedAt"];
 
@@ -31,6 +32,8 @@ async function listProjects(query, userId) {
     userId,
     stageId: query.stageId || null,
     projectModele: query.projectModele || null,
+    productFamily: query.productFamily || null,
+    diameterMm: query.diameterMm ? Number(query.diameterMm) : null,
     search: query.search || null,
     isArchived: query.isArchived === "true",
     ownerId,
@@ -167,6 +170,16 @@ async function assignOwner(projectId, ownerId, userId) {
     await t.commit();
 
     const updated = await projectRepo.findById(projectId);
+
+    // ── Calendrier CRM + Google Calendar (best-effort, jamais bloquant) ────
+    // Déplace les événements des actions déjà synchronisées vers le nouveau
+    // responsable (point 9) — ne doit jamais faire échouer la réassignation.
+    try {
+      await projectActionCalendarSync.onProjectOwnerChanged(updated, previousOwnerId, userId);
+    } catch (err) {
+      console.error("CALENDAR_SYNC_OWNER_CHANGE_ERROR:", err.message);
+    }
+
     return toProjectCard(updated);
   } catch (err) {
     await t.rollback();

@@ -11,7 +11,7 @@ require("../../../models/associations");
 
 // ── Roles ─────────────────────────────────────────────────
 
-const ADMIN_ROLES = ["admin", "superadmin"];
+const ADMIN_ROLES = ["admin", "superadmin", "superadmin2"];
 
 // ── Row colour by projectModele / isArchived ──────────────
 // Archived takes priority. Otherwise colour by model type.
@@ -28,6 +28,8 @@ function rowBg(p) {
 const COL_DEFS = [
   { header: "Nom Projet",        key: "nomProjet",            width: 36 },
   { header: "Type",              key: "projectModele",        width: 14 },
+  { header: "Product Family",    key: "productFamily",        width: 16 },
+  { header: "Diameter (mm)",     key: "diameterMm",           width: 14 },
   { header: "Statut",            key: "statut",               width: 18 },
   { header: "Validation",        key: "validationStatut",     width: 16 },
   { header: "Date Création",     key: "createdAt",            width: 16 },
@@ -104,6 +106,8 @@ function toRow(p) {
   return [
     p.nomProjet            || "—",
     p.projectModele        || "—",
+    p.productFamily        || "—",
+    p.diameterMm  != null ? p.diameterMm                      : "—",
     p.statut               || "—",
     p.validationStatut     || "—",
     p.createdAt   ? dayjs(p.createdAt).format("YYYY-MM-DD")   : "",
@@ -284,9 +288,11 @@ function buildWhere(f, ownerIds) {
   else if (ownerIds.length > 1) where.ownerId = { [Op.in]: ownerIds };
 
   // Exact match on ENUM/string fields — never use ILIKE on ENUM columns
-  if (f.type)       where.projectModele   = f.type;
-  if (f.status)     where.statut          = f.status;
-  if (f.validation) where.validationStatut = f.validation;
+  if (f.type)          where.projectModele  = f.type;
+  if (f.status)        where.statut         = f.status;
+  if (f.validation)    where.validationStatut = f.validation;
+  if (f.productFamily) where.productFamily  = f.productFamily;
+  if (f.diameterMm)    where.diameterMm     = Number(f.diameterMm);
 
   if (f.startDate || f.endDate) {
     where.dateDemarrage = {};
@@ -302,7 +308,7 @@ function buildWhere(f, ownerIds) {
 async function exportProjects(req, res) {
   try {
     const isAdmin = ADMIN_ROLES.includes(req.user?.role);
-    const { userId, type, status, validation, startDate, endDate } = req.query;
+    const { userId, type, status, validation, startDate, endDate, productFamily, diameterMm } = req.query;
 
     // 1. Determine users to export
     let users = [];
@@ -334,7 +340,7 @@ async function exportProjects(req, res) {
     // 2. Fetch all matching projects in one query, ordered by ownerId then createdAt
     const ownerIds = users.map((u) => u.id);
     const allProjects = await Project.findAll({
-      where: buildWhere({ type, status, validation, startDate, endDate }, ownerIds),
+      where: buildWhere({ type, status, validation, startDate, endDate, productFamily, diameterMm }, ownerIds),
       order: [["ownerId", "ASC"], ["createdAt", "DESC"]],
     });
 

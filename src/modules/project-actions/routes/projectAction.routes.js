@@ -16,5 +16,6 @@ router.get("/:id", ctrl.getAction);
 router.post("/",   actionUpload.single("file"), handleUploadError, validateCreate,  ctrl.createAction);
 router.put("/:id", actionUpload.single("file"), handleUploadError,                  ctrl.updateAction);
 router.delete("/:id", ctrl.deleteAction);
+router.post("/:id/retry-google-sync", ctrl.retryGoogleSync);
 
 module.exports = router;

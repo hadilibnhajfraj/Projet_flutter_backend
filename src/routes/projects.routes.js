@@ -20,8 +20,9 @@ const {
   resolveArchitectForProject,
 } = require("../services/person.service");
 const LocationService = require("../services/location.service");
+const { PRODUCT_FAMILIES, DIAMETERS_BY_FAMILY } = require("../constants/productFamily");
 const router = express.Router();
-const ADMIN_ROLES = ["admin", "superadmin"];
+const ADMIN_ROLES = ["admin", "superadmin", "superadmin2"];
 const uploads = require("../middleware/uploads");
 
 // ---------------- Helpers ----------------
@@ -113,6 +114,15 @@ function normalizePayload(body = {}) {
 
   if (b.pourcentageReussite !== undefined) b.pourcentageReussite = toNumberOrNull(b.pourcentageReussite);
   if (b.surfaceProspectee !== undefined) b.surfaceProspectee = toNumberOrNull(b.surfaceProspectee);
+
+  // Gamme de produit / diamètre (mode "project" uniquement) — voir
+  // constants/productFamily.js. productFamily toujours normalisée en
+  // majuscules pour matcher l'ENUM ("Probar" → "PROBAR").
+  if (b.productFamily !== undefined) {
+    const pf = reqStr(b.productFamily).toUpperCase();
+    b.productFamily = pf === "" ? null : pf;
+  }
+  if (b.diameterMm !== undefined) b.diameterMm = toNumberOrNull(b.diameterMm);
 
   return b;
 }
@@ -306,11 +316,32 @@ function validatePayload(body, isUpdate = false) {
     }
   }
 
+  // =========================
+  // 🔧 PRODUCT FAMILY / DIAMETER (mode "project" uniquement)
+  // =========================
+  if (isChantier) {
+    if (body.productFamily !== undefined && body.productFamily !== null) {
+      if (!PRODUCT_FAMILIES.includes(body.productFamily)) {
+        errors.push(`productFamily doit être l'une des valeurs suivantes : ${PRODUCT_FAMILIES.join(", ")}`);
+      } else if (
+        body.diameterMm !== undefined &&
+        body.diameterMm !== null &&
+        !DIAMETERS_BY_FAMILY[body.productFamily].includes(Number(body.diameterMm))
+      ) {
+        errors.push(
+          `diameterMm invalide pour ${body.productFamily} (valeurs autorisées : ${DIAMETERS_BY_FAMILY[body.productFamily].join(", ")})`
+        );
+      }
+    } else if (body.diameterMm !== undefined && body.diameterMm !== null) {
+      errors.push("productFamily est requis lorsque diameterMm est renseigné");
+    }
+  }
+
   return errors;
 }
 
 function isGlobalKpiUser(user) {
-  return ["admin", "superadmin"].includes(user?.role);
+  return ["admin", "superadmin", "superadmin2"].includes(user?.role);
 }
 
 async function getAccessibleProjectIds(user) {
@@ -338,7 +369,7 @@ function buildProjectWhere(accessibleIds) {
 }
 // ✅ permission helper
 async function getPermission(user, projectId) {
-  if (["admin", "superadmin"].includes(user.role)) return "owner";
+  if (["admin", "superadmin", "superadmin2"].includes(user.role)) return "owner";
 
   const link = await UserProject.findOne({
     where: { userId: user.sub, projectId },
@@ -349,7 +380,7 @@ async function getPermission(user, projectId) {
 // ✅ middleware admin (si tu as déjà isAdminRole utilise-le)
 function adminOnly(req, res, next) {
   const role = (req.user?.role || "").toLowerCase();
-  if (role === "admin" || role === "superadmin") return next();
+  if (role === "admin" || role === "superadmin" || role === "superadmin2") return next();
   return res.status(403).json({ message: "Forbidden" });
 }
 // routes/projects.routes.js (or equivalent file where routes are defined)
@@ -980,7 +1011,7 @@ router.get("/kpi/latest-projects", authRequired, async (req, res) => {
 router.get("/dashboard/kpi", authRequired, async (req, res) => {
   try {
     const role         = (req.user?.role || "").toLowerCase();
-    const isAdmin      = role === "admin" || role === "superadmin";
+    const isAdmin      = role === "admin" || role === "superadmin" || role === "superadmin2";
     const selectedUser = req.query.userId;
     const userId       = req.user.sub;
 
@@ -1234,7 +1265,7 @@ router.get("/kpis/overview", authRequired, async (req, res) => {
     console.log(req.originalUrl);
 
     const { role, sub } = req.user;
-    const isAdmin    = ["admin", "superadmin"].includes(role);
+    const isAdmin    = ["admin", "superadmin", "superadmin2"].includes(role);
     const ownerWhere = isAdmin ? {} : { ownerId: sub };
     const ownerClause = isAdmin ? "" : `AND "ownerId" = :userId`;
 
@@ -1774,6 +1805,10 @@ user_nom_custom: body.user_nom_custom || null,
         ? body.pourcentageReussite
         : null,
 
+      // Gamme de produit / diamètre — mode "project" uniquement.
+      productFamily: !isRevendeur && !isApplicateur ? body.productFamily ?? null : null,
+      diameterMm: !isRevendeur && !isApplicateur ? body.diameterMm ?? null : null,
+
       validationStatut: body.validationStatut ?? "Non validé",
 
       pipelineStage: body.pipelineStage ?? "Prospect",
@@ -1883,18 +1918,35 @@ router.get("/", authRequired, async (req, res) => {
 
     if (typeof q === "string" && q.trim()) {
       const s = q.trim();
-      whereClause[Op.or] = [
+      const searchConditions = [
         { nomProjet: { [Op.iLike]: `%${s}%` } },
         { entreprise: { [Op.iLike]: `%${s}%` } },
         { promoteur: { [Op.iLike]: `%${s}%` } },
         { adresse: { [Op.iLike]: `%${s}%` } },
         { typeProjet: { [Op.iLike]: `%${s}%` } },
+        { productFamily: { [Op.iLike]: `%${s}%` } },
       ];
+      const asNumber = Number(s);
+      if (!isNaN(asNumber)) {
+        searchConditions.push({ diameterMm: asNumber });
+      }
+      whereClause[Op.or] = searchConditions;
     }
 
     // projectModele filter
     if (req.query.projectModele?.trim()) {
       whereClause.projectModele = req.query.projectModele.trim();
+    }
+
+    // productFamily / diameterMm filters
+    if (req.query.productFamily?.trim()) {
+      whereClause.productFamily = req.query.productFamily.trim();
+    }
+    if (req.query.diameterMm !== undefined && req.query.diameterMm !== null && req.query.diameterMm !== "") {
+      const diameterMm = Number(req.query.diameterMm);
+      if (!isNaN(diameterMm)) {
+        whereClause.diameterMm = diameterMm;
+      }
     }
 
     // Archive filter — if not supplied return ALL projects (archived + non-archived)
@@ -1976,7 +2028,7 @@ router.get("/", authRequired, async (req, res) => {
       const json = p.toJSON();
 
       const meLink = (json.UserProjects || []).find((up) => up.userId === req.user.sub);
-      const perm = ["admin", "superadmin"].includes(req.user.role) ? "owner" : meLink?.permission || "viewer";
+      const perm = ["admin", "superadmin", "superadmin2"].includes(req.user.role) ? "owner" : meLink?.permission || "viewer";
       const ownerLink = (json.UserProjects || []).find((up) => up.permission === "owner");
 
       const ownerName = ownerLink?.User
@@ -2230,9 +2282,9 @@ const currentLimit = Math.max(parseInt(limit, 1000) || 1000, 1);
     const includeBase = [
       {
         model: UserProject,
-        required: role !== "admin" && role !== "superadmin",
+        required: role !== "admin" && role !== "superadmin" && role !== "superadmin2",
         where:
-          role === "admin" || role === "superadmin"
+          role === "admin" || role === "superadmin" || role === "superadmin2"
             ? undefined
             : { userId: req.user.sub },
         attributes: ["userId", "permission"],
@@ -2246,7 +2298,7 @@ const currentLimit = Math.max(parseInt(limit, 1000) || 1000, 1);
     ];
 
     /// 🔥 ADMIN FILTER BY USER
-    if ((role === "admin" || role === "superadmin") && createdBy) {
+    if ((role === "admin" || role === "superadmin" || role === "superadmin2") && createdBy) {
       includeBase[0].required = true;
       includeBase[0].where = { userId: createdBy };
     }
@@ -2370,9 +2422,9 @@ router.get("/myprojects", authRequired, async (req, res) => {
 
       {
         model: UserProject,
-        required: role !== "admin" && role !== "superadmin",
+        required: role !== "admin" && role !== "superadmin" && role !== "superadmin2",
         where:
-          role === "admin" || role === "superadmin"
+          role === "admin" || role === "superadmin" || role === "superadmin2"
             ? undefined
             : { userId: req.user.sub },
         attributes: ["userId", "permission"],
@@ -2396,7 +2448,7 @@ router.get("/myprojects", authRequired, async (req, res) => {
     ];
 
     /// 🔥 ADMIN FILTER
-    if ((role === "admin" || role === "superadmin") && createdBy) {
+    if ((role === "admin" || role === "superadmin" || role === "superadmin2") && createdBy) {
       includeBase[0].required = true;
       includeBase[0].where = { userId: createdBy };
     }
@@ -2820,7 +2872,7 @@ router.get("/:id", authRequired, async (req, res) => {
     const userRole = (req.user?.role || "").toLowerCase();
 
     // 🔥 BLOQUER SI ARCHIVÉ
-    if (item.isArchived && !["admin", "superadmin"].includes(userRole)) {
+    if (item.isArchived && !["admin", "superadmin", "superadmin2"].includes(userRole)) {
       return res.status(403).json({
         message: "Projet archivé non accessible",
       });
@@ -2938,7 +2990,7 @@ router.put("/:id", authRequired, async (req, res) => {
     const permission = await getPermission(req.user, req.params.id);
 
     if (
-      !["admin", "superadmin"].includes(userRole) &&
+      !["admin", "superadmin", "superadmin2"].includes(userRole) &&
       !["editor", "owner"].includes(permission)
     ) {
       return res.status(403).json({
@@ -3088,6 +3140,8 @@ router.put("/:id", authRequired, async (req, res) => {
       "emailDallagiste",
       "serviceTechnique",
       "montantMarche",
+      "productFamily",
+      "diameterMm",
     ];
 
     const up = {};
@@ -3160,6 +3214,12 @@ router.put("/:id", authRequired, async (req, res) => {
       }
     }
 
+    // clean() convertit tout en string — diameterMm doit rester un nombre
+    // (ou null) pour la colonne INTEGER.
+    if (up.diameterMm !== undefined) {
+      up.diameterMm = up.diameterMm === null ? null : Number(up.diameterMm);
+    }
+
     // =========================
     // 🔥 RESET CHAMPS SI PAS CHANTIER
     // =========================
@@ -3177,6 +3237,8 @@ router.put("/:id", authRequired, async (req, res) => {
       up.emailArchitecte = null;
       up.companyId = null;
       up.entreprise = null;
+      up.productFamily = null;
+      up.diameterMm = null;
     }
 
     // =========================
@@ -3437,7 +3499,7 @@ router.post("/:id/share", authRequired, async (req, res) => {
     const perm = ["viewer", "editor"].includes(permission) ? permission : "viewer";
 
     const currentPerm = await getPermission(req.user, projectId);
-    if (!["admin", "superadmin"].includes(req.user.role) && currentPerm !== "owner") {
+    if (!["admin", "superadmin", "superadmin2"].includes(req.user.role) && currentPerm !== "owner") {
       return res.status(403).json({ message: "Owner required" });
     }
 
@@ -3467,7 +3529,7 @@ router.put("/:id/comments/:commentId", authRequired, async (req, res) => {
     const c = await ProjectComment.findOne({ where: { id: commentId, projectId } });
     if (!c) return res.status(404).json({ message: "Commentaire introuvable" });
 
-    const isAdmin = ["admin", "superadmin"].includes(req.user.role);
+    const isAdmin = ["admin", "superadmin", "superadmin2"].includes(req.user.role);
     const isOwner = c.authorId === req.user.sub;
     if (!isAdmin && !isOwner) return res.status(403).json({ message: "Accès interdit" });
 
@@ -3489,7 +3551,7 @@ router.delete("/:id/comments/:commentId", authRequired, async (req, res) => {
     const c = await ProjectComment.findOne({ where: { id: commentId, projectId } });
     if (!c) return res.status(404).json({ message: "Commentaire introuvable" });
 
-    const isAdmin = ["admin", "superadmin"].includes(req.user.role);
+    const isAdmin = ["admin", "superadmin", "superadmin2"].includes(req.user.role);
     const isOwner = c.authorId === req.user.sub;
     if (!isAdmin && !isOwner) return res.status(403).json({ message: "Accès interdit" });
 
@@ -3564,7 +3626,7 @@ router.post("/:id/devis", authRequired, upload.array("files", 10), async (req, r
     if (!files.length) return res.status(400).json({ message: "Fichier est obligatoire" });
 
     const permission = await getPermission(req.user, projectId);
-    if (!["admin", "superadmin"].includes(req.user.role) && !["editor", "owner"].includes(permission)) {
+    if (!["admin", "superadmin", "superadmin2"].includes(req.user.role) && !["editor", "owner"].includes(permission)) {
       return res.status(403).json({ message: "Need editor permission" });
     }
 
@@ -3604,7 +3666,7 @@ router.put(
       if (!isUUID(devisId)) return res.status(400).json({ message: "Invalid devis id (UUID required)" });
 
       const permission = await getPermission(req.user, projectId);
-      if (!["admin", "superadmin"].includes(req.user.role) && !["editor", "owner"].includes(permission)) {
+      if (!["admin", "superadmin", "superadmin2"].includes(req.user.role) && !["editor", "owner"].includes(permission)) {
         return res.status(403).json({ message: "Need editor permission" });
       }
 
@@ -3646,7 +3708,7 @@ router.put(
       if (!isUUID(devisId)) return res.status(400).json({ message: "Invalid devis id (UUID required)" });
 
       const permission = await getPermission(req.user, projectId);
-      if (!["admin", "superadmin"].includes(req.user.role) && !["editor", "owner"].includes(permission)) {
+      if (!["admin", "superadmin", "superadmin2"].includes(req.user.role) && !["editor", "owner"].includes(permission)) {
         return res.status(403).json({ message: "Need editor permission" });
       }
 
@@ -3684,7 +3746,7 @@ router.delete("/:id/devis/:devisId", authRequired, async (req, res) => {
     if (!isUUID(devisId)) return res.status(400).json({ message: "Invalid devis id (UUID required)" });
 
     const permission = await getPermission(req.user, projectId);
-    if (!["admin", "superadmin"].includes(req.user.role) && !["editor", "owner"].includes(permission)) {
+    if (!["admin", "superadmin", "superadmin2"].includes(req.user.role) && !["editor", "owner"].includes(permission)) {
       return res.status(403).json({ message: "Need editor permission" });
     }
 
@@ -3775,7 +3837,7 @@ router.post("/:id/bondecommande", authRequired, bdcUpload.array("files", 10), as
     if (!files.length) return res.status(400).json({ message: "Fichier est obligatoire" });
 
     const permission = await getPermission(req.user, projectId);
-    if (!["admin", "superadmin"].includes(req.user.role) && !["editor", "owner"].includes(permission)) {
+    if (!["admin", "superadmin", "superadmin2"].includes(req.user.role) && !["editor", "owner"].includes(permission)) {
       return res.status(403).json({ message: "Need editor permission" });
     }
 
@@ -3809,7 +3871,7 @@ router.put("/:id/bondecommande/:bdcId", authRequired, bdcUpload.single("file"), 
     if (!isUUID(bdcId)) return res.status(400).json({ message: "Invalid bdc id (UUID required)" });
 
     const permission = await getPermission(req.user, projectId);
-    if (!["admin", "superadmin"].includes(req.user.role) && !["editor", "owner"].includes(permission)) {
+    if (!["admin", "superadmin", "superadmin2"].includes(req.user.role) && !["editor", "owner"].includes(permission)) {
       return res.status(403).json({ message: "Need editor permission" });
     }
 
@@ -3845,7 +3907,7 @@ router.delete("/:id/bondecommande/:bdcId", authRequired, async (req, res) => {
     if (!isUUID(bdcId)) return res.status(400).json({ message: "Invalid bdc id (UUID required)" });
 
     const permission = await getPermission(req.user, projectId);
-    if (!["admin", "superadmin"].includes(req.user.role) && !["editor", "owner"].includes(permission)) {
+    if (!["admin", "superadmin", "superadmin2"].includes(req.user.role) && !["editor", "owner"].includes(permission)) {
       return res.status(403).json({ message: "Need editor permission" });
     }
 

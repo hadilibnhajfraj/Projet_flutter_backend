@@ -54,6 +54,21 @@ const Notification = sequelize.define(
       allowNull: true,
     },
 
+    maintenanceRequestId: {
+      type: DataTypes.UUID,
+      allowNull: true,
+    },
+
+    hrRequestId: {
+      type: DataTypes.UUID,
+      allowNull: true,
+    },
+
+    actionId: {
+      type: DataTypes.UUID,
+      allowNull: true,
+    },
+
     // =========================
     // 🔥 STATUS
     // =========================
@@ -72,6 +87,9 @@ const Notification = sequelize.define(
       { fields: ["projectId"] },
       { fields: ["commercialContactId"] },
       { fields: ["relanceId"] },
+      { fields: ["maintenanceRequestId"] },
+      { fields: ["hrRequestId"] },
+      { fields: ["actionId"] },
     ],
   }
 );

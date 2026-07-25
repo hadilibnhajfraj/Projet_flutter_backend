@@ -7,8 +7,7 @@ const UserProfile = require("../../../models/UserProfile");
 require("../../../models/associations");
 
 const svc = require("../services/archiveRequest.service");
-
-const ADMIN_ROLES = ["admin", "superadmin"];
+const { ROOT_ADMIN_EMAIL } = require("../../../config/rootAdmin");
 
 function handle(res, err) {
   const status = err.status || 500;
@@ -55,9 +54,15 @@ function normalizeRequest(r) {
     subject:   j.subject,
     message:   j.message,
     status:    j.status,
+    type:      j.type || "DESARCHIVAGE",
+    rejectionReason: j.rejectionReason || null,
     projectId: j.projectId,
     userId:    j.userId,
     adminId:   j.adminId,
+    approvedBy: j.approvedBy || null,
+    approvedAt: j.approvedAt || null,
+    rejectedBy: j.rejectedBy || null,
+    rejectedAt: j.rejectedAt || null,
     createdAt: j.createdAt,
     updatedAt: j.updatedAt,
 
@@ -66,6 +71,7 @@ function normalizeRequest(r) {
       nomProjet:   p.nomProjet,
       projectName: p.nomProjet || p.comptoir || "Projet inconnu",
       name:        p.nomProjet || p.comptoir || "Projet inconnu",
+      societe:     p.comptoir || null,
       isArchived:  p.isArchived,
       archiveReason: p.archiveReason,
     } : null,
@@ -81,11 +87,6 @@ function normalizeRequest(r) {
     },
   };
 
-  console.log("REQUEST FOUND", j.id);
-  console.log("PROJECT", normalized.archiveProject);
-  console.log("REQUESTER =", j.requester);      // raw value from DB join
-  console.log("REQUESTER NORMALIZED =", normalized.requester);
-
   return normalized;
 }
 
@@ -93,14 +94,12 @@ function normalizeRequest(r) {
 
 async function createRequest(req, res) {
   try {
-    const { projectId, projectName, subject, message, reason } = req.body;
+    const { projectId, projectName, subject, message, reason, type } = req.body;
+    const requestType = type === "ARCHIVAGE" ? "ARCHIVAGE" : "DESARCHIVAGE";
+    const label = requestType === "ARCHIVAGE" ? "archivage" : "désarchivage";
 
-    const finalSubject = subject || `Demande de désarchivage - ${projectName || "Projet"}`;
+    const finalSubject = subject || `Demande de ${label} - ${projectName || "Projet"}`;
     const finalMessage = message || reason;
-
-    console.log("ARCHIVE REQUEST BODY =", req.body);
-    console.log("SUBJECT =", finalSubject);
-    console.log("MESSAGE =", finalMessage);
 
     if (!projectId || !finalSubject || !finalMessage) {
       return res.status(400).json({ success: false, message: "projectId, subject et message sont requis" });
@@ -110,6 +109,7 @@ async function createRequest(req, res) {
       projectId,
       subject: finalSubject,
       message: finalMessage,
+      type: requestType,
     });
     res.status(201).json({ success: true, data: request });
   } catch (err) {
@@ -120,24 +120,15 @@ async function createRequest(req, res) {
   }
 }
 
-// ── GET /archive-requests  (admin: toutes les demandes assignées) ──
+// ── GET /archive-requests  (root-admin: toutes les demandes assignées) ──
 
 async function getAllRequests(req, res) {
   try {
-    console.log("ADMIN CONNECTED =", req.user.sub);
-    console.log("ROLE =", req.user.role);
-
-    if (!ADMIN_ROLES.includes(req.user?.role)) {
-      return res.status(403).json({ success: false, message: "Accès réservé aux administrateurs" });
-    }
-
     const requests = await ArchiveRequest.findAll({
       where: { adminId: req.user.sub },
       include: [REQUESTER_INCLUDE, PROJECT_INCLUDE],
       order: [["createdAt", "DESC"]],
     });
-
-    console.log("ARCHIVE REQUESTS =", requests.length);
 
     return res.json({ success: true, count: requests.length, data: requests.map(normalizeRequest) });
   } catch (err) {
@@ -146,22 +137,17 @@ async function getAllRequests(req, res) {
 }
 
 // ── GET /archive-requests/my ──────────────────────────────
-// Admin/superadmin → requests assigned to them (adminId)
-// Regular user     → requests they submitted (userId)
+// Root-admin  → requests assigned to them (adminId)
+// Regular user → requests they submitted (userId)
 
 async function getMyRequests(req, res) {
   try {
-    console.log("USER =", req.user);
-    console.log("USER ID =", req.user.id);
-    console.log("USER SUB =", req.user.sub);
-    console.log("ROLE =", req.user.role);
-
     const currentUserId = req.user.id || req.user.sub;
-    const isAdmin = ADMIN_ROLES.includes(req.user?.role);
+    const isRootAdmin = (req.user?.email || "").toLowerCase().trim() === ROOT_ADMIN_EMAIL;
 
     let requests;
 
-    if (isAdmin) {
+    if (isRootAdmin) {
       requests = await ArchiveRequest.findAll({
         where: { adminId: currentUserId },
         include: [REQUESTER_INCLUDE, PROJECT_INCLUDE],
@@ -175,8 +161,6 @@ async function getMyRequests(req, res) {
       });
     }
 
-    console.log("REQUESTS FOUND =", requests.length);
-
     return res.status(200).json(requests.map(normalizeRequest));
   } catch (err) {
     handle(res, err);
@@ -187,17 +171,7 @@ async function getMyRequests(req, res) {
 
 async function getAdminRequests(req, res) {
   try {
-    console.log("ADMIN USER =", req.user.sub);
-    console.log("ADMIN ROLE =", req.user?.role);
-
-    if (!ADMIN_ROLES.includes(req.user?.role)) {
-      return res.status(403).json({ success: false, message: "Accès réservé aux administrateurs" });
-    }
-
     const requests = await svc.getAdminRequests(req.user.sub, req.query.status || null);
-
-    console.log("REQUESTS FOUND =", requests.length);
-
     res.json({ success: true, count: requests.length, data: requests.map(normalizeRequest) });
   } catch (err) {
     handle(res, err);
@@ -208,21 +182,39 @@ async function getAdminRequests(req, res) {
 
 async function getPendingRequests(req, res) {
   try {
-    console.log("PENDING REQUESTS — ADMIN =", req.user.sub, "ROLE =", req.user?.role);
-
-    if (!ADMIN_ROLES.includes(req.user?.role)) {
-      return res.status(403).json({ success: false, message: "Accès réservé aux administrateurs" });
-    }
-
     const requests = await ArchiveRequest.findAll({
       where: { adminId: req.user.sub, status: "pending" },
       include: [REQUESTER_INCLUDE, PROJECT_INCLUDE],
       order: [["createdAt", "DESC"]],
     });
 
-    console.log("PENDING REQUESTS FOUND =", requests.length);
-
     res.json({ success: true, count: requests.length, data: requests.map(normalizeRequest) });
+  } catch (err) {
+    handle(res, err);
+  }
+}
+
+// ── GET /archive-requests/stats ──────────────────────────
+
+async function getStats(req, res) {
+  try {
+    const stats = await svc.getStats();
+    res.json({ success: true, data: stats });
+  } catch (err) {
+    handle(res, err);
+  }
+}
+
+// ── GET /archive-requests/pending-count ──────────────────
+// Utilisé par le badge sidebar — accessible à tout utilisateur authentifié,
+// mais ne renvoie un compte réel que pour le root-admin (sinon 0), pour ne
+// jamais révéler l'existence de demandes à un utilisateur non autorisé.
+
+async function getPendingCount(req, res) {
+  try {
+    const isRootAdmin = (req.user?.email || "").toLowerCase().trim() === ROOT_ADMIN_EMAIL;
+    const count = isRootAdmin ? await svc.getPendingCount() : 0;
+    res.json({ success: true, count });
   } catch (err) {
     handle(res, err);
   }
@@ -232,7 +224,7 @@ async function getPendingRequests(req, res) {
 
 async function getMessages(req, res) {
   try {
-    const data = await svc.getMessages(req.params.id, req.user.sub, req.user.role);
+    const data = await svc.getMessages(req.params.id, req.user.sub, req.user.email);
     res.json({ success: true, data });
   } catch (err) {
     handle(res, err);
@@ -258,18 +250,7 @@ async function addMessage(req, res) {
 
 async function approveRequest(req, res) {
   try {
-    console.log("APPROVE REQUEST");
-    console.log(req.params.id);
-    console.log("ADMIN =", req.user.sub, "ROLE =", req.user?.role);
-
-    if (!ADMIN_ROLES.includes(req.user?.role)) {
-      return res.status(403).json({ success: false, message: "Accès réservé aux administrateurs" });
-    }
-
     await svc.approveRequest(req.user.sub, req.params.id);
-
-    console.log("APPROVE OK — project unarchived");
-
     res.json({ success: true, status: "approved" });
   } catch (err) {
     handle(res, err);
@@ -280,19 +261,19 @@ async function approveRequest(req, res) {
 
 async function rejectRequest(req, res) {
   try {
-    console.log("REJECT REQUEST");
-    console.log(req.params.id);
-    console.log("ADMIN =", req.user.sub, "ROLE =", req.user?.role);
-
-    if (!ADMIN_ROLES.includes(req.user?.role)) {
-      return res.status(403).json({ success: false, message: "Accès réservé aux administrateurs" });
-    }
-
     await svc.rejectRequest(req.user.sub, req.params.id, req.body.reason || null);
-
-    console.log("REJECT OK");
-
     res.json({ success: true, status: "rejected" });
+  } catch (err) {
+    handle(res, err);
+  }
+}
+
+// ── DELETE /archive-requests/:id ─────────────────────────
+
+async function deleteRequest(req, res) {
+  try {
+    await svc.deleteRequest(req.params.id);
+    res.json({ success: true });
   } catch (err) {
     handle(res, err);
   }
@@ -304,8 +285,11 @@ module.exports = {
   getMyRequests,
   getAdminRequests,
   getPendingRequests,
+  getStats,
+  getPendingCount,
   getMessages,
   addMessage,
   approveRequest,
   rejectRequest,
+  deleteRequest,
 };

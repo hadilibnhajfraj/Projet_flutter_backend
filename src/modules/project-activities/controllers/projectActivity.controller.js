@@ -1,7 +1,7 @@
 const svc = require("../services/projectActivity.service");
 const Project = require("../../../models/Project");
 
-const ADMIN_ROLES = ["admin", "superadmin"];
+const ADMIN_ROLES = ["admin", "superadmin", "superadmin2"];
 
 function handle(res, err) {
   res.status(err.status || 500).json({ message: err.message || "Internal server error" });

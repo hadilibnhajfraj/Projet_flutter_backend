@@ -9,6 +9,13 @@ const sendEmail = require("../utils/sendEmail");
 // Mirrors the flag in projectCron.js — both must be enabled independently.
 const AUTO_ARCHIVE_ENABLED = process.env.AUTO_ARCHIVE_ENABLED === "true";
 
+// ─── Kill switch for all automatic email cron jobs ────────────────────────────
+// Default: DISABLED. Set AUTO_EMAIL_JOBS_ENABLED=true in .env to re-enable.
+const AUTO_EMAIL_JOBS_ENABLED = process.env.AUTO_EMAIL_JOBS_ENABLED === "true";
+
+if (!AUTO_EMAIL_JOBS_ENABLED) {
+  console.log("[checkProjects] AUTO_EMAIL_JOBS_ENABLED=false — cron NOT scheduled.");
+} else {
 // Runs every hour: check for projects whose engineer deadline has passed.
 cron.schedule("0 * * * *", async () => {
   console.log("⏳ [checkProjects] Vérification des projets...");
@@ -56,3 +63,4 @@ cron.schedule("0 * * * *", async () => {
     }
   }
 });
+}

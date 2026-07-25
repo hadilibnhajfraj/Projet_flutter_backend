@@ -9,7 +9,7 @@ const ProjectAction   = require("../../../models/ProjectAction");
 const User            = require("../../../models/User");
 const Notification    = require("../../../models/Notification");
 
-const ADMIN_ROLES = ["admin", "superadmin"];
+const ADMIN_ROLES = ["admin", "superadmin", "superadmin2"];
 
 // ─── Legacy KPI (GET /dashboard/kpis) ────────────────────────────────────────
 
@@ -458,6 +458,85 @@ async function getKPIByRole(userId, role) {
   return ADMIN_ROLES.includes(role) ? getAdminKPIs() : getUserKPIs(userId);
 }
 
+// ─── User Dashboard (GET /dashboard/user) — interactive BI cards ─────────────
+// Définitions alignées sur getUserKPIs() ci-dessus pour rester cohérent avec
+// le reste de l'app :
+//   - pendingValidation = validationStatut = 'Non validé' (même requête que
+//     nonValidatedRow dans getUserKPIs)
+//   - successRate       = validated / total * 100 (même formule que
+//     getUserKPIs — PAS basé sur statut='Gagné')
+//   - followupProjects  = statut NOT IN ('Gagné','Perdu') (même requête que
+//     myPending dans getUserKPIs — "projets nécessitant une action")
+// familyStats/diameterStats sont nouveaux, groupés côté SQL et non côté JS
+// pour rester correct même avec beaucoup de projets.
+async function getUserDashboard(userId) {
+  const [
+    [totalRow],
+    [nonValidatedRow],
+    [validatedRow],
+    [followupRow],
+    [surfaceRow],
+    familyRows,
+    diameterRows,
+  ] = await Promise.all([
+    sequelize.query(
+      `SELECT COUNT(*)::int AS count FROM projects
+       WHERE "ownerId" = :userId AND "isArchived" = false`,
+      { replacements: { userId }, type: "SELECT" }
+    ),
+    sequelize.query(
+      `SELECT COUNT(*)::int AS count FROM projects
+       WHERE "ownerId" = :userId AND "isArchived" = false AND "validationStatut" = 'Non validé'`,
+      { replacements: { userId }, type: "SELECT" }
+    ),
+    sequelize.query(
+      `SELECT COUNT(*)::int AS count FROM projects
+       WHERE "ownerId" = :userId AND "isArchived" = false AND "validationStatut" = 'Validé'`,
+      { replacements: { userId }, type: "SELECT" }
+    ),
+    sequelize.query(
+      `SELECT COUNT(*)::int AS count FROM projects
+       WHERE "ownerId" = :userId AND "isArchived" = false
+         AND statut NOT IN ('Gagné', 'Perdu')`,
+      { replacements: { userId }, type: "SELECT" }
+    ),
+    sequelize.query(
+      `SELECT COALESCE(SUM("surfaceProspectee"), 0)::float AS total FROM projects
+       WHERE "ownerId" = :userId AND "isArchived" = false`,
+      { replacements: { userId }, type: "SELECT" }
+    ),
+    sequelize.query(
+      `SELECT "productFamily" AS family, COUNT(*)::int AS count FROM projects
+       WHERE "ownerId" = :userId AND "isArchived" = false AND "productFamily" IS NOT NULL
+       GROUP BY "productFamily"
+       ORDER BY "productFamily" ASC`,
+      { replacements: { userId }, type: "SELECT" }
+    ),
+    sequelize.query(
+      `SELECT "diameterMm" AS diameter, COUNT(*)::int AS count FROM projects
+       WHERE "ownerId" = :userId AND "isArchived" = false AND "diameterMm" IS NOT NULL
+       GROUP BY "diameterMm"
+       ORDER BY "diameterMm" ASC`,
+      { replacements: { userId }, type: "SELECT" }
+    ),
+  ]);
+
+  const totalProjects = Number(totalRow?.count || 0);
+  const validated      = Number(validatedRow?.count || 0);
+
+  return {
+    totalProjects,
+    pendingValidation: Number(nonValidatedRow?.count || 0),
+    successRate: totalProjects > 0 ? Math.round((validated / totalProjects) * 10000) / 100 : 0,
+    followupProjects: Number(followupRow?.count || 0),
+    totalSurface: parseFloat(surfaceRow?.total || 0),
+    familyStats: familyRows.map((r) => ({ family: r.family, count: Number(r.count) })),
+    diameterStats: diameterRows
+      .map((r) => ({ diameter: Number(r.diameter), count: Number(r.count) }))
+      .sort((a, b) => a.diameter - b.diameter),
+  };
+}
+
 // ─── Professional Dashboard (GET /dashboard/professional) ────────────────────
 
 async function getProfessionalKPIs(userId, role) {
@@ -689,4 +768,4 @@ async function getProfessionalKPIs(userId, role) {
   return response;
 }
 
-module.exports = { getKPIs, getKPIByRole, getProfessionalKPIs };
+module.exports = { getKPIs, getKPIByRole, getProfessionalKPIs, getUserDashboard };

@@ -3,7 +3,7 @@
 const { sequelize } = require("../../../db");
 
 const LOG        = "[CommercialContactKPI]";
-const ADMIN_ROLES = ["admin", "superadmin"];
+const ADMIN_ROLES = ["admin", "superadmin", "superadmin2"];
 
 // ─── SQL helpers ──────────────────────────────────────────────────────────────
 // Generates WHERE / AND snippets only when userId is provided.

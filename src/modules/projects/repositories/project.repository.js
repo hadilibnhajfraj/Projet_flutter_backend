@@ -114,6 +114,8 @@ const LIST_ATTRIBUTES = [
   "statut",
   "priority",
   "projectModele",
+  "productFamily",
+  "diameterMm",
   "pipelineStageId",
   "ownerId",
   "isArchived",
@@ -158,6 +160,8 @@ function buildBaseWhere(filters) {
 
   if (filters.stageId) where.pipelineStageId = filters.stageId;
   if (filters.projectModele) where.projectModele = filters.projectModele;
+  if (filters.productFamily) where.productFamily = filters.productFamily;
+  if (filters.diameterMm) where.diameterMm = filters.diameterMm;
 
   if (filters.search) {
     where[Op.or] = [

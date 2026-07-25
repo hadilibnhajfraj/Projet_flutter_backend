@@ -6,6 +6,7 @@ const actionTypeRepo = require("../repositories/projectActionType.repository");
 const Project = require("../../../models/Project");
 const ProjectReminder = require("../../../models/ProjectReminder");
 const { logActivity } = require("../../project-activities/services/projectActivity.service");
+const projectActionCalendarSync = require("../../../services/projectActionCalendarSync.service");
 
 async function getProjectActions(projectId, query = {}) {
   const limit = Math.min(parseInt(query.limit) || 50, 200);
@@ -66,6 +67,8 @@ async function createAction(projectId, body, userId) {
         commentaire:        body?.commentaire || null,
         dateAction:         body?.dateAction ? new Date(body.dateAction) : new Date(),
         dateRelance:        body?.dateRelance ? new Date(body.dateRelance) : null,
+        dateFin:            body?.dateFin ? new Date(body.dateFin) : null,
+        priorite:           body?.priorite || "normale",
         statut:             body?.statut || "A faire",
         fileUrl:            body?.fileUrl || null,
         createdBy:          userId,
@@ -106,6 +109,16 @@ async function createAction(projectId, body, userId) {
     );
 
     await t.commit();
+
+    const created = await actionRepo.findById(action.id);
+
+    // ── Calendrier CRM + Google Calendar (best-effort, jamais bloquant) ────
+    try {
+      await projectActionCalendarSync.onActionCreated(created, project, userId);
+    } catch (err) {
+      console.error("CALENDAR_SYNC_CREATE_ERROR:", err.message);
+    }
+
     return actionRepo.findById(action.id);
 
   } catch (err) {
@@ -140,6 +153,8 @@ async function updateAction(id, body, userId) {
     if (body?.statut)                     patch.statut       = body.statut;
     if (body?.dateAction)                 patch.dateAction   = new Date(body.dateAction);
     if (body?.dateRelance  !== undefined) patch.dateRelance  = body.dateRelance ? new Date(body.dateRelance) : null;
+    if (body?.dateFin      !== undefined) patch.dateFin      = body.dateFin ? new Date(body.dateFin) : null;
+    if (body?.priorite)                   patch.priorite     = body.priorite;
     if (body?.fileUrl      !== undefined) patch.fileUrl      = body.fileUrl || null;
 
     // ── Delete old attachment when it is being replaced ───────────────────
@@ -168,6 +183,18 @@ async function updateAction(id, body, userId) {
     await t.commit();
 
     // Return the full hydrated record (with associations) after update
+    const updated = await actionRepo.findById(id);
+
+    // ── Calendrier CRM + Google Calendar (best-effort, jamais bloquant) ────
+    try {
+      const project = await Project.findByPk(updated.projectId);
+      if (project) {
+        await projectActionCalendarSync.onActionUpdated(updated, project, userId);
+      }
+    } catch (err) {
+      console.error("CALENDAR_SYNC_UPDATE_ERROR:", err.message);
+    }
+
     return actionRepo.findById(id);
 
   } catch (err) {
@@ -177,19 +204,37 @@ async function updateAction(id, body, userId) {
   }
 }
 
-async function deleteAction(id) {
+async function deleteAction(id, userId) {
   const t = await sequelize.transaction();
+  let action;
   try {
-    const action = await actionRepo.findById(id);
+    action = await actionRepo.findById(id);
     if (!action) throw { status: 404, message: "Action not found" };
 
     await actionRepo.destroy(id, t);
     await t.commit();
-    return { deleted: true };
   } catch (err) {
     await t.rollback();
     throw err;
   }
+
+  // ── Calendrier CRM + Google Calendar (best-effort, jamais bloquant) ──────
+  // Snapshot `action` chargé AVANT la suppression : calendarEventId/
+  // googleEventId sont encore présents pour pouvoir nettoyer les deux côtés.
+  try {
+    const project = await Project.findByPk(action.projectId);
+    if (project) {
+      await projectActionCalendarSync.onActionDeleted(action, project, userId);
+    }
+  } catch (err) {
+    console.error("CALENDAR_SYNC_DELETE_ERROR:", err.message);
+  }
+
+  return { deleted: true };
+}
+
+async function retryGoogleSync(id, userId) {
+  return projectActionCalendarSync.retrySync(id, userId);
 }
 
 // ── Action Types ──────────────────────────────────────────
@@ -234,6 +279,7 @@ module.exports = {
   createAction,
   updateAction,
   deleteAction,
+  retryGoogleSync,
   getAllActionTypes,
   createActionType,
   updateActionType,

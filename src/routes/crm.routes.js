@@ -7,7 +7,7 @@ const { kpiRoleGuard }  = require("../middleware/kpiRoleGuard");
 
 const router = express.Router();
 
-const ADMIN_ROLES = ["admin", "superadmin"];
+const ADMIN_ROLES = ["admin", "superadmin", "superadmin2"];
 
 // ══════════════════════════════════════════════════════════════════════════════
 // GET /crm/kpi/global — KPI globaux plateforme (admin / superadmin uniquement)

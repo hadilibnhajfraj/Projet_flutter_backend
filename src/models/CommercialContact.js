@@ -114,6 +114,16 @@ matriculeFiscale: {
       type: DataTypes.UUID,
       allowNull: false,
     },
+
+    // Rattachement direct et persistant du contact à un commercial —
+    // distinct de commercial_contact_relances.commercialId (qui ne vaut
+    // que pour une relance ponctuelle). Renseigné soit automatiquement à
+    // la création (createdBy si commercial), soit via l'action admin
+    // "Affecter des contacts" (POST /commercial-contacts/assign).
+    commercialId: {
+      type: DataTypes.UUID,
+      allowNull: true,
+    },
   },
   {
     tableName: "commercial_contacts",

@@ -50,4 +50,16 @@ async function getProfessionalDashboard(req, res) {
   }
 }
 
-module.exports = { getKPIs, getKPIByRole, getProfessionalDashboard };
+// GET /dashboard/user — KPI BI personnels (n'importe quel rôle authentifié,
+// toujours scopé à req.user.sub — jamais de paramètre userId côté client).
+async function getUserDashboard(req, res) {
+  try {
+    const data = await svc.getUserDashboard(req.user.sub);
+    res.json(data);
+  } catch (err) {
+    console.error("Dashboard getUserDashboard error:", err);
+    res.status(500).json({ message: "Failed to load user dashboard" });
+  }
+}
+
+module.exports = { getKPIs, getKPIByRole, getProfessionalDashboard, getUserDashboard };

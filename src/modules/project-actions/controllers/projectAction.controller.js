@@ -59,7 +59,15 @@ async function updateAction(req, res) {
 
 async function deleteAction(req, res) {
   try {
-    res.json({ success: true, ...(await svc.deleteAction(req.params.id)) });
+    res.json({ success: true, ...(await svc.deleteAction(req.params.id, req.user.sub)) });
+  } catch (err) {
+    handle(res, err);
+  }
+}
+
+async function retryGoogleSync(req, res) {
+  try {
+    res.json({ success: true, data: await svc.retryGoogleSync(req.params.id, req.user.sub) });
   } catch (err) {
     handle(res, err);
   }
@@ -105,6 +113,7 @@ module.exports = {
   createAction,
   updateAction,
   deleteAction,
+  retryGoogleSync,
   listActionTypes,
   createActionType,
   updateActionType,

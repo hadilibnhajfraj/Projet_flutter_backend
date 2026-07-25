@@ -138,6 +138,15 @@ const Project = sequelize.define(
 
     typeProjet: { type: DataTypes.STRING(120), allowNull: true },
 
+    // Gamme de produit / diamètre — mode "project" uniquement (null pour
+    // revendeur/applicateur). Jamais de libellé concaténé stocké ("Probar
+    // Ø12 mm") — toujours recalculé à l'affichage depuis ces deux colonnes.
+    productFamily: {
+      type: DataTypes.ENUM("PROBAR", "PROMESH"),
+      allowNull: true,
+    },
+    diameterMm: { type: DataTypes.INTEGER, allowNull: true },
+
     projectModele: {
       type: DataTypes.ENUM("project", "revendeur", "applicateur"),
       allowNull: false,
@@ -206,6 +215,7 @@ const Project = sequelize.define(
       { fields: ["companyId"] },
       { fields: ["isArchived"] },
       { fields: ["projectModele"] },
+      { fields: ["productFamily"] },
       { fields: ["createdAt"] },
     ],
   }

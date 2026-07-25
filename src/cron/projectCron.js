@@ -184,7 +184,15 @@ async function checkProjects() {
   }
 }
 
+// ─── Kill switch for all automatic email cron jobs ────────────────────────────
+// Default: DISABLED. Set AUTO_EMAIL_JOBS_ENABLED=true in .env to re-enable.
+const AUTO_EMAIL_JOBS_ENABLED = process.env.AUTO_EMAIL_JOBS_ENABLED === "true";
+
 // ─── Schedule (every day at 08:00) ───────────────────────────────────────────
-cron.schedule("0 8 * * *", checkProjects);
+if (AUTO_EMAIL_JOBS_ENABLED) {
+  cron.schedule("0 8 * * *", checkProjects);
+} else {
+  console.log("[projectCron] AUTO_EMAIL_JOBS_ENABLED=false — cron NOT scheduled.");
+}
 
 module.exports = { checkProjects };

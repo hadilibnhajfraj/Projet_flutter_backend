@@ -16,4 +16,9 @@ router.get("/kpi", kpiRoleGuard, ctrl.getKPIByRole);
 // GET /dashboard/professional — dashboard complet — admin/superadmin only
 router.get("/professional", kpiRoleGuard, ctrl.getProfessionalDashboard);
 
+// GET /dashboard/user — KPI BI du dashboard utilisateur (cartes cliquables,
+// répartition famille/diamètre) — accessible à tout utilisateur authentifié,
+// PAS de kpiRoleGuard (volontaire : c'est son propre dashboard personnel).
+router.get("/user", ctrl.getUserDashboard);
+
 module.exports = router;

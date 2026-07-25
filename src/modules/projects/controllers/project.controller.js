@@ -12,7 +12,7 @@ const UserProfile = require("../../../models/UserProfile");
 const { sequelize } = require("../../../db");
 require("../../../models/associations");
 
-const ADMIN_ROLES = ["admin", "superadmin"];
+const ADMIN_ROLES = ["admin", "superadmin", "superadmin2"];
 
 // ── Field definitions for GET /projects/missing-fields ───────────────────────
 
@@ -94,6 +94,12 @@ const ACTIVITY_META = {
   relance:        { icon: "bell",           color: "#f59e0b", title: "Relance" },
   edit:           { icon: "edit-2",         color: "#8b5cf6", title: "Modification" },
   action_created: { icon: "zap",            color: "#ef4444", title: "Action créée" },
+  archive_request_created:  { icon: "archive",       color: "#f59e0b", title: "Demande d'archivage créée" },
+  unarchive_request_created:{ icon: "archive",       color: "#f59e0b", title: "Demande de désarchivage créée" },
+  archive_request_approved: { icon: "check-circle",  color: "#16a34a", title: "Demande approuvée" },
+  archive_request_rejected: { icon: "x-circle",      color: "#dc2626", title: "Demande refusée" },
+  project_archived:         { icon: "archive",       color: "#64748b", title: "Projet archivé" },
+  project_unarchived:       { icon: "archive",       color: "#64748b", title: "Projet désarchivé" },
 };
 
 function toActivityEvent(act) {

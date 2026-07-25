@@ -20,6 +20,8 @@ const listQuerySchema = Joi.object({
   myProjects: Joi.string().valid("true", "false").optional(),
   stageId: Joi.string().uuid().optional(),
   projectModele: Joi.string().valid("project", "revendeur", "applicateur").optional(),
+  productFamily: Joi.string().valid("PROBAR", "PROMESH").optional(),
+  diameterMm: Joi.number().integer().optional(),
   search: Joi.string().max(200).allow("").optional(),
   isArchived: Joi.string().valid("true", "false").optional(),
   page: Joi.number().integer().min(1).optional(),

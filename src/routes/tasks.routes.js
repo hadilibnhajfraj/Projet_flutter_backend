@@ -14,7 +14,7 @@ router.get("/", authRequired, async (req, res) => {
     const where = {};
 
     // ✅ admin/superadmin => tout
-    if (!["admin", "superadmin"].includes(req.user.role)) {
+    if (!["admin", "superadmin", "superadmin2"].includes(req.user.role)) {
       where.createdBy = req.user.sub;
     }
 
@@ -53,7 +53,7 @@ router.get("/", authRequired, async (req, res) => {
 // ✅ MY PROJECTS (pour dropdown Flutter)
 router.get("/my-projects", authRequired, async (req, res) => {
   try {
-    const isAdmin = ["admin", "superadmin"].includes(req.user.role);
+    const isAdmin = ["admin", "superadmin", "superadmin2"].includes(req.user.role);
 
     // admin => tous les projets
     if (isAdmin) {
@@ -101,7 +101,7 @@ router.post("/", authRequired, async (req, res) => {
     if (!projectId)
       return res.status(400).json({ message: "projectId obligatoire" });
 
-    const isAdmin = ["admin", "superadmin"].includes(req.user.role);
+    const isAdmin = ["admin", "superadmin", "superadmin2"].includes(req.user.role);
 
     // ✅ autorisation : le projet doit être lié au user (sauf admin)
     if (!isAdmin) {
@@ -136,7 +136,7 @@ router.put("/:id", authRequired, async (req, res) => {
     if (!row) return res.status(404).json({ message: "Task introuvable" });
 
     if (
-      !["admin", "superadmin"].includes(req.user.role) &&
+      !["admin", "superadmin", "superadmin2"].includes(req.user.role) &&
       row.createdBy !== req.user.sub
     ) {
       return res.status(403).json({ message: "Forbidden" });
@@ -171,7 +171,7 @@ router.delete("/:id", authRequired, async (req, res) => {
     if (!row) return res.status(404).json({ message: "Task introuvable" });
 
     if (
-      !["admin", "superadmin"].includes(req.user.role) &&
+      !["admin", "superadmin", "superadmin2"].includes(req.user.role) &&
       row.createdBy !== req.user.sub
     ) {
       return res.status(403).json({ message: "Forbidden" });
