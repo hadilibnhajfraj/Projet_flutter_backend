@@ -12,22 +12,19 @@ const { logAttempt, countRecentRequestsByEmail } = require("../services/password
 const { enqueueEmail } = require("../services/emailQueue.service");
 const logger = require("../utils/logger");
 
-// ── MFA ──────────────────────────────────────────────────────────────────
+// ── MFA (conservé pour /auth/mfa/verify et /auth/mfa/resend uniquement —
+// plus utilisé par /auth/signin) ─────────────────────────────────────────
 const {
-  evaluateMfaRequirement,
-  requestOtp,
   resendOtpChallenge,
   MfaCooldownError,
   verifyOtp,
   recordMfaVerified,
-  recordLoginContext,
   createTrustedDevice,
   invalidateMfaTrust,
 } = require("../services/mfa.service");
 const { getRequestContext } = require("../utils/requestContext");
 const { mfaChallengeRequired, requireMfaFeatureEnabled } = require("../middleware/mfaChallenge.middleware");
 const { logMfaAttempt } = require("../services/mfaAttemptLog.service");
-const { isMfaEnabled } = require("../config/mfaConfig");
 
 const router = express.Router();
 
@@ -381,6 +378,7 @@ async function issueSession(res, user) {
   return {
     user: { id: user.id, email: user.email, role: user.role, isActive: user.isActive },
     accessToken,
+    refreshToken,
   };
 }
 
@@ -471,7 +469,6 @@ router.post("/signup", async (req, res) => {
 
 // POST /auth/signin
 router.post("/signin", signinLimiter, async (req, res) => {
-  const ip = req.ip;
   try {
     const { email, password } = req.body || {};
 
@@ -491,55 +488,11 @@ router.post("/signin", signinLimiter, async (req, res) => {
     const ok = await bcrypt.compare(password, user.passwordHash);
     if (!ok) return res.status(401).json({ message: "Invalid credentials" });
 
-    // ── Interrupteur MFA (config/mfaConfig.js, variable MFA_ENABLED) ─────
-    // MFA_ENABLED=false : bypass complet, authentification classique
-    // email+mot de passe — aucun OTP/challenge/EmailQueue MFA n'est créé,
-    // la réponse est identique à celle d'avant l'introduction du MFA (pas
-    // de champ `mfaRequired`). Tout le code MFA reste intact et inutilisé
-    // (services/mfa.service.js, etc.) — remettre MFA_ENABLED=true suffit à
-    // réactiver le comportement ci-dessous, sans changement de code.
-    if (isMfaEnabled()) {
-      // Mot de passe correct = seulement la 1ère facteur. On décide ici si un
-      // second facteur (OTP email) est requis : jamais vérifié depuis plus de
-      // 3 jours (24h pour un rôle admin), OU IP/navigateur/appareil/pays
-      // différent de la dernière connexion, ET aucun appareil de confiance
-      // valide présenté (voir services/mfa.service.js).
-      const context = getRequestContext(req);
-      const { required: mfaRequired, reason: mfaReason, trustedDevice } = await evaluateMfaRequirement(
-        user,
-        context,
-        req.body?.deviceToken
-      );
-
-      if (mfaRequired) {
-        // requestOtp() est anti-doublon : double-clic sur "Se connecter",
-        // onglets multiples ou requêtes simultanées ne créent jamais plus d'un
-        // OTP / plus d'un email — voir services/mfa.service.js. `message`
-        // reflète l'action réelle (nouveau code envoyé / code déjà envoyé /
-        // patienter) sans jamais exposer de détail SMTP au client.
-        const { challengeToken, expiresInSeconds, message } = await requestOtp(user, ip);
-        logger.info("SIGNIN: MFA required", { userId: user.id, reason: mfaReason });
-        // Volontairement PAS d'accessToken ni de cookie refreshToken ici :
-        // authRequired (middleware/auth.middleware.js) ne peut donc jamais
-        // accepter cette réponse comme une session valide — aucune route
-        // protégée n'est accessible tant que /auth/mfa/verify n'a pas réussi.
-        return res.json({ mfaRequired: true, challengeToken, expiresInSeconds, message });
-      }
-
-      // Pas de MFA nécessaire (appareil de confiance ou fenêtre encore
-      // fraîche) — on enregistre quand même le contexte de CETTE connexion
-      // comme référence pour la prochaine (voir recordLoginContext).
-      await recordLoginContext(user, context);
-      if (trustedDevice) {
-        await logMfaAttempt({ userId: user.id, email: user.email, ip, action: "device_trusted", success: true, reason: "reused" });
-      }
-
-      const session = await issueSession(res, user);
-      return res.json({ ...session, mfaRequired: false });
-    }
-
-    // MFA désactivé : JWT émis directement, réponse identique au
-    // comportement pré-MFA (pas de champ `mfaRequired`).
+    // Login classique : email + mot de passe suffisent, JWT émis directement.
+    // Aucune logique MFA (OTP/challenge/EmailQueue) n'intervient ici — le
+    // code MFA reste disponible dans services/mfa.service.js et sur les
+    // routes /auth/mfa/verify et /auth/mfa/resend, mais n'est plus appelé
+    // depuis /auth/signin.
     const session = await issueSession(res, user);
     return res.json(session);
   } catch (e) {
