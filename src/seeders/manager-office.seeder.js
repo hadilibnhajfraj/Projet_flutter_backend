@@ -13,6 +13,7 @@ const bcrypt = require("bcrypt");
 const { v4: uuidv4 } = require("uuid");
 
 const EMAIL = "manegerofficecbi@gmail.com";
+
 const PASSWORD = "ChangeMe123!";
 const ROLE = "user";
 

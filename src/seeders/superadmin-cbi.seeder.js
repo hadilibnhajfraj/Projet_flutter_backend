@@ -16,6 +16,7 @@ const EMAIL = "cbitunisia@cbi-tunisia.com";
 const TEMP_PASSWORD = "ChangeMe123!";
 const ROLE = "superadmin";
 
+
 module.exports = {
   async up(queryInterface) {
     const [existing] = await queryInterface.sequelize.query(

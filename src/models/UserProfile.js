@@ -23,6 +23,7 @@ const UserProfile = sequelize.define(
 
     about: { type: DataTypes.TEXT, allowNull: true },
 
+    
     // ✅ avatar
     avatarUrl: { type: DataTypes.STRING(500), allowNull: true }, // exemple: /uploads/avatars/xxx.png
 
