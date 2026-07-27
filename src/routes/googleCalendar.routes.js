@@ -43,14 +43,42 @@ function successPage(message) {
 </html>`;
 }
 
+// Variables requises par googleCalendarService.getAuthUrl() /
+// exchangeCodeForTokens() — note : ce code construit l'URL OAuth2 à la main
+// (URLSearchParams) et n'utilise PAS google-auth-library ni sa classe
+// OAuth2Client ; il n'existe pas non plus de variable GOOGLE_CALLBACK_URL
+// dans ce projet (seule GOOGLE_REDIRECT_URI est utilisée, y compris pour
+// /callback).
+const REQUIRED_GOOGLE_ENV_VARS = ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "GOOGLE_REDIRECT_URI"];
+
 router.get("/auth-url", authRequired, (req, res) => {
-  console.log(`[GoogleCalendar] GET /auth-url — userId=${req.user.sub}`);
   try {
+    console.log(`[GoogleCalendar] GET /auth-url — userId=${req.user?.sub}`);
+
+    console.log("[GoogleCalendar][auth-url] Config check:", {
+      GOOGLE_CLIENT_ID: process.env.GOOGLE_CLIENT_ID ? "set" : "MISSING",
+      GOOGLE_CLIENT_SECRET: process.env.GOOGLE_CLIENT_SECRET ? "set" : "MISSING",
+      GOOGLE_REDIRECT_URI: process.env.GOOGLE_REDIRECT_URI || "MISSING",
+      SCOPES: googleCalendarService.SCOPES,
+    });
+
+    const missing = REQUIRED_GOOGLE_ENV_VARS.filter((name) => !process.env[name]);
+    if (missing.length > 0) {
+      console.error("❌ [GoogleCalendar][auth-url] Configuration manquante:", missing);
+      return res.status(500).json({ message: "Google OAuth configuration missing", missing });
+    }
+
     const state = signState(req.user.sub);
+    console.log("[GoogleCalendar][auth-url] state signé avec succès");
+
     const url = googleCalendarService.getAuthUrl(state);
+    console.log("[GoogleCalendar][auth-url] URL générée:", url);
+
     return res.json({ url });
   } catch (err) {
-    console.error("❌ [GoogleCalendar] auth-url error:", err.message);
+    console.error("❌ [GoogleCalendar][auth-url] Erreur inattendue");
+    console.error("Message :", err.message);
+    console.error("Stack   :", err.stack);
     return res.status(500).json({ message: err.message });
   }
 });

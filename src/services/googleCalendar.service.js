@@ -358,6 +358,7 @@ async function deleteCalendarEvent({ userId, eventId, commercialLabel }) {
 }
 
 module.exports = {
+  SCOPES,
   getAuthUrl,
   exchangeCodeForTokens,
   saveTokensForUser,
