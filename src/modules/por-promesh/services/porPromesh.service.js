@@ -1,10 +1,12 @@
 "use strict";
 
+const { Op } = require("sequelize");
 const PDFDocument = require("pdfkit");
 const { sequelize } = require("../../../db");
 const repo = require("../repositories/porPromesh.repository");
 const User = require("../../../models/User");
 const UserProfile = require("../../../models/UserProfile");
+const logger = require("../../../utils/logger");
 require("../../../models/associations");
 
 // Mêmes rôles que READ_WRITE_ROLES (routes) — qui peut opérer ce module peut
@@ -350,7 +352,12 @@ async function getPorPromeshById(id, actor) {
   const report = await repo.findById(id);
   if (!report) throw { status: 404, message: "PorPromesh introuvable" };
   assertOwnership(report, actor);
-  return report;
+  // Filet de sécurité (voir "Verrouillage automatique des fiches", point 6) :
+  // si le cron (toutes les 5 min) n'est pas encore passé, une fiche restée
+  // en BROUILLON plus de 24h est déverrouillée ici même, avant réponse —
+  // jamais bloquée en brouillon indéfiniment côté client.
+  const upToDate = await maybeAutoValidateOnRead(report);
+  return upToDate || report;
 }
 
 async function updatePorPromesh(id, body, actor) {
@@ -399,6 +406,9 @@ async function deletePorPromesh(id, actor) {
 
 // Champs devenant obligatoires uniquement à la soumission finale ("Terminer
 // la saisie") — validation souple au brouillon, stricte à la validation.
+// Réutilisés tels quels par le déverrouillage automatique à 24h (voir plus
+// bas) : une fiche incomplète ne doit jamais être verrouillée de force,
+// qu'elle soit validée manuellement ou automatiquement.
 const REQUIRED_ON_VALIDATE = [
   ["dateProduction", "Date de production"],
   ["heureDebut", "Heure début"],
@@ -407,6 +417,10 @@ const REQUIRED_ON_VALIDATE = [
 
 function isBlank(value) {
   return value === null || value === undefined || value === "";
+}
+
+function missingRequiredFieldsForValidation(report) {
+  return REQUIRED_ON_VALIDATE.filter(([field]) => isBlank(report[field])).map(([, label]) => label);
 }
 
 // Verrouillage définitif : BROUILLON → VALIDE. Idempotent dans l'intention
@@ -421,7 +435,7 @@ async function validatePorPromesh(id, actor) {
     throw { status: 403, message: LOCKED_MESSAGE };
   }
 
-  const missing = REQUIRED_ON_VALIDATE.filter(([field]) => isBlank(report[field])).map(([, label]) => label);
+  const missing = missingRequiredFieldsForValidation(report);
   if (missing.length) {
     throw {
       status: 400,
@@ -431,6 +445,100 @@ async function validatePorPromesh(id, actor) {
 
   await repo.update(report, { status: "VALIDE", isLocked: true, validatedAt: new Date() });
   return repo.findById(id);
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Verrouillage automatique après 24h ("Configuration métier — verrouillage
+// automatique des fiches") — BROUILLON → VALIDE sans action utilisateur,
+// UNIQUEMENT si la fiche satisfait déjà les mêmes conditions que la
+// validation manuelle ci-dessus (décision produit confirmée : une fiche
+// incomplète reste en brouillon au-delà de 24h plutôt que d'être verrouillée
+// de force avec des données manquantes).
+//
+// Trois points d'entrée, tous basés sur EXACTEMENT la même règle
+// (`missingRequiredFieldsForValidation` + le même appel `repo.update`) pour
+// ne jamais diverger entre eux :
+//   1. `maybeAutoValidateOnRead` — filet de sécurité à la lecture (point 6).
+//   2. `sweepAutoValidation` — appelé par le cron toutes les 5 min (point 4).
+//   3. La validation manuelle (`validatePorPromesh` ci-dessus) reste
+//      inchangée et continue de fonctionner à l'identique.
+// ═══════════════════════════════════════════════════════════════════════
+
+const AUTO_VALIDATION_DELAY_MS = 24 * 60 * 60 * 1000;
+
+// Kill switch — actif par défaut (règle métier demandée explicitement, pas
+// une automatisation optionnelle). AUTO_VALIDATION_ENABLED=false en .env
+// pour la désactiver sans redéploiement.
+function isAutoValidationEnabled() {
+  return process.env.AUTO_VALIDATION_ENABLED !== "false";
+}
+
+// Ne s'applique JAMAIS aux fiches créées avant l'introduction de cette règle
+// (voir consigne "ne pas modifier arbitrairement les anciennes fiches") —
+// ancré à une date fixe (pas à l'heure de démarrage du process, qui
+// varierait à chaque redémarrage), overridable via .env si besoin d'un
+// point de bascule différent.
+function autoValidationCutoffAt() {
+  const raw = process.env.AUTO_VALIDATION_CUTOFF_AT;
+  const parsed = raw ? new Date(raw) : null;
+  return parsed && !Number.isNaN(parsed.getTime()) ? parsed : new Date("2026-08-11T00:00:00Z");
+}
+
+function isEligibleForAutoValidation(report, now = new Date()) {
+  if (!isAutoValidationEnabled()) return false;
+  if (report.isLocked || report.status === "VALIDE") return false;
+  if (!report.createdAt) return false;
+  const createdAt = new Date(report.createdAt);
+  if (createdAt < autoValidationCutoffAt()) return false; // ancienne fiche — jamais touchée
+  if (now.getTime() - createdAt.getTime() < AUTO_VALIDATION_DELAY_MS) return false; // 24h pas encore écoulées
+  return missingRequiredFieldsForValidation(report).length === 0;
+}
+
+// Point 6 — appelé après chaque lecture d'une fiche unique. Retourne la
+// fiche (rechargée si transitionnée) ou `null` si l'appelant doit garder
+// l'objet déjà en main.
+async function maybeAutoValidateOnRead(report) {
+  if (!isEligibleForAutoValidation(report)) return null;
+
+  const before = report.status;
+  await repo.update(report, { status: "VALIDE", isLocked: true, validatedAt: new Date() });
+  logger.info("[porPromesh] Déverrouillage automatique après 24h (lecture)", {
+    ficheId: report.id,
+    before,
+    after: "VALIDE",
+    action: "auto",
+  });
+  return repo.findById(report.id);
+}
+
+// Point 4 — appelé par le cron toutes les 5 minutes. Ne charge que les
+// colonnes plates (light: true) : la règle ne porte que sur des champs
+// simples, jamais besoin des tables enfants pour décider.
+async function sweepAutoValidation() {
+  if (!isAutoValidationEnabled()) return { checked: 0, validated: 0 };
+
+  const candidates = await repo.findAll(
+    {
+      status: "BROUILLON",
+      isLocked: false,
+      createdAt: { [Op.gte]: autoValidationCutoffAt(), [Op.lte]: new Date(Date.now() - AUTO_VALIDATION_DELAY_MS) },
+    },
+    { light: true }
+  );
+
+  let validated = 0;
+  for (const report of candidates) {
+    if (missingRequiredFieldsForValidation(report).length > 0) continue; // reste en brouillon
+    await repo.update(report, { status: "VALIDE", isLocked: true, validatedAt: new Date() });
+    logger.info("[porPromesh] Déverrouillage automatique après 24h (cron)", {
+      ficheId: report.id,
+      before: "BROUILLON",
+      after: "VALIDE",
+      action: "auto",
+    });
+    validated += 1;
+  }
+  return { checked: candidates.length, validated };
 }
 
 async function addAttachment(id, actor, file) {
@@ -555,4 +663,6 @@ module.exports = {
   validatePorPromesh,
   addAttachment,
   getPorPromeshPdf,
+  missingRequiredFieldsForValidation,
+  sweepAutoValidation,
 };

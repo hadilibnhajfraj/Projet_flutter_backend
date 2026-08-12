@@ -8,6 +8,7 @@ const ALLOWED_PREFIXES_BY_ROLE = {
   responsable_logistique_achat: [
     "/por-promesh",
     "/industrial-records",
+    "/production-records",
     "/hr-requests",
     "/recuperables",
     "/maintenance-requests",

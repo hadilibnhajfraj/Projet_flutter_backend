@@ -1,5 +1,6 @@
 "use strict";
 
+const { Op } = require("sequelize");
 const repo = require("../repositories/industrialRecord.repository");
 const logger = require("../../../utils/logger");
 const User = require("../../../models/User");
@@ -32,9 +33,16 @@ const PROBAR_REQUIRED_ON_VALIDATE = [
   ["description", "Contenu de la fiche"],
 ];
 
+// Réutilisée telle quelle par le déverrouillage automatique à 24h (voir plus
+// bas) — une fiche PROBAR incomplète ne doit jamais être verrouillée de
+// force, qu'elle soit validée manuellement ou automatiquement.
+function missingRequiredFieldsForProbarValidation(record, overrides = {}) {
+  const merged = { ...record.get({ plain: true }), ...overrides };
+  return PROBAR_REQUIRED_ON_VALIDATE.filter(([field]) => isBlank(merged[field])).map(([, label]) => label);
+}
+
 function assertProbarCanValidate(record, body) {
-  const merged = { ...record.get({ plain: true }), ...body };
-  const missing = PROBAR_REQUIRED_ON_VALIDATE.filter(([field]) => isBlank(merged[field])).map(([, label]) => label);
+  const missing = missingRequiredFieldsForProbarValidation(record, body);
   if (missing.length) {
     throw {
       status: 400,
@@ -230,7 +238,12 @@ async function getRecordById(id, actor) {
   const record = await repo.findById(id);
   if (!record) throw { status: 404, message: "Fiche introuvable" };
   assertOwnership(record, actor);
-  return record;
+  // Filet de sécurité (voir "Verrouillage automatique des fiches", point 6) :
+  // si le cron (toutes les 5 min) n'est pas encore passé, une fiche PROBAR
+  // restée en brouillon plus de 24h est déverrouillée ici même, avant
+  // réponse — jamais bloquée en brouillon indéfiniment côté client.
+  const upToDate = await maybeAutoValidateOnRead(record);
+  return upToDate || record;
 }
 
 async function updateRecord(id, body, actor) {
@@ -255,4 +268,87 @@ async function deleteRecord(id, actor) {
   return { id };
 }
 
-module.exports = { createRecord, listRecords, getRecordById, updateRecord, deleteRecord };
+// ═══════════════════════════════════════════════════════════════════════
+// Verrouillage automatique après 24h (PROBAR) — voir le même bloc dans
+// por-promesh/services/porPromesh.service.js pour le détail du
+// raisonnement ; logique identique adaptée aux colonnes PROBAR
+// (`statut` string au lieu de `status`/`isLocked` séparés).
+// ═══════════════════════════════════════════════════════════════════════
+
+const AUTO_VALIDATION_DELAY_MS = 24 * 60 * 60 * 1000;
+
+function isAutoValidationEnabled() {
+  return process.env.AUTO_VALIDATION_ENABLED !== "false";
+}
+
+// Même date de bascule que PROMESH — voir porPromesh.service.js. Ancrée à
+// une date fixe (pas à l'heure de démarrage du process) pour ne jamais
+// toucher aux fiches déjà en base avant l'introduction de cette règle.
+function autoValidationCutoffAt() {
+  const raw = process.env.AUTO_VALIDATION_CUTOFF_AT;
+  const parsed = raw ? new Date(raw) : null;
+  return parsed && !Number.isNaN(parsed.getTime()) ? parsed : new Date("2026-08-11T00:00:00Z");
+}
+
+function isEligibleForAutoValidation(record, now = new Date()) {
+  if (!isAutoValidationEnabled()) return false;
+  if (record.module !== "probar" || record.statut === "validee") return false;
+  if (!record.createdAt) return false;
+  const createdAt = new Date(record.createdAt);
+  if (createdAt < autoValidationCutoffAt()) return false; // ancienne fiche — jamais touchée
+  if (now.getTime() - createdAt.getTime() < AUTO_VALIDATION_DELAY_MS) return false; // 24h pas encore écoulées
+  return missingRequiredFieldsForProbarValidation(record).length === 0;
+}
+
+// Point 6 — filet de sécurité à la lecture d'une fiche unique.
+async function maybeAutoValidateOnRead(record) {
+  if (!isEligibleForAutoValidation(record)) return null;
+
+  await repo.update(record, { statut: "validee" });
+  logger.info("[industrial-records] PROBAR — déverrouillage automatique après 24h (lecture)", {
+    ficheId: record.id,
+    before: "enregistree",
+    after: "validee",
+    action: "auto",
+  });
+  return repo.findById(record.id);
+}
+
+// Point 4 — appelé par le cron toutes les 5 minutes.
+async function sweepAutoValidation() {
+  if (!isAutoValidationEnabled()) return { checked: 0, validated: 0 };
+
+  const candidates = await repo.findAll({
+    module: "probar",
+    statut: { [Op.ne]: "validee" },
+    createdAt: { [Op.gte]: autoValidationCutoffAt(), [Op.lte]: new Date(Date.now() - AUTO_VALIDATION_DELAY_MS) },
+  });
+
+  let validated = 0;
+  for (const record of candidates) {
+    if (missingRequiredFieldsForProbarValidation(record).length > 0) continue; // reste en brouillon
+    // `before` capturé AVANT update() — `instance.update()` mute l'objet
+    // Sequelize en mémoire en plus de persister en base, donc lire
+    // `record.statut` après l'appel renverrait déjà "validee".
+    const before = record.statut;
+    await repo.update(record, { statut: "validee" });
+    logger.info("[industrial-records] PROBAR — déverrouillage automatique après 24h (cron)", {
+      ficheId: record.id,
+      before,
+      after: "validee",
+      action: "auto",
+    });
+    validated += 1;
+  }
+  return { checked: candidates.length, validated };
+}
+
+module.exports = {
+  createRecord,
+  listRecords,
+  getRecordById,
+  updateRecord,
+  deleteRecord,
+  missingRequiredFieldsForProbarValidation,
+  sweepAutoValidation,
+};

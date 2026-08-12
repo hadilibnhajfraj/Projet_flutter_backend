@@ -37,6 +37,9 @@ require("./cron/followup.job");
 // Renouvellement des canaux push Google Calendar (sync entrante, Phase B) —
 // même garde-fou AUTO_EMAIL_JOBS_ENABLED.
 require("./cron/googleCalendarChannelRenewal.job");
+// Verrouillage automatique des fiches PROBAR/PROMESH 24h après création —
+// actif par défaut (AUTO_VALIDATION_ENABLED=false pour désactiver).
+require("./cron/ficheAutoValidation.job");
 
 // ── CRM Pipeline Modules ──────────────────────────────────
 const pipelineStageRoutes = require("./modules/pipeline/routes/pipelineStage.routes");
@@ -51,6 +54,7 @@ const commercialContactKpiRoutes = require("./modules/commercial-contacts/routes
 const googleCalendarRoutes = require("./routes/googleCalendar.routes");
 const porPromeshRoutes = require("./modules/por-promesh/routes/porPromesh.routes");
 const industrialRecordRoutes = require("./modules/industrial-records/routes/industrialRecord.routes");
+const productionRecordsRoutes = require("./modules/production-records/routes/productionRecords.routes");
 const hrRequestRoutes = require("./modules/hr-requests/routes/hrRequest.routes");
 const recuperableRoutes = require("./modules/recuperables/routes/recuperable.routes");
 const adminDashboardRoutes = require("./modules/admin-dashboard/routes/adminDashboard.routes");
@@ -104,6 +108,7 @@ app.use("/maintenance-requests", maintenanceRequestRoutes);
 app.use("/crm", crmRoutes);
 app.use("/por-promesh", porPromeshRoutes);
 app.use("/industrial-records", industrialRecordRoutes);
+app.use("/production-records", productionRecordsRoutes);
 app.use("/hr-requests", hrRequestRoutes);
 app.use("/recuperables", recuperableRoutes);
 app.use("/admin-dashboard", adminDashboardRoutes);
