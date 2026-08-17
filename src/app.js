@@ -58,6 +58,7 @@ const productionRecordsRoutes = require("./modules/production-records/routes/pro
 const hrRequestRoutes = require("./modules/hr-requests/routes/hrRequest.routes");
 const recuperableRoutes = require("./modules/recuperables/routes/recuperable.routes");
 const adminDashboardRoutes = require("./modules/admin-dashboard/routes/adminDashboard.routes");
+const financeRoutes = require("./modules/finance/routes/finance.routes");
 
 const app = express();
 
@@ -112,6 +113,7 @@ app.use("/production-records", productionRecordsRoutes);
 app.use("/hr-requests", hrRequestRoutes);
 app.use("/recuperables", recuperableRoutes);
 app.use("/admin-dashboard", adminDashboardRoutes);
+app.use("/finance", financeRoutes);
 
 // ── Existing routes (unchanged) ──────────────────────────
 app.use("/projects", projectRoutes);

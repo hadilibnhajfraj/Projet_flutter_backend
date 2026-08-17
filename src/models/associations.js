@@ -46,6 +46,18 @@ const RecuperableLigne = require("./RecuperableLigne");
 const GoogleCalendarAccount = require("./GoogleCalendarAccount");
 const CommercialContactStatusHistory = require("./CommercialContactStatusHistory");
 
+const Client = require("./client.model");
+const FinanceDocument = require("./FinanceDocument");
+const FinanceShipment = require("./FinanceShipment");
+const FinanceShipmentItem = require("./FinanceShipmentItem");
+const FinanceInvoice = require("./FinanceInvoice");
+const FinanceInvoiceItem = require("./FinanceInvoiceItem");
+const FinanceInvoiceTax = require("./FinanceInvoiceTax");
+const FinancePayment = require("./FinancePayment");
+const FinanceActivity = require("./FinanceActivity");
+const FinancePurchaseOrder = require("./FinancePurchaseOrder");
+const FinancePurchaseOrderItem = require("./FinancePurchaseOrderItem");
+
 // ── PIPELINE STAGE <-> PROJECT ────────────────────────────
 
 PipelineStage.hasMany(Project, {
@@ -448,6 +460,62 @@ User.hasOne(GoogleCalendarAccount, {
 });
 GoogleCalendarAccount.belongsTo(User, { foreignKey: "userId", as: "user" });
 
+// ── FINANCE PROBAR ────────────────────────────────────────
+// entityId sur FinanceDocument/FinanceActivity reste une référence DOUCE
+// (pas de FK dure) — polymorphe sur DOCUMENT/SHIPMENT/INVOICE/PAYMENT, voir
+// commentaire en tête de FinanceActivity.js.
+
+Client.hasMany(FinanceShipment, { foreignKey: "customerId", as: "shipments" });
+FinanceShipment.belongsTo(Client, { foreignKey: "customerId", as: "customer" });
+
+Client.hasMany(FinanceInvoice, { foreignKey: "customerId", as: "invoices" });
+FinanceInvoice.belongsTo(Client, { foreignKey: "customerId", as: "customer" });
+
+FinanceShipment.hasMany(FinanceInvoice, { foreignKey: "shipmentId", as: "invoices" });
+FinanceInvoice.belongsTo(FinanceShipment, { foreignKey: "shipmentId", as: "shipment" });
+
+FinanceInvoice.hasMany(FinancePayment, { foreignKey: "invoiceId", as: "payments", onDelete: "CASCADE" });
+FinancePayment.belongsTo(FinanceInvoice, { foreignKey: "invoiceId", as: "invoice" });
+
+// Lignes de facture extraites par OCR (§ Invoice items).
+FinanceInvoice.hasMany(FinanceInvoiceItem, { foreignKey: "invoiceId", as: "items", onDelete: "CASCADE" });
+FinanceInvoiceItem.belongsTo(FinanceInvoice, { foreignKey: "invoiceId" });
+
+// Lignes de taxes du bloc fiscal extraites par OCR (§ TAXES).
+FinanceInvoice.hasMany(FinanceInvoiceTax, { foreignKey: "invoiceId", as: "taxes", onDelete: "CASCADE" });
+FinanceInvoiceTax.belongsTo(FinanceInvoice, { foreignKey: "invoiceId" });
+
+// Lignes produit d'un Bon de Livraison extraites par OCR (§ Products).
+FinanceShipment.hasMany(FinanceShipmentItem, { foreignKey: "shipmentId", as: "items", onDelete: "CASCADE" });
+FinanceShipmentItem.belongsTo(FinanceShipment, { foreignKey: "shipmentId" });
+
+// Inflow of raw materials — Bon de Commande + ses lignes, extraits par OCR.
+Client.hasMany(FinancePurchaseOrder, { foreignKey: "customerId", as: "purchaseOrders" });
+FinancePurchaseOrder.belongsTo(Client, { foreignKey: "customerId", as: "customer" });
+
+FinancePurchaseOrder.hasMany(FinancePurchaseOrderItem, { foreignKey: "purchaseOrderId", as: "items", onDelete: "CASCADE" });
+FinancePurchaseOrderItem.belongsTo(FinancePurchaseOrder, { foreignKey: "purchaseOrderId" });
+
+User.hasMany(FinancePurchaseOrder, { foreignKey: "createdBy", as: "financePurchaseOrders" });
+FinancePurchaseOrder.belongsTo(User, { foreignKey: "createdBy", as: "creator" });
+
+User.hasMany(FinanceDocument, { foreignKey: "uploadedBy", as: "financeDocuments" });
+FinanceDocument.belongsTo(User, { foreignKey: "uploadedBy", as: "uploader" });
+
+User.hasMany(FinanceShipment, { foreignKey: "createdBy", as: "financeShipments" });
+FinanceShipment.belongsTo(User, { foreignKey: "createdBy", as: "creator" });
+
+User.hasMany(FinanceInvoice, { foreignKey: "createdBy", as: "financeInvoices" });
+FinanceInvoice.belongsTo(User, { foreignKey: "createdBy", as: "creator" });
+
+User.hasMany(FinancePayment, { foreignKey: "registeredBy", as: "financePayments" });
+FinancePayment.belongsTo(User, { foreignKey: "registeredBy", as: "registrar" });
+
+User.hasMany(FinanceActivity, { foreignKey: "userId", as: "financeActivities" });
+FinanceActivity.belongsTo(User, { foreignKey: "userId", as: "user" });
+
+console.log("FINANCE PROBAR ASSOCIATIONS LOADED");
+
 // ── EXPORTS ───────────────────────────────────────────────
 
 module.exports = {
@@ -492,4 +560,15 @@ module.exports = {
   IndustrialRecord,
   GoogleCalendarAccount,
   CommercialContactStatusHistory,
+  Client,
+  FinanceDocument,
+  FinanceShipment,
+  FinanceShipmentItem,
+  FinanceInvoice,
+  FinanceInvoiceItem,
+  FinanceInvoiceTax,
+  FinancePayment,
+  FinanceActivity,
+  FinancePurchaseOrder,
+  FinancePurchaseOrderItem,
 };

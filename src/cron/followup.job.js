@@ -22,6 +22,21 @@ console.log("🔥 FOLLOWUP CRON LOADED");
 
 const FOLLOWUP_AUTOMATION_EMAIL = "info@probardistribution.com";
 
+// ─── CLIENT FOLLOW-UP EMAILS — DÉSACTIVÉS (URGENT) ────────────────────────
+// checkFollowup() ci-dessous envoyait un email directement au CLIENT
+// (contact.email) — deux appels sendEmail(contact.email, ...) — ce qui
+// saturait le rate-limit SMTP Hostinger ("451 4.7.1 Ratelimit
+// hostinger_out_ratelimit exceeded") dès que plusieurs contacts étaient
+// traités dans le même tick. Règle : CLIENT → FOLLOW-UP → EMAIL = INTERDIT.
+// La détection/l'enregistrement/l'affichage des Follow-up ne sont PAS
+// concernés (voir la boucle plus bas) — seul l'appel sendEmail() vers le
+// client est bloqué, AVANT toute tentative SMTP. Volontairement codé en dur
+// (pas une variable d'env) : personne ne doit pouvoir réactiver l'envoi aux
+// clients par une simple configuration. Les rappels internes
+// (commercial/admin) dans checkReminders()/checkActionReminders() ci-dessous
+// ne sont PAS concernés par ce blocage — ils continuent de fonctionner.
+const CLIENT_FOLLOWUP_EMAILS_ENABLED = false;
+
 // =========================
 // 🔥 MAIN FUNCTION
 // =========================
@@ -60,7 +75,7 @@ const checkFollowup = async () => {
     for (let contact of contacts) {
       try {
         if (!contact.email) {
-          console.log(`⚠️ No email: ${contact.nom}`);
+          console.log(`ℹ️ Client email skipped: ${contact.nom}`);
 
           await Notification.create({
             userId: contact.createdBy,
@@ -85,6 +100,14 @@ const checkFollowup = async () => {
           }
 
           console.log(`📅 Relance TODAY: ${contact.nom}`);
+
+          // ⛔ EMAIL CLIENT BLOQUÉ — le Follow-up reste détecté/enregistré
+          // (relance existe déjà en base), seul l'envoi SMTP au client est
+          // interdit. Ne JAMAIS appeler sendEmail(contact.email, ...) ici.
+          if (!CLIENT_FOLLOWUP_EMAILS_ENABLED) {
+            console.log(`⏭️ Follow-up email skipped for client: ${contact.nom}`);
+            continue;
+          }
 
           const result = await sendEmail(
             contact.email,
@@ -125,6 +148,12 @@ const checkFollowup = async () => {
         // =========================
         else {
           console.log(`⚠️ No follow-up: ${contact.nom}`);
+
+          // ⛔ EMAIL CLIENT BLOQUÉ — voir commentaire ci-dessus (même règle).
+          if (!CLIENT_FOLLOWUP_EMAILS_ENABLED) {
+            console.log(`⏭️ Follow-up email skipped for client: ${contact.nom}`);
+            continue;
+          }
 
           const result = await sendEmail(
             contact.email,

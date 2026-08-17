@@ -17,6 +17,10 @@ const ALLOWED_PREFIXES_BY_ROLE = {
     "/uploads",
     "/me",
   ],
+  // "/api/clients" ajouté car Finance réutilise la table clients existante
+  // pour son sélecteur "Customer" (Shipment/Invoice) — voir GET
+  // /api/clients/all, aucun nouvel endpoint clients créé pour Finance.
+  finance_probar: ["/finance", "/api/clients", "/auth", "/users/me", "/uploads", "/me"],
 };
 
 function moduleAccessGuard(req, res, next) {
@@ -38,7 +42,7 @@ function moduleAccessGuard(req, res, next) {
   if (!isAllowed) {
     return res.status(403).json({
       success: false,
-      message: "Accès refusé : ce rôle n'a accès qu'au module POR PROMESH",
+      message: "Accès refusé : ce rôle n'a pas accès à ce module",
     });
   }
   return next();

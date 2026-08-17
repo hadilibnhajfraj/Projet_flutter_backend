@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
-    "test": "jest --runInBand --forceExit",
+    "test": "cross-env NODE_OPTIONS=--experimental-vm-modules jest --runInBand --forceExit",
     "dev": "nodemon src/app.js",
     "start": "node src/app.js",
     "sync:companies": "node scripts/syncCompanies.js",
@@ -15,7 +15,8 @@
     "db:migrate": "npx sequelize-cli db:migrate",
     "db:migrate:undo": "npx sequelize-cli db:migrate:undo",
     "db:seed:pipeline": "npx sequelize-cli db:seed --seed src/seeders/pipeline-stages.seeder.js",
-    "db:seed:superadmin-cbi": "npx sequelize-cli db:seed --seed src/seeders/superadmin-cbi.seeder.js"
+    "db:seed:superadmin-cbi": "npx sequelize-cli db:seed --seed src/seeders/superadmin-cbi.seeder.js",
+    "db:seed:finance-probar": "npx sequelize-cli db:seed --seed src/seeders/finance-probar.seeder.js"
   },
   "keywords": [],
   "author": "",
@@ -39,17 +40,21 @@
     "multer": "^2.1.1",
     "node-cron": "^4.2.1",
     "nodemailer": "^7.0.13",
+    "pdf-parse": "^2.4.5",
+    "pdfjs-dist": "^5.4.296",
     "pdfkit": "^0.15.0",
     "pg": "^8.20.0",
     "pg-hstore": "^2.3.4",
     "sequelize": "^6.37.8",
     "socket.io": "^4.8.1",
+    "tesseract.js": "^7.0.0",
     "twilio": "^6.0.2",
     "ua-parser-js": "^2.0.10",
     "uuid": "^11.0.0",
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
+    "cross-env": "^10.1.0",
     "jest": "^30.4.2",
     "nodemon": "^3.1.11",
     "sequelize-cli": "^6.6.5",
