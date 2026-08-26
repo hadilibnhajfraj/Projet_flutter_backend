@@ -1,13 +1,21 @@
 "use strict";
 
 /**
- * Seeds the Finance Dashboard user for dennisredfeather@gmail.com
- * (§MODIFICATION — DASHBOARD FINANCE PROFESSIONNEL POUR UN UTILISATEUR
- * SPÉCIFIQUE). Reuses the EXISTING "finance_probar" role — access control is
+ * Seeds the Finance + Production Dashboard user for
+ * dennisredfeather@gmail.com.
+ *
+ * Originally created with role "finance_probar" (§MODIFICATION — DASHBOARD
+ * FINANCE PROFESSIONNEL POUR UN UTILISATEUR SPÉCIFIQUE). Role updated to
+ * "finance_production" (§MODIFICATION — INTERFACE PRODUCTION DE
+ * DENNISREDFEATHER, see migrations 20260824000100/200) — union of the
+ * Finance scope (finance_probar) and the Production scope
+ * (responsable_logistique_achat: por-promesh, industrial-records,
+ * production-records, recuperables). ROLE below must stay in sync with
+ * those migrations so a FRESH database (migrate + seed) ends up with the
+ * same role as an existing one migrated forward — access control is
  * enforced backend-side (moduleAccessGuard + requireRole, see
- * finance.routes.js), never by a frontend-only check. This role already
- * restricts the account to /finance, /api/clients, /auth, /users/me,
- * /uploads, /me — no admin/user-management/settings access (§15).
+ * finance.routes.js / porPromesh.routes.js / industrialRecord.routes.js /
+ * productionRecords.routes.js), never by a frontend-only check.
  * Idempotent — skips if the email already exists.
  *
  * Usage:
@@ -19,7 +27,7 @@ const { v4: uuidv4 } = require("uuid");
 
 const EMAIL = "dennisredfeather@gmail.com";
 const PASSWORD = "ChangeMe123!";
-const ROLE = "finance_probar";
+const ROLE = "finance_production";
 const DISPLAY_NAME = "Dennis Redfeather";
 
 module.exports = {
