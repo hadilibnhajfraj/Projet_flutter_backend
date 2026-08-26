@@ -21,6 +21,24 @@ const ALLOWED_PREFIXES_BY_ROLE = {
   // pour son sélecteur "Customer" (Shipment/Invoice) — voir GET
   // /api/clients/all, aucun nouvel endpoint clients créé pour Finance.
   finance_probar: ["/finance", "/api/clients", "/auth", "/users/me", "/uploads", "/me"],
+  // §MODIFICATION — INTERFACE PRODUCTION DE DENNISREDFEATHER : union du
+  // scope Finance (finance_probar ci-dessus) et du scope Production de
+  // responsable_logistique_achat, y compris /recuperables (demandé
+  // explicitement) — mais sans /hr-requests ni /maintenance-requests
+  // (Administration > Demandes), non demandés par ce ticket. Rôle dédié —
+  // jamais un accès admin/superadmin.
+  finance_production: [
+    "/finance",
+    "/api/clients",
+    "/por-promesh",
+    "/industrial-records",
+    "/production-records",
+    "/recuperables",
+    "/auth",
+    "/users/me",
+    "/uploads",
+    "/me",
+  ],
 };
 
 function moduleAccessGuard(req, res, next) {

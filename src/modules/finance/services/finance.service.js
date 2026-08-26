@@ -4,6 +4,8 @@ const fs = require("fs");
 const path = require("path");
 const { Op } = require("sequelize");
 const { sequelize } = require("../../../db");
+const User = require("../../../models/User");
+const { normalizeUnitAndDiameter } = require("./invoiceNormalization.service");
 const repo = require("../repositories/finance.repository");
 const { sanitizeOriginalName, UPLOAD_DIR } = require("../../../middleware/financeDocumentUpload.middleware");
 const logger = require("../../../utils/logger");
@@ -20,6 +22,7 @@ const RAW_MATERIALS_MODULE = "INFLOW_RAW_MATERIALS";
 const SHIPMENT_MODULE = "SHIPMENT";
 const INVOICE_MODULE = "INVOICE";
 const PAYMENT_MODULE = "PAYMENT";
+const OTHER_MODULE = "OTHER";
 
 function toPage(filters) {
   const page = Math.max(1, parseInt(filters.page, 10) || 1);
@@ -31,32 +34,140 @@ function docUrl(file) {
   return `/uploads/finance-documents/${file.filename}`;
 }
 
-// ── DASHBOARD (§4) — toujours calculé dynamiquement, jamais de valeur figée ─
+// ── DASHBOARD (§MODIFICATION — DASHBOARD FINANCE PROFESSIONNEL) — toujours
+// calculé dynamiquement (COUNT/SUM/GROUP BY côté serveur, §16-17), jamais de
+// valeur figée ni recalculée côté client.
+//
+// Filtres optionnels (§11) :
+// - startDate/endDate : plage de dates (sur orderDate/shipmentDate/
+//   invoiceDate/paidDate selon l'entité).
+// - customer : texte libre sur `customerName` — la plupart des
+//   enregistrements OCR n'ont PAS de customerId résolu ("jamais résolu
+//   automatiquement vers un client existant", voir processInvoiceUpload/
+//   processShipmentUpload/processRawMaterialUpload plus bas), donc filtrer
+//   sur le customerId FK laisserait le filtre systématiquement vide ; on
+//   filtre sur le nom réellement extrait, seule donnée fiable et présente.
+// - paymentMethod : Invoices/Paid Invoices uniquement (Traite/Chèque/
+//   Virement/Versement) — seul contexte où ce champ a un sens.
+function dashboardDateRange(field, filters) {
+  if (!filters.startDate && !filters.endDate) return {};
+  const range = {};
+  if (filters.startDate) range[Op.gte] = filters.startDate;
+  if (filters.endDate) range[Op.lte] = filters.endDate;
+  return { [field]: range };
+}
 
-async function getDashboard() {
-  const [rawMaterialDocuments, shipments, facturedShipments, paidInvoices, invoicedSum, paidSum] = await Promise.all([
-    repo.countDocuments({ module: RAW_MATERIALS_MODULE }),
-    repo.countShipments(),
-    repo.countInvoices(),
-    repo.countInvoices({ status: "PAID" }),
-    repo.sumInvoiceAmount(),
-    repo.sumPaymentAmount(),
+function dashboardCustomerFilter(filters) {
+  if (!filters.customer) return {};
+  return { customerName: { [Op.iLike]: `%${filters.customer}%` } };
+}
+
+function sevenDaysAgo() {
+  const d = new Date();
+  d.setDate(d.getDate() - 7);
+  return d;
+}
+
+async function getDashboard(filters = {}) {
+  const poWhere = { ...dashboardDateRange("orderDate", filters), ...dashboardCustomerFilter(filters) };
+  const shipmentWhere = { ...dashboardDateRange("shipmentDate", filters), ...dashboardCustomerFilter(filters) };
+  const invoiceWhere = { ...dashboardDateRange("invoiceDate", filters), ...dashboardCustomerFilter(filters) };
+  if (filters.paymentMethod) invoiceWhere.paymentMethod = filters.paymentMethod;
+  const paidInvoiceWhere = { ...invoiceWhere, status: "PAID" };
+  const unpaidInvoiceWhere = { ...invoiceWhere, status: { [Op.in]: ["ISSUED", "PARTIALLY_PAID"] } };
+  const paymentWhere = dashboardDateRange("paidDate", filters);
+  const since = sevenDaysAgo();
+
+  const [
+    purchaseOrders,
+    customerShipments,
+    invoices,
+    paidInvoices,
+    unpaidInvoices,
+    totalPurchasesSum,
+    totalInvoicedSum,
+    totalPaidSum,
+    newPurchaseOrdersThisWeek,
+    newShipmentsThisWeek,
+    recentDocumentsCount,
+  ] = await Promise.all([
+    repo.countPurchaseOrders(poWhere),
+    repo.countShipments(shipmentWhere),
+    repo.countInvoices(invoiceWhere),
+    repo.countInvoices(paidInvoiceWhere),
+    repo.countInvoices(unpaidInvoiceWhere),
+    repo.sumPurchaseOrderAmount(poWhere),
+    repo.sumInvoiceAmount(invoiceWhere),
+    repo.sumPaymentAmount(paymentWhere),
+    repo.countPurchaseOrders({ createdAt: { [Op.gte]: since } }),
+    repo.countShipments({ createdAt: { [Op.gte]: since } }),
+    repo.countDocuments({ createdAt: { [Op.gte]: since } }),
   ]);
 
-  const totalInvoicedAmount = Number(invoicedSum) || 0;
-  const totalPaidAmount = Number(paidSum) || 0;
+  const totalPurchases = Number(totalPurchasesSum) || 0;
+  const totalInvoiced = Number(totalInvoicedSum) || 0;
+  const totalPaid = Number(totalPaidSum) || 0;
 
   return {
-    rawMaterialDocuments,
-    shipments,
-    facturedShipments,
+    purchaseOrders,
+    customerShipments,
+    invoices,
     paidInvoices,
-    totalRawMaterialDocuments: rawMaterialDocuments,
-    totalShipments: shipments,
-    totalInvoicedAmount,
-    totalPaidAmount,
-    outstandingAmount: Math.max(0, totalInvoicedAmount - totalPaidAmount),
+    totalPurchases,
+    totalInvoiced,
+    totalPaid,
+    outstanding: Math.max(0, totalInvoiced - totalPaid),
+    // Finance Alerts (§10) — uniquement des informations réellement
+    // disponibles en base, jamais un texte statique.
+    alerts: {
+      unpaidInvoices,
+      newPurchaseOrdersThisWeek,
+      newShipmentsThisWeek,
+      recentDocumentsCount,
+    },
   };
+}
+
+// "Financial Overview" (§5) — Purchase Orders/Invoices/Paid Invoices par
+// mois (montants, pas des comptes — "comprendre l'évolution des montants").
+// Agrégation SQL (GROUP BY date_trunc), jamais côté client. Repli sur les 8
+// derniers mois (jan→août façon exemple du ticket) si aucune plage fournie ;
+// les mois sans donnée valent 0 (jamais une valeur inventée — 0 signifie
+// "rien ce mois-là", pas "non calculé").
+async function getDashboardMonthly(filters = {}) {
+  const end = filters.endDate ? new Date(filters.endDate) : new Date();
+  const start = filters.startDate ? new Date(filters.startDate) : new Date(end.getFullYear(), end.getMonth() - 7, 1);
+
+  const customerWhere = dashboardCustomerFilter(filters);
+  const invoiceExtra = { ...customerWhere };
+  if (filters.paymentMethod) invoiceExtra.paymentMethod = filters.paymentMethod;
+
+  const [poRows, invoiceRows, paidRows] = await Promise.all([
+    repo.sumPurchaseOrdersByMonth({ start, end, extra: customerWhere }),
+    repo.sumInvoicesByMonth({ start, end, extra: invoiceExtra }),
+    repo.sumPaymentsByMonth({ start, end }),
+  ]);
+
+  const monthKey = (d) => `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
+  const toMap = (rows) => new Map(rows.map((r) => [monthKey(new Date(r.month)), Number(r.total) || 0]));
+  const poMap = toMap(poRows);
+  const invMap = toMap(invoiceRows);
+  const paidMap = toMap(paidRows);
+
+  const months = [];
+  const cursor = new Date(start.getFullYear(), start.getMonth(), 1);
+  const endCursor = new Date(end.getFullYear(), end.getMonth(), 1);
+  while (cursor <= endCursor) {
+    const key = `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, "0")}`;
+    months.push({
+      month: key,
+      purchaseOrders: poMap.get(key) || 0,
+      invoices: invMap.get(key) || 0,
+      paidInvoices: paidMap.get(key) || 0,
+    });
+    cursor.setMonth(cursor.getMonth() + 1);
+  }
+  return months;
 }
 
 // ── INFLOW OF RAW MATERIALS (§5) ────────────────────────────────────────
@@ -104,11 +215,22 @@ function computePurchaseOrderConfidence(extraction) {
   return Math.round(avg <= 1 ? avg * 100 : avg);
 }
 
+// Identifiant métier "PO #" (§IDENTIFICATION DES DIFFÉRENTS PURCHASE
+// ORDERS) — format "PO-00001", jamais lié à l'année (contrairement à
+// generateInvoiceNumber ci-dessous) : un seul compteur global, toujours
+// croissant. Généré UNE SEULE FOIS par Purchase Order (jamais par ligne
+// produit) — voir l'unique appel dans processRawMaterialUpload.
+async function generatePoNumber(transaction) {
+  const prefix = "PO-";
+  const count = await repo.countPurchaseOrders({ poNumber: { [Op.like]: `${prefix}%` } }, { transaction });
+  return `${prefix}${String(count + 1).padStart(5, "0")}`;
+}
+
 // "Upload" (page Inflow of raw materials) — LIT réellement le document
 // (OCR/texte PDF), extrait/normalise/valide les données, puis crée le Bon
 // de Commande + ses lignes + le document associé dans UNE transaction
 // atomique (jamais de document INFLOW_RAW_MATERIALS sans bon associé, même
-// invariant que Shipment/Invoice). 1 fichier = 1 bon de commande.
+// invariant que Shipment/Invoice). 1 fichier = 1 bon de commande = 1 PO #.
 async function processRawMaterialUpload(file, actor) {
   if (!file) throw { status: 400, message: "Fichier requis" };
 
@@ -154,8 +276,10 @@ async function processRawMaterialUpload(file, actor) {
   try {
     let orderId;
     await sequelize.transaction(async (t) => {
+      const poNumber = await generatePoNumber(t);
       const order = await repo.createPurchaseOrder(
         {
+          poNumber,
           orderNumber: extraction.orderNumber.value, // jamais généré/inventé — reste null si absent du document
           orderDate: extraction.orderDate.value,
           customerId: null, // jamais résolu automatiquement vers un client existant
@@ -284,6 +408,156 @@ async function deleteRawMaterial(id, actor) {
   return { id };
 }
 
+// ── FINANCE > OTHER (§MODIFICATION — SCAN SIMPLE DE DOCUMENTS) ─────────────
+// Stockage documentaire PUR — explicitement AUCUN OCR/IA/extraction/mapping/
+// création automatique de Purchase Order/Shipment/Invoice (§1, §14).
+// Pipeline volontairement à 3 étapes, jamais plus :
+//   Upload → Save file (multer, déjà fait en amont) → Save metadata (ici).
+// Réutilise le système FinanceDocument existant (§13) — `module: "OTHER"`,
+// `entityId` toujours NULL (document autonome, non rattaché à une autre
+// entité Finance), rien de nouveau créé côté stockage/DB hormis la colonne
+// `displayName` (migration dédiée).
+
+function sanitizeDisplayName(name) {
+  const base = String(name ?? "")
+    .replace(/[\\/]/g, "_") // jamais un séparateur de chemin — affiché seulement, jamais utilisé pour un chemin disque
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\x00-\x1f\x7f]/g, "")
+    .trim();
+  if (!base) throw { status: 400, message: "Le nom du document ne peut pas être vide" };
+  if (base.length > 255) throw { status: 400, message: "Le nom du document est trop long (255 caractères maximum)" };
+  return base;
+}
+
+function otherDocumentDateRange(filters) {
+  const where = {};
+  if (filters.startDate || filters.endDate) {
+    where.createdAt = {};
+    if (filters.startDate) where.createdAt[Op.gte] = new Date(filters.startDate);
+    if (filters.endDate) where.createdAt[Op.lte] = new Date(`${filters.endDate}T23:59:59.999`);
+  }
+  return where;
+}
+
+// Recherche (§15) + filtres date/type (§16) — jamais de ré-extraction, juste
+// une lecture filtrée des métadonnées déjà enregistrées.
+async function listOtherDocuments(filters = {}) {
+  const where = { module: OTHER_MODULE, ...otherDocumentDateRange(filters) };
+  const clauses = [where];
+  if (filters.search) clauses.push(repo.otherDocumentSearchClause(filters.search));
+  if (filters.type) {
+    const typeClause = repo.otherDocumentTypeClause(filters.type);
+    if (typeClause) clauses.push(typeClause);
+  }
+  const finalWhere = clauses.length > 1 ? { [Op.and]: clauses } : where;
+
+  const { page, pageSize, limit, offset } = toPage(filters);
+  // `include` toujours fourni à `countDocuments` (même si `finalWhere` ne
+  // référence pas `uploader` cette fois) — évite de dupliquer la logique
+  // "le where référence-t-il l'association ?" ici, `include` seul sans
+  // condition dessus ne change jamais le résultat d'un COUNT sur une
+  // association belongsTo (1 ligne par document, jamais de duplication).
+  const uploaderInclude = [{ model: User, as: "uploader", attributes: [] }];
+  const [data, total] = await Promise.all([
+    repo.findDocuments(finalWhere, { limit, offset }),
+    repo.countDocuments(finalWhere, { include: uploaderInclude }),
+  ]);
+  return { data, total, page, pageSize };
+}
+
+// Upload/scan (§4-6) — "Scan Document" et "Upload Document" arrivent tous
+// deux ici en tant que fichier multipart classique (un scanner "logiciel"
+// n'est qu'un sélecteur fichier/caméra côté navigateur, voir
+// finance_upload_dropzone.dart) : AUCUNE branche de code différente entre
+// les deux, et surtout AUCUN appel à invoiceOcr/deliveryNoteOcr/
+// purchaseOrderFieldExtraction/invoiceFieldExtraction — contrairement à
+// processInvoiceUpload/processShipmentUpload/uploadRawMaterial ci-dessus et
+// ci-dessous, cette fonction ne lit JAMAIS le contenu du fichier.
+async function uploadOtherDocument(file, actor) {
+  const originalName = sanitizeOriginalName(file.originalname);
+  try {
+    const document = await repo.createDocument({
+      module: OTHER_MODULE,
+      entityId: null,
+      originalName,
+      displayName: originalName, // §6 : identique à originalName au moment de l'upload
+      storedFileName: file.filename,
+      fileUrl: docUrl(file),
+      mimeType: file.mimetype,
+      fileSize: file.size,
+      uploadedBy: actor.id,
+    });
+
+    await repo.logActivity({
+      entityType: "DOCUMENT",
+      entityId: document.id,
+      userId: actor.id,
+      type: "UPLOAD_OTHER_DOCUMENT",
+      message: `Document "${originalName}" ajouté (Other)`,
+    });
+
+    return repo.findDocumentById(document.id);
+  } catch (err) {
+    await fs.promises.unlink(file.path).catch(() => {});
+    throw err.status ? err : { status: 500, message: "Échec de l'enregistrement du document" };
+  }
+}
+
+// Renommage (§7/§12/§19) — modifie UNIQUEMENT `displayName`, jamais
+// `originalName`/`storedFileName`/`fileUrl` : le fichier physique et son URL
+// restent inchangés, l'utilisateur ne peut pas altérer le chemin réel.
+async function renameOtherDocument(id, displayName, actor) {
+  const document = await repo.findDocumentById(id);
+  if (!document || document.module !== OTHER_MODULE) throw { status: 404, message: "Document introuvable" };
+
+  const clean = sanitizeDisplayName(displayName);
+  const previousName = document.displayName ?? document.originalName;
+  await repo.updateDocument(document, { displayName: clean });
+
+  await repo.logActivity({
+    entityType: "DOCUMENT",
+    entityId: document.id,
+    userId: actor.id,
+    type: "RENAME_OTHER_DOCUMENT",
+    message: `Document renommé "${previousName}" → "${clean}"`,
+  });
+
+  return repo.findDocumentById(id);
+}
+
+// Suppression (§10) — réelle en base + fichier physique, jamais un soft
+// delete. Contrairement à `deleteEntityWithDocuments` (qui supprime des
+// documents RATTACHÉS À une entité parente), ici le document EST l'entité :
+// une seule ligne, transaction à une seule écriture (cohérence conservée
+// malgré tout, même style que les suppressions Purchase Order/Shipment/
+// Invoice ci-dessus).
+async function deleteOtherDocument(id, actor) {
+  const document = await repo.findDocumentById(id);
+  if (!document || document.module !== OTHER_MODULE) throw { status: 404, message: "Document introuvable" };
+
+  const originalName = document.displayName ?? document.originalName;
+  await sequelize.transaction(async (t) => {
+    await repo.destroyDocument(document, { transaction: t });
+  });
+
+  const filePath = path.join(UPLOAD_DIR, document.storedFileName);
+  try {
+    await fs.promises.unlink(filePath);
+  } catch (_) {
+    // Fichier déjà absent du disque — ne bloque jamais la suppression en base.
+  }
+
+  await repo.logActivity({
+    entityType: "DOCUMENT",
+    entityId: id,
+    userId: actor.id,
+    type: "DELETE_OTHER_DOCUMENT",
+    message: `Document "${originalName}" supprimé (Other)`,
+  });
+
+  return { id };
+}
+
 // ── SHIPMENT OF PRODUCTS TO THE CUSTOMERS (§7) ──────────────────────────
 //
 // "New shipment" simplifié : le formulaire ne collecte plus que des
@@ -300,6 +574,18 @@ async function generateShipmentReference(transaction) {
   const prefix = `SHIP-${year}-`;
   const count = await repo.countShipments({ reference: { [Op.like]: `${prefix}%` } }, { transaction });
   return `${prefix}${String(count + 1).padStart(6, "0")}`;
+}
+
+// Identifiant métier "Shipment #" (§MODIFICATION — CUSTOMER SHIPMENTS) —
+// format "SH-00001", généré INCONDITIONNELLEMENT (contrairement à `reference`
+// ci-dessus, qui n'est auto-générée que si l'OCR n'a pas détecté de numéro
+// de BL fiable). Un seul compteur global, jamais lié à l'année. Généré UNE
+// SEULE FOIS par Customer Shipment (jamais par ligne produit) — voir
+// l'unique appel dans processShipmentUpload.
+async function generateShipmentNumber(transaction) {
+  const prefix = "SH-";
+  const count = await repo.countShipments({ shipmentNumber: { [Op.like]: `${prefix}%` } }, { transaction });
+  return `${prefix}${String(count + 1).padStart(5, "0")}`;
 }
 
 function buildShipmentWhere(filters = {}) {
@@ -437,9 +723,11 @@ async function processShipmentUpload(files, actor) {
     try {
       await sequelize.transaction(async (t) => {
         const reference = hasReliableDeliveryNumber ? extraction.deliveryNumber.value : await generateShipmentReference(t);
+        const shipmentNumber = await generateShipmentNumber(t);
 
         const shipment = await repo.createShipment(
           {
+            shipmentNumber,
             reference,
             customerReference: extraction.reference.value,
             customerId: null, // jamais résolu automatiquement vers un client existant (nom/tél/adresse lus, pas un id)
@@ -469,16 +757,23 @@ async function processShipmentUpload(files, actor) {
 
         if (extraction.items.length) {
           await repo.createShipmentItems(
-            extraction.items.map((it, i) => ({
-              shipmentId: shipment.id,
-              sortOrder: i,
-              reference: it.reference ?? null,
-              designation: it.designation ?? null,
-              unit: it.unit ?? null,
-              diameter: it.diameter ?? null,
-              meshSize: it.meshSize ?? null,
-              quantity: it.quantity ?? null,
-            })),
+            extraction.items.map((it, i) => {
+              // §CORRECTION EXTRACTION — SÉPARATION UNITÉ / DIAMÈTRE : filet
+              // de sécurité si `unit` arrive fusionné ("M² 10") malgré
+              // l'extraction positionnelle — jamais retouché si `diameter`
+              // est déjà rempli (voir normalizeUnitAndDiameter).
+              const { unit, diameter } = normalizeUnitAndDiameter(it.unit, it.diameter);
+              return {
+                shipmentId: shipment.id,
+                sortOrder: i,
+                reference: it.reference ?? null,
+                designation: it.designation ?? null,
+                unit: unit ?? null,
+                diameter: diameter ?? null,
+                meshSize: it.meshSize ?? null,
+                quantity: it.quantity ?? null,
+              };
+            }),
             { transaction: t }
           );
         }
@@ -533,15 +828,25 @@ async function processShipmentUpload(files, actor) {
       plain.documents = documents;
       return plain;
     } catch (err) {
-      // Course rare sur la référence auto-générée/le numéro BL détecté (deux
-      // requêtes concurrentes) → un nouvel essai suffit ; jamais retenté si
-      // un numéro de BL fiable avait été détecté (véritable doublon).
-      const isAutoReferenceConflict = !hasReliableDeliveryNumber && err?.name === "SequelizeUniqueConstraintError";
-      if (isAutoReferenceConflict && attempt < MAX_ATTEMPTS) continue;
+      // Course rare sur un champ auto-généré — référence de repli OU
+      // Shipment # (généré INCONDITIONNELLEMENT, voir generateShipmentNumber)
+      // — deux requêtes concurrentes comptent la même valeur suivante → un
+      // nouvel essai suffit. Jamais retenté si le VRAI numéro de BL détecté
+      // par OCR est le champ réellement en conflit (véritable doublon
+      // métier) — `err.fields` (fourni par Postgres/Sequelize) identifie la
+      // colonne en cause quand disponible, avec repli sur l'ancien
+      // comportement (tout conflit = auto-référence) s'il ne l'est pas.
+      const conflictFields = err?.fields ? Object.keys(err.fields) : [];
+      const isShipmentNumberConflict = err?.name === "SequelizeUniqueConstraintError" && conflictFields.includes("shipmentNumber");
+      const isAutoReferenceConflict =
+        err?.name === "SequelizeUniqueConstraintError" &&
+        !hasReliableDeliveryNumber &&
+        (!conflictFields.length || conflictFields.includes("reference"));
+      if ((isShipmentNumberConflict || isAutoReferenceConflict) && attempt < MAX_ATTEMPTS) continue;
 
       await Promise.all(files.map((f) => fs.promises.unlink(f.path).catch(() => {})));
 
-      if (hasReliableDeliveryNumber && err?.name === "SequelizeUniqueConstraintError") {
+      if (hasReliableDeliveryNumber && err?.name === "SequelizeUniqueConstraintError" && !isShipmentNumberConflict) {
         throw { status: 409, message: `Un shipment avec le numéro "${extraction.deliveryNumber.value}" existe déjà` };
       }
       throw err.status ? err : { status: 500, message: "Échec du traitement du Bon de Livraison" };
@@ -619,6 +924,11 @@ function buildInvoiceWhere(filters = {}) {
   const where = {};
   if (filters.customerId) where.customerId = filters.customerId;
   if (filters.status) where.status = filters.status;
+  // Factured Shipments (§8) : une facture payée est retirée de cette liste
+  // dès l'enregistrement du paiement (elle apparaît alors dans Paid
+  // Factures — voir listPaidInvoices ci-dessous) — sauf si l'appelant
+  // filtre explicitement sur un statut donné (y compris "PAID").
+  else where.status = { [Op.ne]: "PAID" };
   if (filters.startDate || filters.endDate) {
     where.invoiceDate = {};
     if (filters.startDate) where.invoiceDate[Op.gte] = filters.startDate;
@@ -839,7 +1149,18 @@ async function processInvoiceUpload(file, actor) {
 
   const amount = extraction.totals.subtotalHT.value;
   const tax = extraction.totals.totalTax.value;
-  const total = extraction.totals.totalTTC.value != null ? extraction.totals.totalTTC.value : amount != null && tax != null ? amount + tax : null;
+  // Certaines factures n'impriment aucun "Total TTC" — seulement "NET À
+  // PAYER" (§11) : c'est le montant bas de page déjà calculé par le
+  // document, priorité sur un recalcul HT+Taxe côté serveur (jamais inventer
+  // une valeur quand elle est déjà imprimée ailleurs sur le document).
+  const total =
+    extraction.totals.totalTTC.value != null
+      ? extraction.totals.totalTTC.value
+      : extraction.totals.netToPay?.value != null
+        ? extraction.totals.netToPay.value
+        : amount != null && tax != null
+          ? amount + tax
+          : null;
 
   const MAX_ATTEMPTS = 3;
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
@@ -880,21 +1201,26 @@ async function processInvoiceUpload(file, actor) {
 
         if (extraction.items.length) {
           await repo.createInvoiceItems(
-            extraction.items.map((it, i) => ({
-              invoiceId: invoice.id,
-              sortOrder: i,
-              reference: it.reference ?? null,
-              designation: it.designation ?? null,
-              unit: it.unit ?? null,
-              diameter: it.diameter ?? null,
-              meshSize: it.meshSize ?? null,
-              quantity: it.quantity ?? null,
-              unitPriceHT: it.unitPriceHT ?? null,
-              rms: it.rms ?? null,
-              amountHT: it.amountHT ?? null,
-              tax1: it.tax1 ?? null,
-              tax2: it.tax2 ?? null,
-            })),
+            extraction.items.map((it, i) => {
+              // §CORRECTION EXTRACTION — SÉPARATION UNITÉ / DIAMÈTRE : voir
+              // le même filet de sécurité côté Shipment ci-dessus.
+              const { unit, diameter } = normalizeUnitAndDiameter(it.unit, it.diameter);
+              return {
+                invoiceId: invoice.id,
+                sortOrder: i,
+                reference: it.reference ?? null,
+                designation: it.designation ?? null,
+                unit: unit ?? null,
+                diameter: diameter ?? null,
+                meshSize: it.meshSize ?? null,
+                quantity: it.quantity ?? null,
+                unitPriceHT: it.unitPriceHT ?? null,
+                rms: it.rms ?? null,
+                amountHT: it.amountHT ?? null,
+                tax1: it.tax1 ?? null,
+                tax2: it.tax2 ?? null,
+              };
+            }),
             { transaction: t }
           );
         }
@@ -977,7 +1303,10 @@ async function processInvoiceUpload(file, actor) {
 // Champs spécifiques à chaque mode de règlement — mis à NULL pour tous les
 // modes qui ne les nécessitent pas, quoi que le client ait pu envoyer
 // (§COMPORTEMENT SELON PAYMENT METHOD : "Les champs spécifiques doivent
-// être NULL pour les méthodes qui ne les nécessitent pas").
+// être NULL pour les méthodes qui ne les nécessitent pas"). Le nouveau
+// formulaire minimal (Virement/Versement/Chèque/Traite) ne les collecte
+// plus du tout — cette table reste utile pour ignorer silencieusement
+// d'éventuels champs résiduels envoyés par un ancien client, jamais requise.
 const PAYMENT_METHOD_FIELDS = {
   "Chèque": ["chequeNumber", "bankName", "chequeDate"],
   Traite: ["billOfExchangeNumber", "bankName", "dueDate"],
@@ -993,8 +1322,20 @@ async function registerPayment(invoiceId, body, file, actor) {
   const invoice = await repo.findInvoiceById(invoiceId);
   if (!invoice) throw { status: 404, message: "Facture introuvable" };
 
+  // Formulaire minimal (§2/§6) : method + justificatif SEULS demandés à
+  // l'utilisateur. Le justificatif est obligatoire (vérifié ici — req.file
+  // n'est pas dans req.body, donc pas validable par Joi) ; amount/paidDate
+  // ne sont plus saisis manuellement, on les déduit du contexte plutôt que
+  // de bloquer l'enregistrement pour des champs que l'UI ne collecte plus
+  // (§5) : montant = total de la facture (paiement complet), date = date de
+  // règlement déjà extraite par l'OCR, sinon aujourd'hui.
+  if (!file) throw { status: 400, message: "Un justificatif est requis pour enregistrer le paiement" };
+
+  const amount = body.amount != null ? body.amount : Number(invoice.total) || 0;
+  const paidDate = body.paidDate || invoice.paymentDate || new Date().toISOString().slice(0, 10);
+
   const allowedFields = new Set(PAYMENT_METHOD_FIELDS[body.method] || []);
-  const paymentData = { invoiceId, amount: body.amount, paidDate: body.paidDate, method: body.method, reference: body.reference || null };
+  const paymentData = { invoiceId, amount, paidDate, method: body.method, reference: body.reference || null };
   for (const f of ALL_METHOD_SPECIFIC_FIELDS) paymentData[f] = allowedFields.has(f) ? body[f] || null : null;
 
   let payment;
@@ -1063,10 +1404,15 @@ async function registerPayment(invoiceId, body, file, actor) {
 
 module.exports = {
   getDashboard,
+  getDashboardMonthly,
   listRawMaterials,
   processRawMaterialUpload,
   getRawMaterial,
   deleteRawMaterial,
+  listOtherDocuments,
+  uploadOtherDocument,
+  renameOtherDocument,
+  deleteOtherDocument,
   listShipments,
   createShipment,
   processShipmentUpload,

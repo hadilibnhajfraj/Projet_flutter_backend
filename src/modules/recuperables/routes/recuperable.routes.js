@@ -7,8 +7,15 @@ const { authRequired } = require("../../../middleware/auth.middleware");
 const { requireRole } = require("../../../middleware/requireRole");
 
 // Mêmes rôles que POR PROMESH / IndustrialRecord — module dédié aux
-// opérateurs du même espace industriel.
-const READ_WRITE_ROLES = ["admin", "superadmin", "superadmin2", "responsable_logistique_achat"];
+// opérateurs du même espace industriel. finance_production
+// (§MODIFICATION — INTERFACE PRODUCTION DE DENNISREDFEATHER) obtient le même
+// accès lecture/écriture, SANS le droit de suppression (voir DELETE_ROLES
+// ci-dessous — décision explicite, contrairement à responsable_logistique_achat
+// qui garde ce droit ici).
+const READ_WRITE_ROLES = ["admin", "superadmin", "superadmin2", "responsable_logistique_achat", "finance_production"];
+// Delete : inchangé par rapport à avant l'ajout de finance_production, qui
+// en est volontairement exclu.
+const DELETE_ROLES = ["admin", "superadmin", "superadmin2", "responsable_logistique_achat"];
 
 router.use(authRequired);
 router.use(requireRole(...READ_WRITE_ROLES));
@@ -19,6 +26,6 @@ router.post("/", validateSaveFiche, ctrl.saveFiche);
 router.get("/", ctrl.listFiches);
 router.get("/:id", ctrl.getFiche);
 router.put("/:id/terminer", ctrl.terminerFiche);
-router.delete("/:id", ctrl.deleteFiche);
+router.delete("/:id", requireRole(...DELETE_ROLES), ctrl.deleteFiche);
 
 module.exports = router;

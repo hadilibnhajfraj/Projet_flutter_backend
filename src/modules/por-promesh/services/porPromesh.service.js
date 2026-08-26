@@ -11,10 +11,15 @@ require("../../../models/associations");
 
 // Mêmes rôles que READ_WRITE_ROLES (routes) — qui peut opérer ce module peut
 // aussi apparaître dans la liste déroulante "Opérateur".
-const OPERATOR_ROLES = ["admin", "superadmin", "superadmin2", "responsable_logistique_achat"];
+const OPERATOR_ROLES = ["admin", "superadmin", "superadmin2", "responsable_logistique_achat", "finance_production"];
 
 // responsable_logistique_achat only ever sees/edits its own fiches —
-// admin/superadmin see everything.
+// admin/superadmin see everything. finance_production (§MODIFICATION —
+// DASHBOARD PRODUCTION : finance_production doit voir exactement les mêmes
+// données que Superadmin) est délibérément EXCLU de l'owner-scoping — ce
+// rôle voit/consulte toutes les fiches, comme admin/superadmin, mais reste
+// soumis à DELETE_ROLES (jamais de suppression) et n'obtient aucun autre
+// droit admin (users, settings, etc.).
 function isOwnerScoped(role) {
   return role === "responsable_logistique_achat";
 }

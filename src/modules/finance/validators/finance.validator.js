@@ -53,17 +53,21 @@ const createInvoiceSchema = Joi.object({
   total: Joi.number().min(0).allow(null).empty("").optional(),
 });
 
-// "Register payment" (§REGISTER PAYMENT) — dropdown FERMÉ, exactement ces 4
-// valeurs. Les champs spécifiques Chèque/Traite restent optionnels ici (le
-// service les met explicitement à NULL pour les modes qui ne les
-// nécessitent pas — voir finance.service.js#registerPayment) plutôt que
-// rejetés à la validation, pour rester tolérant si le frontend envoie tous
-// les champs du formulaire même masqués.
-const PAYMENT_METHODS = ["Carte bancaire", "Espèce", "Chèque", "Traite"];
+// "Register payment" (§MODIFIER LE WORKFLOW PAYMENT / PAID FACTURES) —
+// formulaire minimal : dropdown FERMÉ à exactement ces 4 valeurs + un
+// justificatif (obligatoire, vérifié côté service — voir
+// finance.service.js#registerPayment, req.file n'est pas dans req.body donc
+// pas validable ici). `amount`/`paidDate` ne sont plus saisis par
+// l'utilisateur (§5 : ne rien exiger d'autre que la méthode) — optionnels
+// ici, le service les déduit (montant total de la facture / date de
+// règlement extraite par OCR) quand absents. Les champs Chèque/Traite
+// restent optionnels et inutilisés par le nouveau formulaire, mais on les
+// garde acceptés pour ne rien casser côté backend (§13).
+const PAYMENT_METHODS = ["Virement", "Versement", "Chèque", "Traite"];
 
 const registerPaymentSchema = Joi.object({
-  amount: Joi.number().greater(0).required(),
-  paidDate: Joi.date().iso().required(),
+  amount: Joi.number().greater(0).empty("").optional(),
+  paidDate: Joi.date().iso().empty("").optional(),
   method: Joi.string().valid(...PAYMENT_METHODS).required(),
   reference: Joi.string().max(150).allow("", null).optional(),
   chequeNumber: Joi.string().max(100).allow("", null).optional(),

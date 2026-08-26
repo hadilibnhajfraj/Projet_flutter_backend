@@ -47,12 +47,17 @@ describe("Finance — accès par rôle", () => {
   let financeToken;
   let userToken;
 
+  // 2x bcrypt.hash (création) + 2x signin (bcrypt.compare) à coût 12 — chacun
+  // ~700-800ms sur cette machine, soit un total déjà proche du timeout par
+  // défaut de Jest (5000ms) rien qu'en fonctionnement normal ; une charge
+  // système même légère le dépasse. Timeout explicite plus large, purement
+  // pour la fiabilité du hook — ne change aucun comportement testé.
   beforeAll(async () => {
     const financeUser = await createTestUser("finance_probar");
     const plainUser = await createTestUser("user");
     financeToken = await signIn(financeUser.email);
     userToken = await signIn(plainUser.email);
-  });
+  }, 20000);
 
   afterAll(async () => {
     await User.destroy({ where: { id: createdUserIds } });
@@ -61,6 +66,7 @@ describe("Finance — accès par rôle", () => {
 
   test.each([
     "/finance/dashboard",
+    "/finance/dashboard/monthly",
     "/finance/raw-materials",
     "/finance/shipments",
     "/finance/invoices",

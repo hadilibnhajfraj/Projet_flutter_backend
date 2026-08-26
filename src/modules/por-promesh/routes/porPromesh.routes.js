@@ -10,9 +10,12 @@ const { handleUploadError } = require("../../../middleware/projectAction.validat
 
 // Create/read/update: admin, superadmin, and the logistics/purchasing role
 // (the latter scoped to its own fiches — enforced in the service layer).
-const READ_WRITE_ROLES = ["admin", "superadmin", "superadmin2", "responsable_logistique_achat"];
+// finance_production (§MODIFICATION — INTERFACE PRODUCTION DE
+// DENNISREDFEATHER) gets the same Production read/write scope as
+// responsable_logistique_achat, in addition to its existing Finance access.
+const READ_WRITE_ROLES = ["admin", "superadmin", "superadmin2", "responsable_logistique_achat", "finance_production"];
 // Delete is intentionally admin/superadmin only — not part of the granted
-// permissions for responsable_logistique_achat.
+// permissions for responsable_logistique_achat nor finance_production.
 const DELETE_ROLES = ["admin", "superadmin", "superadmin2"];
 
 router.use(authRequired);

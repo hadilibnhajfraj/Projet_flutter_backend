@@ -23,6 +23,7 @@ const { PDFParse } = require("pdf-parse");
 
 const app = require("../src/app");
 const { sequelize } = require("../src/db");
+const { detectInvoiceFormat } = require("../src/modules/finance/services/invoiceFieldExtraction.service");
 const { UPLOAD_DIR } = require("../src/middleware/financeDocumentUpload.middleware");
 const User = require("../src/models/User");
 const Client = require("../src/models/client.model");
@@ -290,6 +291,199 @@ function buildSageStyleMultiItemInvoicePdf({ invoiceNumber }) {
     doc.text("500,000", 690, fiscalTop + 16);
     doc.text("NET A PAYER", 450, fiscalTop + 40);
     doc.text("4 108,930", 450, fiscalTop + 54);
+
+    doc.end();
+  });
+}
+
+// Reproduit VERBATIM l'exemple de la spec "MODIFIER LE WORKFLOW PAYMENT /
+// PAID FACTURES" (§11-12) : AUCUN bloc fiscal Code/Base/Taux/Taxe, juste
+// "Total HT" / "TVA" / "NET À PAYER" à plat en bas de page — piège
+// spécifique : sans libellé "TVA" dédié dans l'extraction positionnelle, le
+// total des taxes resterait à tort null (donc sauvegardé à 0). Même ligne
+// "Conditions de règlement : le 23/07/26 Traite" que le document réel
+// (FVL260096), pour couvrir la canonicalisation du mode de paiement en même
+// temps.
+function buildFlatTotalsInvoicePdf({ invoiceNumber }) {
+  return new Promise((resolve) => {
+    const doc = new PDFDocument({ margin: 40, size: [950, 700] });
+    const chunks = [];
+    doc.on("data", (c) => chunks.push(c));
+    doc.on("end", () => resolve(Buffer.concat(chunks)));
+
+    doc.fontSize(9);
+    doc.text("Numéro", 40, 40);
+    doc.text(invoiceNumber, 40, 54);
+    doc.text("Date", 140, 40);
+    doc.text("26/06/26", 140, 54);
+
+    doc.text("C7654321Z", 650, 40);
+    doc.text("STE FLAT TOTALS TEST", 650, 54);
+    doc.text("RUE DE LA PAIX", 650, 68);
+    doc.text("1000 TUNIS", 650, 82);
+
+    doc.fontSize(20).text("FACTURE", 40, 140);
+
+    const top = 190;
+    const rowH = 30;
+    const cols = [40, 100, 340, 380, 420, 470, 520, 570, 620, 680, 720, 760];
+    const headers = ["Référence", "Désignation", "Unité", "Diam.", "Maille", "Qté", "P.U HT", "Rms", "Montant HT", "Taxe1", "Taxe2"];
+    doc.rect(40, top, 720, rowH).stroke();
+    for (let i = 1; i < cols.length - 1; i++) doc.moveTo(cols[i], top).lineTo(cols[i], top + rowH * 2).stroke();
+    doc.fontSize(9);
+    headers.forEach((h, i) => doc.text(h, cols[i] + 3, top + 10, { width: cols[i + 1] - cols[i] - 6 }));
+
+    const row1 = top + rowH;
+    doc.rect(40, row1, 720, rowH).stroke();
+    const values = ["00200002", "PROMECHE FLAT TEST", "M²", "06", "10/10", "1,00", "16 741,280", "", "16 741,280", "1", "19"];
+    values.forEach((v, i) => doc.text(v, cols[i] + 3, row1 + 10, { width: cols[i + 1] - cols[i] - 6 }));
+
+    // Totaux à PLAT — pas de "Total TTC" ni de bloc Code/Base/Taux/Taxe.
+    const totalsTop = 400;
+    doc.text("Total HT", 450, totalsTop);
+    doc.text("TVA", 570, totalsTop);
+    doc.text("NET À PAYER", 690, totalsTop);
+    doc.text("16 741,280", 450, totalsTop + 16);
+    doc.text("3 381,065", 570, totalsTop + 16);
+    doc.text("20 122,345", 690, totalsTop + 16);
+
+    doc.text("Conditions de règlement :", 40, 460);
+    doc.text("le", 260, 460);
+    doc.text("23/07/26", 280, 460);
+    doc.text("Traite", 420, 460);
+
+    doc.end();
+  });
+}
+
+// §CORRECTION PRIORITAIRE — EXTRACTION OCR FACTURE NADEC : reproduit
+// VERBATIM la facture de référence du ticket (fournisseur NORD AFRICAINE DES
+// ECHANGES COMMERCIAUX/NADEC, client COMPOSITE BUILDING INNOVATION FIRST/
+// CBIF, 3 lignes produit, zone Taxes ET zone Totaux séparées, BC N° "vide",
+// annotations manuscrites "Resine"/"ISO" positionnées HORS de la grille du
+// tableau — jamais interprétées comme des données). Nombres imprimés en
+// virgule décimale (convention tunisienne déjà utilisée par toutes les
+// factures SAGE de ce fichier et par normalizeNumber) — le ticket les tape
+// en notation point (ex. "960.000"), mais la VALEUR NUMÉRIQUE réellement
+// vérifiée par les assertions est strictement identique quel que soit le
+// séparateur choisi pour ce fixture synthétique ; un point suivi
+// d'EXACTEMENT 3 chiffres est par ailleurs traité par normalizeNumber comme
+// un séparateur de milliers (ambiguïté volontaire de cette fonction,
+// partagée avec toutes les autres factures de ce fichier) — la virgule
+// reste donc le choix fiable pour ce fixture.
+function buildNADECInvoicePdf({ invoiceNumber }) {
+  return new Promise((resolve) => {
+    const doc = new PDFDocument({ margin: 40, size: [950, 700] });
+    const chunks = [];
+    doc.on("data", (c) => chunks.push(c));
+    doc.on("end", () => resolve(Buffer.concat(chunks)));
+
+    doc.fontSize(9);
+    // Bloc fournisseur (émetteur) — nom complet + sigle sur 2 lignes,
+    // DISTINCTS l'un de l'autre (jamais confondu avec le bloc "Client").
+    doc.text("Fournisseur", 40, 30);
+    doc.text("NORD AFRICAINE DES ECHANGES COMMERCIAUX", 40, 44);
+    doc.text("NADEC", 40, 58);
+    doc.text("Adresse", 40, 76);
+    doc.text("ZI SIDI REZIG, 2 RUE DU PLASTIQUE", 40, 90);
+    doc.text("2033 MEGRINE TUNISIE", 40, 104);
+    doc.text("Téléphone", 40, 122);
+    doc.text("71 426 346", 40, 136);
+    doc.text("TVA fournisseur", 40, 154);
+    doc.text("0031422Q/A/M/000", 40, 168);
+
+    // Bloc facture + références BL/BC/Opérateur/Vendeur/Page — propre à ce
+    // format. BC N° explicitement "vide" (aucune valeur imprimée) →
+    // references.bcNumber doit rester `null`, jamais une chaîne vide/devinée.
+    doc.text("N° Facture", 650, 30);
+    doc.text(invoiceNumber, 650, 44);
+    doc.text("Date facture", 650, 58);
+    doc.text("05/01/2026", 650, 72);
+    doc.text("BL N°", 650, 86);
+    doc.text("26/000021", 650, 100);
+    doc.text("BC N°", 650, 114);
+    doc.text("vide", 650, 128);
+    doc.text("Opérateur", 650, 142);
+    doc.text("NAWEL", 650, 156);
+    doc.text("Vendeur", 650, 170);
+    doc.text("NADEC", 650, 184);
+    doc.text("Page", 650, 198);
+    doc.text("1/1", 650, 212);
+
+    // Bloc "Client" — nom complet + sigle sur 2 lignes FUSIONNÉS (contrairement
+    // au fournisseur), code/identifiant client ET "Code TVA" DISTINCTS.
+    doc.text("Client", 40, 190);
+    doc.text("COMPOSITE BUILDING INNOVATION FIRST", 40, 204);
+    doc.text("CBIF", 40, 218);
+    doc.text("Code / identifiant client", 40, 236);
+    doc.text("41112686", 40, 250);
+    doc.text("Adresse client", 40, 268);
+    doc.text("RUE 42500 EL HRAIRIA", 40, 282);
+    doc.text("2051 TUNIS TUNISIE", 40, 296);
+    doc.text("Code TVA", 40, 314);
+    doc.text("1567517E/A/M/000", 40, 328);
+
+    doc.fontSize(16).text("FACTURE", 40, 342);
+
+    const top = 362;
+    const rowH = 30;
+    const cols = [40, 160, 380, 430, 490, 550, 620, 780];
+    const headers = ["N° Article", "Désignation", "Unité", "Qté", "P.U HT", "Taxe", "MT Net"];
+
+    // §9-10 : annotations manuscrites ("Resine", "ISO") positionnées AU-DESSUS
+    // de la ligne d'en-tête du tableau (jamais dans la grille des rangées
+    // produits) — le moteur d'extraction ne doit ni les rattacher à une
+    // désignation ni en faire une 4ème ligne produit fantôme.
+    doc.fontSize(7);
+    doc.text("Resine", 220, top - 14);
+    doc.text("ISO", 520, top - 14);
+    doc.fontSize(8);
+
+    doc.rect(40, top, 740, rowH).stroke();
+    for (let i = 1; i < cols.length - 1; i++) doc.moveTo(cols[i], top).lineTo(cols[i], top + rowH * 4).stroke();
+    headers.forEach((h, i) => doc.text(h, cols[i] + 3, top + 10, { width: cols[i + 1] - cols[i] - 6 }));
+
+    // Les 3 lignes EXACTES de l'exemple du ticket (§2) — références
+    // alphanumériques conservées TELLES QUELLES (points/tirets/"/").
+    const rows = [
+      ["PEINTU.PE-ALK/0149", "EPOXY LAPOX AR-101 FUT 240 KG", "KG", "960,000", "9,500", "19,00", "9 120,000"],
+      ["PEINTU.PE-ALK/0040", "EPOXY LAPOX AH-112 FUT 200 KG", "KG", "800,000", "14,500", "19,00", "11 600,000"],
+      ["PEINTU.PE-ALK/0433", "DILUANT EL 039 FUT 200 L", "LITRE", "200,000", "2,800", "19,00", "560,000"],
+    ];
+    doc.rect(40, top + rowH, 740, rowH * rows.length).stroke();
+    rows.forEach((values, r) => {
+      if (r > 0) doc.moveTo(40, top + rowH + r * rowH).lineTo(780, top + rowH + r * rowH).stroke();
+      const y = top + rowH + r * rowH + 10;
+      values.forEach((v, i) => doc.text(v, cols[i] + 3, y, { width: cols[i + 1] - cols[i] - 6 }));
+    });
+
+    // Zone Taxes (§4) ET zone Totaux (§3) — DEUX blocs séparés, la même
+    // valeur de taxe (4 043,200) apparaît dans les deux, jamais confondue
+    // avec Assiette/Total HT/Total TTC/Timbre fiscal voisins.
+    const zonesTop = 500;
+    doc.fontSize(9);
+    doc.text("Taux TVA", 350, zonesTop);
+    doc.text("19,00 %", 350, zonesTop + 14);
+    doc.text("Assiette", 460, zonesTop);
+    doc.text("21 280,000", 460, zonesTop + 14);
+    doc.text("Montant taxe", 350, zonesTop + 40);
+    doc.text("4 043,200", 350, zonesTop + 54);
+
+    // Zone Totaux (§3) — valeur Total TTC IMPRIMÉE (25 324,200), qui ne
+    // correspond pas exactement à Total HT + Montant Taxe(s) + Timbre Fiscal
+    // recalculé (25 324,200 vs 25 324,200... en réalité 21280+4043,2+1=
+    // 25324,2 — cohérent ici ; conservé néanmoins comme valeur LUE, jamais
+    // recalculée, conformément à la règle générale du ticket §3/§12).
+    doc.text("Total HT", 620, zonesTop);
+    doc.text("21 280,000", 620, zonesTop + 14);
+    doc.text("Montant Net", 620, zonesTop + 28);
+    doc.text("21 280,000", 620, zonesTop + 42);
+    doc.text("Montant Taxe(s)", 620, zonesTop + 56);
+    doc.text("4 043,200", 620, zonesTop + 70);
+    doc.text("Timbre Fiscal", 620, zonesTop + 84);
+    doc.text("1,000", 620, zonesTop + 98);
+    doc.text("Total TTC", 620, zonesTop + 112);
+    doc.text("25 324,200", 620, zonesTop + 126);
 
     doc.end();
   });
@@ -886,6 +1080,9 @@ describe("Finance — CRUD (documents / shipments / invoices / payments)", () =>
     expect(res.status).toBe(201);
     const order = res.body.data;
 
+    // Identifiant métier généré par l'application (§IDENTIFICATION DES
+    // DIFFÉRENTS PURCHASE ORDERS) — jamais extrait du document.
+    expect(order.poNumber).toMatch(/^PO-\d{5}$/);
     expect(order.orderNumber).toBe(`BCL260005-${RUN_ID}`);
     expect(order.orderDate).toBe("2026-04-29");
     // Bloc client SANS aucun libellé adjacent (code+nom+adresse empilés,
@@ -930,6 +1127,43 @@ describe("Finance — CRUD (documents / shipments / invoices / payments)", () =>
     expect(dbItems).toHaveLength(3);
   });
 
+  test("'Inflow of raw materials' — deux Bons de Commande uploadés successivement → PO # différents, strictement séquentiels, un seul par bon (pas par ligne produit)", async () => {
+    const pdfA = await buildPurchaseOrderPdf({ orderNumber: `BCL260006-${RUN_ID}`, customerCode: "F0011111A", customerName: "CLIENT A" });
+    const resA = await request(app)
+      .post("/finance/raw-materials/upload")
+      .set("Authorization", `Bearer ${token}`)
+      .attach("file", pdfA, { filename: `bon-commande-a-${RUN_ID}.pdf`, contentType: "application/pdf" });
+    expect(resA.status).toBe(201);
+    const orderA = resA.body.data;
+    createdPurchaseOrderIds.push(orderA.id);
+
+    const pdfB = await buildPurchaseOrderPdf({ orderNumber: `BCL260007-${RUN_ID}`, customerCode: "F0022222B", customerName: "CLIENT B" });
+    const resB = await request(app)
+      .post("/finance/raw-materials/upload")
+      .set("Authorization", `Bearer ${token}`)
+      .attach("file", pdfB, { filename: `bon-commande-b-${RUN_ID}.pdf`, contentType: "application/pdf" });
+    expect(resB.status).toBe(201);
+    const orderB = resB.body.data;
+    createdPurchaseOrderIds.push(orderB.id);
+
+    expect(orderA.poNumber).toMatch(/^PO-\d{5}$/);
+    expect(orderB.poNumber).toMatch(/^PO-\d{5}$/);
+    // Bons DIFFÉRENTS → PO # différents, jamais le même pour deux documents
+    // distincts, et strictement croissant (compteur global, jamais réutilisé).
+    expect(orderB.poNumber).not.toBe(orderA.poNumber);
+    expect(Number(orderB.poNumber.split("-")[1])).toBeGreaterThan(Number(orderA.poNumber.split("-")[1]));
+
+    // Le PO # est stable dans le temps (relu identique) et — puisqu'il vit
+    // sur le Purchase Order, jamais sur l'item — structurellement partagé
+    // par les 3 lignes produit de orderA (impossible d'avoir un PO # par
+    // ligne : FinancePurchaseOrderItem n'a pas cette colonne).
+    const refetched = await request(app).get(`/finance/raw-materials/${orderA.id}`).set("Authorization", `Bearer ${token}`);
+    expect(refetched.status).toBe(200);
+    expect(refetched.body.data.poNumber).toBe(orderA.poNumber);
+    expect(refetched.body.data.items).toHaveLength(3);
+    expect(refetched.body.data.items.every((it) => !("poNumber" in it))).toBe(true);
+  });
+
   test("'Inflow of raw materials' — même mise en page, client/produits/quantités différents → générique, pas codé en dur pour un seul document", async () => {
     const pdf = await buildPurchaseOrderPdf({
       orderNumber: `BCL999999-${RUN_ID}`,
@@ -965,6 +1199,9 @@ describe("Finance — CRUD (documents / shipments / invoices / payments)", () =>
     expect(res.status).toBe(201);
     const s = res.body.data;
 
+    // Identifiant métier généré par l'application (§MODIFICATION — CUSTOMER
+    // SHIPMENTS) — jamais extrait du document, distinct de `reference`.
+    expect(s.shipmentNumber).toMatch(/^SH-\d{5}$/);
     // Jamais une simple détection du nom de fichier : les valeurs viennent
     // du CONTENU du PDF, distinctes du nom de fichier utilisé ci-dessus.
     expect(s.reference).toBe(`BL-${RUN_ID}`);
@@ -1002,6 +1239,42 @@ describe("Finance — CRUD (documents / shipments / invoices / payments)", () =>
     const dbShipment = await FinanceShipment.findByPk(s.id);
     expect(dbShipment.customerName).toBe("STE XYZ TRADING SARL");
     expect(dbShipment.driverName).toBe("Ali Ben Salah");
+  });
+
+  test("'New shipment' — deux Bons de Livraison uploadés successivement → Shipment # différents, strictement séquentiels, un seul par bon (pas par ligne produit)", async () => {
+    const pdfA = await buildSyntheticDeliveryNotePdf({ deliveryNumber: `BL-SHNUM-A-${RUN_ID}` });
+    const resA = await request(app)
+      .post("/finance/shipments")
+      .set("Authorization", `Bearer ${token}`)
+      .attach("documents", pdfA, { filename: `bon-livraison-a-${RUN_ID}.pdf`, contentType: "application/pdf" });
+    expect(resA.status).toBe(201);
+    const shipmentA = resA.body.data;
+    createdShipmentIds.push(shipmentA.id);
+
+    const pdfB = await buildSyntheticDeliveryNotePdf({ deliveryNumber: `BL-SHNUM-B-${RUN_ID}` });
+    const resB = await request(app)
+      .post("/finance/shipments")
+      .set("Authorization", `Bearer ${token}`)
+      .attach("documents", pdfB, { filename: `bon-livraison-b-${RUN_ID}.pdf`, contentType: "application/pdf" });
+    expect(resB.status).toBe(201);
+    const shipmentB = resB.body.data;
+    createdShipmentIds.push(shipmentB.id);
+
+    expect(shipmentA.shipmentNumber).toMatch(/^SH-\d{5}$/);
+    expect(shipmentB.shipmentNumber).toMatch(/^SH-\d{5}$/);
+    // Bons DIFFÉRENTS → Shipment # différents, jamais le même pour deux
+    // documents distincts, et strictement croissant (compteur global).
+    expect(shipmentB.shipmentNumber).not.toBe(shipmentA.shipmentNumber);
+    expect(Number(shipmentB.shipmentNumber.split("-")[1])).toBeGreaterThan(Number(shipmentA.shipmentNumber.split("-")[1]));
+
+    // Le Shipment # est stable (relu identique) et — puisqu'il vit sur le
+    // Customer Shipment, jamais sur l'item — structurellement partagé par
+    // toutes les lignes produit d'un même bon (impossible d'avoir un
+    // Shipment # par ligne : FinanceShipmentItem n'a pas cette colonne).
+    const refetched = await request(app).get(`/finance/shipments/${shipmentA.id}`).set("Authorization", `Bearer ${token}`);
+    expect(refetched.status).toBe(200);
+    expect(refetched.body.data.shipmentNumber).toBe(shipmentA.shipmentNumber);
+    expect(refetched.body.data.items.every((it) => !("shipmentNumber" in it))).toBe(true);
   });
 
   test("'New shipment' avec deux documents → un seul Shipment (le premier fichier est analysé par OCR, les deux sont liés)", async () => {
@@ -1565,6 +1838,36 @@ describe("Finance — CRUD (documents / shipments / invoices / payments)", () =>
     createdInvoiceIds.push(inv.id);
   });
 
+  test("'Upload invoice' facture SANS bloc fiscal (Total HT / TVA / NET À PAYER à plat, §11-12) → totaux réellement extraits, mode de paiement canonicalisé en 'Traite'", async () => {
+    const pdf = await buildFlatTotalsInvoicePdf({ invoiceNumber: `FVL260096-${RUN_ID}` });
+    const res = await request(app)
+      .post("/finance/invoices")
+      .set("Authorization", `Bearer ${token}`)
+      .attach("documents", pdf, { filename: `Facture-flat-totals-${RUN_ID}.pdf`, contentType: "application/pdf" });
+
+    expect(res.status).toBe(201);
+    const inv = res.body.data[0];
+
+    // Sans libellé "TVA" dédié dans l'extraction positionnelle, ces valeurs
+    // resteraient à tort à 0 malgré leur présence réelle sur le document —
+    // exactement l'exigence du ticket : "Ne pas mettre les valeurs à zéro
+    // lorsque les montants sont présents dans le document."
+    // finance_invoices.{amount,tax,total} sont DECIMAL(14,2) (2 décimales,
+    // pas 3) — précision alignée sur la colonne réelle, pas sur les valeurs
+    // sources à 3 décimales du document.
+    expect(Number(inv.amount)).toBeCloseTo(16741.28, 2);
+    expect(Number(inv.tax)).toBeCloseTo(3381.07, 2);
+    expect(Number(inv.total)).toBeCloseTo(20122.35, 2); // = NET À PAYER, aucun "Total TTC" imprimé
+
+    // Mode de paiement normalisé EXACTEMENT vers l'une des 4 valeurs du
+    // dropdown (§3) — jamais "Total HT"/"client"/"Numéro" ou une autre
+    // valeur voisine dans le texte brut.
+    expect(inv.paymentMethod).toBe("Traite");
+    expect(inv.paymentDate).toBe("2026-07-23");
+
+    createdInvoiceIds.push(inv.id);
+  });
+
   test("'Upload invoice' avec deux documents en un seul envoi → deux Invoices distinctes (1 fichier = 1 facture)", async () => {
     const pdfA = await buildSyntheticInvoicePdf({ invoiceNumber: `FVL-A-${RUN_ID}` });
     const pdfB = await buildSyntheticInvoicePdf({ invoiceNumber: `FVL-B-${RUN_ID}` });
@@ -1582,6 +1885,138 @@ describe("Finance — CRUD (documents / shipments / invoices / payments)", () =>
 
     const list = await request(app).get("/finance/invoices").set("Authorization", `Bearer ${token}`);
     expect(list.body.count).toBeGreaterThanOrEqual(2);
+  });
+
+  // §CORRECTION PRIORITAIRE — EXTRACTION OCR FACTURE NADEC (§15 TEST OBLIGATOIRE).
+  test("'Upload invoice' avec la facture NADEC EXACTE de la spec → invoiceFormat=NADEC, tous les champs extraits correctement, aucune annotation manuscrite dans le résultat", async () => {
+    // "26/000016" est la valeur métier EXACTE de la spec (§15) — suffixée
+    // par RUN_ID uniquement pour l'unicité DB entre exécutions successives
+    // du fichier de test (même convention que toutes les autres factures de
+    // ce fichier, ex. buildSageStyleInvoicePdf) ; assertion ci-dessous sur
+    // le préfixe exact, jamais sur une valeur approximative.
+    const invoiceNumber = `26/000016-${RUN_ID}`;
+    const pdf = await buildNADECInvoicePdf({ invoiceNumber });
+    const res = await request(app)
+      .post("/finance/invoices")
+      .set("Authorization", `Bearer ${token}`)
+      .attach("documents", pdf, { filename: `Facture-NADEC-${RUN_ID}.pdf`, contentType: "application/pdf" });
+
+    expect(res.status).toBe(201);
+    const inv = res.body.data[0];
+
+    expect(inv.format).toBe("NADEC");
+    expect(inv.invoiceNumber).toBe(invoiceNumber);
+    expect(inv.invoiceDate).toBe("2026-01-05");
+
+    // Bloc "Client" (= CBIF, l'acheteur) — nom complet + sigle fusionnés par
+    // un ESPACE, code/identifiant client ET Code TVA DISTINCTS (§15) —
+    // jamais rempli avec le nom/l'adresse du FOURNISSEUR.
+    expect(inv.customerName).toBe("COMPOSITE BUILDING INNOVATION FIRST CBIF");
+    expect(inv.customerAddress).toBe("RUE 42500 EL HRAIRIA, 2051 TUNIS TUNISIE");
+    expect(inv.customerCode).toBe("41112686");
+    expect(inv.customerTaxId).toBe("1567517E/A/M/000");
+
+    // Bloc fournisseur — objet DISTINCT (name/shortName séparés), jamais
+    // fusionné avec customer*.
+    expect(inv.supplier).toBeTruthy();
+    expect(inv.supplier.name.value).toBe("NORD AFRICAINE DES ECHANGES COMMERCIAUX");
+    expect(inv.supplier.shortName.value).toBe("NADEC");
+    expect(inv.supplier.address.value).toBe("ZI SIDI REZIG, 2 RUE DU PLASTIQUE, 2033 MEGRINE TUNISIE");
+    expect(inv.supplier.phone.value).toBe("71 426 346");
+    expect(inv.supplier.taxId.value).toBe("0031422Q/A/M/000");
+
+    // BL N°/BC N° — BC N° explicitement "vide" sur le document → `null`,
+    // jamais une chaîne vide ou une valeur devinée.
+    expect(inv.references).toBeTruthy();
+    expect(inv.references.blNumber.value).toBe("26/000021");
+    expect(inv.references.bcNumber.value).toBeNull();
+
+    // Opérateur/Vendeur/Page — champs propres au format NADEC.
+    expect(inv.operator.value).toBe("NAWEL");
+    expect(inv.seller.value).toBe("NADEC");
+    expect(inv.page.value).toBe("1/1");
+
+    // Totaux — valeurs EXACTES de la spec (§3), jamais recalculées.
+    expect(Number(inv.amount)).toBeCloseTo(21280.0, 2); // Total HT
+    expect(Number(inv.tax)).toBeCloseTo(4043.2, 2); // Montant Taxe(s)
+    expect(Number(inv.total)).toBeCloseTo(25324.2, 2); // Total TTC
+
+    // Zone Taxes séparée (§4) — jamais confondue avec Total HT/Total TTC/
+    // Timbre fiscal voisins.
+    expect(inv.taxesZone).toBeTruthy();
+    expect(Number(inv.taxesZone.taxRate.value)).toBeCloseTo(19, 2);
+    expect(Number(inv.taxesZone.taxableBase.value)).toBeCloseTo(21280, 2);
+    expect(Number(inv.taxesZone.taxAmount.value)).toBeCloseTo(4043.2, 2);
+
+    // Zone Règlement (§5) — aucune valeur imprimée sur ce document → `null`,
+    // jamais "Traite"/"Chèque"/"Espèce" inventé.
+    expect(inv.paymentMethod).toBeNull();
+
+    // §12 VALIDATION : Σ items.amountHT ≈ Total HT, Total HT+TVA+Timbre ≈
+    // Total TTC — déjà vérifié structurellement par les totaux ci-dessus
+    // (21280+4043.2+1=25324.2, exactement la valeur imprimée).
+
+    // Les 3 lignes EXACTES (§2), références conservées telles quelles (§8),
+    // AUCUNE annotation manuscrite ("Resine"/"ISO", §9-10) dans le résultat.
+    expect(inv.items).toHaveLength(3);
+    const [item1, item2, item3] = inv.items;
+    expect(item1.reference).toBe("PEINTU.PE-ALK/0149");
+    expect(item1.designation).toBe("EPOXY LAPOX AR-101 FUT 240 KG");
+    expect(item1.unit).toBe("KG");
+    expect(Number(item1.quantity)).toBeCloseTo(960, 2);
+    expect(Number(item1.unitPriceHT)).toBeCloseTo(9.5, 2);
+    expect(Number(item1.amountHT)).toBeCloseTo(9120, 2);
+
+    expect(item2.reference).toBe("PEINTU.PE-ALK/0040");
+    expect(item2.designation).toBe("EPOXY LAPOX AH-112 FUT 200 KG");
+    expect(Number(item2.quantity)).toBeCloseTo(800, 2);
+    expect(Number(item2.unitPriceHT)).toBeCloseTo(14.5, 2);
+    expect(Number(item2.amountHT)).toBeCloseTo(11600, 2);
+
+    expect(item3.reference).toBe("PEINTU.PE-ALK/0433");
+    expect(item3.designation).toBe("DILUANT EL 039 FUT 200 L");
+    expect(item3.unit).toBe("LITRE");
+    expect(Number(item3.quantity)).toBeCloseTo(200, 2);
+    expect(Number(item3.unitPriceHT)).toBeCloseTo(2.8, 2);
+    expect(Number(item3.amountHT)).toBeCloseTo(560, 2);
+
+    const allText = JSON.stringify(inv.items) + inv.customerName + inv.supplier.name.value;
+    expect(allText).not.toMatch(/Resine/i);
+    expect(allText).not.toMatch(/\bISO\b/);
+
+    createdInvoiceIds.push(inv.id);
+  });
+
+  test("'Upload invoice' facture SAGE (format 1) après une facture NADEC → détection toujours correcte, aucune régression croisée entre les deux formats", async () => {
+    const pdf = await buildSageStyleInvoicePdf({ invoiceNumber: `FVL260080-REGR-${RUN_ID}` });
+    const res = await request(app)
+      .post("/finance/invoices")
+      .set("Authorization", `Bearer ${token}`)
+      .attach("documents", pdf, { filename: `Facture-sage-regr-${RUN_ID}.pdf`, contentType: "application/pdf" });
+
+    expect(res.status).toBe(201);
+    const inv = res.body.data[0];
+    expect(inv.format).toBe("SAGE");
+    expect(inv.customerName).toBe("LES ASTRES PROMOTION");
+    expect(inv.customerCode).toBe("C1219489FP");
+    // Le format SAGE n'a ni bloc fournisseur ni BL N°/BC N° — jamais inventés.
+    expect(inv.supplier).toBeNull();
+    expect(inv.references).toBeNull();
+
+    createdInvoiceIds.push(inv.id);
+  });
+
+  test("detectInvoiceFormat — plusieurs indices, jamais un seul mot isolé, UNKNOWN si aucun indice", () => {
+    const sageText = "FACTURE\nConditions de règlement : le 23/07/26 Traite\nNET A PAYER 9 668,891\nAcompte 0,000\nTaxe1 Taxe2";
+    const nadecText =
+      "N° Facture 26/000016\nBL N° 26/000021\nBC N° vide\nAssiette 21 280,000\nMontant Taxe(s) 4 043,200\nTimbre Fiscal 1,000\nNORD AFRICAINE DES ECHANGES COMMERCIAUX NADEC";
+    expect(detectInvoiceFormat(sageText)).toBe("SAGE");
+    expect(detectInvoiceFormat(nadecText)).toBe("NADEC");
+    // Aucun indice reconnaissable → UNKNOWN (jamais faussement "SAGE" par
+    // défaut, §13) — le dispatcher applique quand même le moteur générique
+    // en repli (voir extractInvoiceFields).
+    expect(detectInvoiceFormat("")).toBe("UNKNOWN");
+    expect(detectInvoiceFormat("texte quelconque sans rapport")).toBe("UNKNOWN");
   });
 
   test("'Upload invoice' avec un document totalement illisible → OCR_FAILED, jamais de valeur inventée", async () => {
@@ -1638,11 +2073,16 @@ describe("Finance — CRUD (documents / shipments / invoices / payments)", () =>
     expect(res.body.data.some((i) => i.id === createdInvoiceId)).toBe(true);
   });
 
-  test("enregistrement d'un paiement complet → statut PAID, visible dans /finance/paid-invoices", async () => {
+  test("enregistrement d'un paiement (formulaire minimal : method + document uniquement) → statut PAID, visible dans /finance/paid-invoices", async () => {
+    // Formulaire minimal (§MODIFIER LE WORKFLOW PAYMENT / PAID FACTURES,
+    // §2) : ni amount ni paidDate envoyés par le client — le backend les
+    // déduit (montant total de la facture, jamais une valeur partielle
+    // devinée) et passe directement la facture en PAID (§6).
     const pay = await request(app)
       .post(`/finance/invoices/${createdInvoiceId}/payments`)
       .set("Authorization", `Bearer ${token}`)
-      .send({ amount: 1785, paidDate: "2026-08-12", method: "Carte bancaire", reference: "REF-TEST" });
+      .field("method", "Virement")
+      .attach("document", Buffer.from("%PDF-1.4 fake virement receipt"), { filename: `virement-${RUN_ID}.pdf`, contentType: "application/pdf" });
 
     expect(pay.status).toBe(201);
     // Statut non exposé par l'API (§SUPPRESSION STATUT FACTURE) — vérifié en
@@ -1651,20 +2091,45 @@ describe("Finance — CRUD (documents / shipments / invoices / payments)", () =>
     const dbInvoice = await FinanceInvoice.findByPk(createdInvoiceId);
     expect(dbInvoice.status).toBe("PAID");
 
-    // "Carte bancaire" ne nécessite aucun champ spécifique Chèque/Traite —
-    // ils doivent rester NULL, jamais laissés à une valeur par défaut.
-    const payment = pay.body.data.payments.find((p) => p.method === "Carte bancaire");
+    // "Virement" ne nécessite aucun champ spécifique Chèque/Traite — ils
+    // doivent rester NULL, jamais laissés à une valeur par défaut. Le
+    // justificatif est bien associé au paiement (§6 étape 3).
+    const payment = pay.body.data.payments.find((p) => p.method === "Virement");
     expect(payment).toBeTruthy();
+    expect(Number(payment.amount)).toBeCloseTo(1785, 2); // = invoice.total, déduit par le backend
     expect(payment.chequeNumber).toBeNull();
     expect(payment.bankName).toBeNull();
     expect(payment.chequeDate).toBeNull();
     expect(payment.billOfExchangeNumber).toBeNull();
     expect(payment.dueDate).toBeNull();
-    expect(payment.documents).toHaveLength(0);
+    expect(payment.documents).toHaveLength(1);
 
     const paidList = await request(app).get("/finance/paid-invoices").set("Authorization", `Bearer ${token}`);
     expect(paidList.status).toBe(200);
     expect(paidList.body.data.some((i) => i.id === createdInvoiceId)).toBe(true);
+
+    // Factured Shipments (§8) : la facture désormais payée en est retirée.
+    const facturedList = await request(app).get("/finance/invoices").set("Authorization", `Bearer ${token}`);
+    expect(facturedList.status).toBe(200);
+    expect(facturedList.body.data.some((i) => i.id === createdInvoiceId)).toBe(false);
+  });
+
+  test("Register payment sans justificatif → 400 (le justificatif est obligatoire, §6)", async () => {
+    const invoiceRes = await request(app)
+      .post("/finance/invoices")
+      .set("Authorization", `Bearer ${token}`)
+      .send({ invoiceNumber: `INV-NODOC-${RUN_ID}`, customerId, invoiceDate: "2026-08-11", amount: 500, tax: 0 });
+    expect(invoiceRes.status).toBe(201);
+    const invoiceId = invoiceRes.body.data.id;
+
+    const pay = await request(app)
+      .post(`/finance/invoices/${invoiceId}/payments`)
+      .set("Authorization", `Bearer ${token}`)
+      .field("method", "Versement");
+    expect(pay.status).toBe(400);
+    expect(await FinancePayment.findAll({ where: { invoiceId } })).toHaveLength(0);
+
+    await FinanceInvoice.destroy({ where: { id: invoiceId } });
   });
 
   test("Register payment — Chèque avec document justificatif → chequeNumber/bankName/chequeDate persistés, champs Traite NULL, document associé", async () => {
@@ -1757,10 +2222,16 @@ describe("Finance — CRUD (documents / shipments / invoices / payments)", () =>
     expect(invoiceRes.status).toBe(201);
     const partialInvoiceId = invoiceRes.body.data.id;
 
+    // `amount` explicite (400 < total 1000) reste supporté côté backend même
+    // si le nouveau formulaire minimal ne le collecte plus — un appelant qui
+    // le fournit explicitement doit toujours produire un paiement PARTIEL.
     const pay = await request(app)
       .post(`/finance/invoices/${partialInvoiceId}/payments`)
       .set("Authorization", `Bearer ${token}`)
-      .send({ amount: 400, paidDate: "2026-08-12", method: "Espèce" });
+      .field("amount", "400")
+      .field("paidDate", "2026-08-12")
+      .field("method", "Versement")
+      .attach("document", Buffer.from("%PDF-1.4 fake versement receipt"), { filename: `versement-${RUN_ID}.pdf`, contentType: "application/pdf" });
     expect(pay.status).toBe(201);
     // Statut non exposé par l'API (§SUPPRESSION STATUT FACTURE) — vérifié en base.
     const dbInvoice = await FinanceInvoice.findByPk(partialInvoiceId);
@@ -1887,7 +2358,10 @@ describe("Finance — CRUD (documents / shipments / invoices / payments)", () =>
     await request(app)
       .post(`/finance/invoices/${invoiceId}/payments`)
       .set("Authorization", `Bearer ${token}`)
-      .send({ amount: 100, paidDate: "2026-08-12", method: "Carte bancaire" });
+      .field("amount", "100")
+      .field("paidDate", "2026-08-12")
+      .field("method", "Virement")
+      .attach("document", Buffer.from("%PDF-1.4 fake virement receipt"), { filename: `virement-del-${RUN_ID}.pdf`, contentType: "application/pdf" });
     expect(await FinancePayment.findAll({ where: { invoiceId } })).toHaveLength(1);
 
     const del = await request(app).delete(`/finance/invoices/${invoiceId}`).set("Authorization", `Bearer ${token}`);
@@ -1912,6 +2386,80 @@ describe("Finance — CRUD (documents / shipments / invoices / payments)", () =>
     expect(res.body.success).toBe(false);
   });
 
+  // ── Finance Dashboard (§MODIFICATION — DASHBOARD FINANCE PROFESSIONNEL) ──
+  // Placés en fin de suite pour profiter des données déjà créées par les
+  // tests précédents (KPI non nuls, jamais des valeurs figées).
+
+  test("GET /finance/dashboard → KPI calculés dynamiquement à partir des données réelles", async () => {
+    const res = await request(app).get("/finance/dashboard").set("Authorization", `Bearer ${token}`);
+    expect(res.status).toBe(200);
+    const d = res.body.data;
+
+    // Les bons/factures créés par les tests précédents de ce fichier
+    // garantissent des compteurs strictement positifs — jamais un 0 figé.
+    expect(d.purchaseOrders).toBeGreaterThan(0);
+    expect(d.customerShipments).toBeGreaterThan(0);
+    expect(d.invoices).toBeGreaterThan(0);
+    expect(typeof d.paidInvoices).toBe("number");
+    expect(typeof d.totalPurchases).toBe("number");
+    expect(typeof d.totalInvoiced).toBe("number");
+    expect(typeof d.totalPaid).toBe("number");
+    // outstanding = max(0, totalInvoiced - totalPaid), jamais négatif.
+    expect(d.outstanding).toBeCloseTo(Math.max(0, d.totalInvoiced - d.totalPaid), 2);
+    expect(d.outstanding).toBeGreaterThanOrEqual(0);
+
+    // Finance Alerts (§10) — uniquement des compteurs réels.
+    expect(d.alerts).toBeTruthy();
+    expect(typeof d.alerts.unpaidInvoices).toBe("number");
+    expect(typeof d.alerts.newPurchaseOrdersThisWeek).toBe("number");
+    expect(typeof d.alerts.newShipmentsThisWeek).toBe("number");
+    expect(typeof d.alerts.recentDocumentsCount).toBe("number");
+  });
+
+  test("GET /finance/dashboard avec filtre customer → ne compte QUE les enregistrements de ce client", async () => {
+    const uniqueCustomer = `DASHBOARD-TEST-CUSTOMER-${RUN_ID}`;
+    const pdf = await buildPurchaseOrderPdf({
+      orderNumber: `BCL-DASH-${RUN_ID}`,
+      customerCode: `F${RUN_ID}`,
+      customerName: uniqueCustomer,
+    });
+    const upload = await request(app)
+      .post("/finance/raw-materials/upload")
+      .set("Authorization", `Bearer ${token}`)
+      .attach("file", pdf, { filename: `bon-dash-${RUN_ID}.pdf`, contentType: "application/pdf" });
+    expect(upload.status).toBe(201);
+    createdPurchaseOrderIds.push(upload.body.data.id);
+
+    const res = await request(app)
+      .get("/finance/dashboard")
+      .query({ customer: uniqueCustomer })
+      .set("Authorization", `Bearer ${token}`);
+    expect(res.status).toBe(200);
+    expect(res.body.data.purchaseOrders).toBe(1);
+    expect(Number(res.body.data.totalPurchases)).toBeCloseTo(Number(upload.body.data.totalHT), 2);
+    // Aucun shipment/invoice n'a ce nom client — comptés à 0, jamais confondus.
+    expect(res.body.data.customerShipments).toBe(0);
+    expect(res.body.data.invoices).toBe(0);
+  });
+
+  test("GET /finance/dashboard/monthly → série mensuelle Purchase Orders/Invoices/Paid Invoices agrégée côté serveur", async () => {
+    const res = await request(app).get("/finance/dashboard/monthly").set("Authorization", `Bearer ${token}`);
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body.data)).toBe(true);
+    expect(res.body.data.length).toBeGreaterThan(0);
+    for (const row of res.body.data) {
+      expect(row.month).toMatch(/^\d{4}-\d{2}$/);
+      expect(typeof row.purchaseOrders).toBe("number");
+      expect(typeof row.invoices).toBe("number");
+      expect(typeof row.paidInvoices).toBe("number");
+    }
+    // Au moins un mois doit refléter les Purchase Orders créés par ce
+    // fichier de tests (jamais une série entièrement vide malgré les
+    // données réelles présentes en base).
+    const totalPurchaseOrdersAcrossMonths = res.body.data.reduce((s, r) => s + r.purchaseOrders, 0);
+    expect(totalPurchaseOrdersAcrossMonths).toBeGreaterThan(0);
+  });
+
   test("DELETE sans authentification → 401 (les 3 endpoints)", async () => {
     const results = await Promise.all([
       request(app).delete("/finance/raw-materials/00000000-0000-0000-0000-000000000000"),
@@ -1919,5 +2467,141 @@ describe("Finance — CRUD (documents / shipments / invoices / payments)", () =>
       request(app).delete("/finance/invoices/00000000-0000-0000-0000-000000000000"),
     ]);
     results.forEach((res) => expect(res.status).toBe(401));
+  });
+
+  // §MODIFICATION — FINANCE > OTHER — SCAN SIMPLE DE DOCUMENTS.
+  describe("Finance > Other (stockage documentaire pur, aucun OCR)", () => {
+    let otherDocId;
+
+    test("POST /finance/other-documents → document enregistré tel quel, displayName = originalName, AUCUN champ d'extraction", async () => {
+      const res = await request(app)
+        .post("/finance/other-documents")
+        .set("Authorization", `Bearer ${token}`)
+        .attach("file", Buffer.from("%PDF-1.4 contenu quelconque, jamais lu"), {
+          filename: `scan-other-${RUN_ID}.pdf`,
+          contentType: "application/pdf",
+        });
+
+      expect(res.status).toBe(201);
+      const doc = res.body.data;
+      otherDocId = doc.id;
+      expect(doc.module).toBe("OTHER");
+      expect(doc.originalName).toBe(`scan-other-${RUN_ID}.pdf`);
+      // §6 : displayName = originalName au moment de l'upload.
+      expect(doc.displayName).toBe(`scan-other-${RUN_ID}.pdf`);
+      expect(doc.entityId).toBeNull();
+      // §1/§14 : aucune extraction — le document ne porte AUCUN des champs
+      // que produirait un pipeline OCR (numéro/client/date/montant/statut
+      // d'extraction) : la réponse d'un document générique n'a jamais eu ces
+      // clés, contrairement à toInvoiceResponse/toPurchaseOrderResponse/
+      // toShipmentResponse (aucun champ "status"/"ocrConfidence" propre à un
+      // pipeline d'extraction ici — seul "status" de validation PENDING du
+      // document lui-même, sans rapport avec l'OCR, existe déjà par défaut).
+      expect(doc).not.toHaveProperty("invoiceNumber");
+      expect(doc).not.toHaveProperty("orderNumber");
+      expect(doc).not.toHaveProperty("shipmentNumber");
+      expect(doc).not.toHaveProperty("ocrConfidence");
+    });
+
+    test("GET /finance/other-documents → recherche par displayName/originalName/mimeType", async () => {
+      const res = await request(app)
+        .get("/finance/other-documents")
+        .query({ search: `scan-other-${RUN_ID}` })
+        .set("Authorization", `Bearer ${token}`);
+      expect(res.status).toBe(200);
+      expect(res.body.data.some((d) => d.id === otherDocId)).toBe(true);
+
+      // Recherche par "type" (sous-chaîne du mimeType réel, §15).
+      const byType = await request(app)
+        .get("/finance/other-documents")
+        .query({ search: "pdf" })
+        .set("Authorization", `Bearer ${token}`);
+      expect(byType.status).toBe(200);
+      expect(byType.body.data.some((d) => d.id === otherDocId)).toBe(true);
+
+      // Filtre "type" (§16) — PDF trouve le document, IMAGE ne le trouve pas.
+      const filterPdf = await request(app)
+        .get("/finance/other-documents")
+        .query({ type: "PDF" })
+        .set("Authorization", `Bearer ${token}`);
+      expect(filterPdf.body.data.some((d) => d.id === otherDocId)).toBe(true);
+
+      const filterImage = await request(app)
+        .get("/finance/other-documents")
+        .query({ type: "IMAGE" })
+        .set("Authorization", `Bearer ${token}`);
+      expect(filterImage.body.data.some((d) => d.id === otherDocId)).toBe(false);
+    });
+
+    test("PATCH /finance/other-documents/:id → renomme UNIQUEMENT displayName, originalName/fileUrl inchangés", async () => {
+      const before = await request(app)
+        .get("/finance/other-documents")
+        .query({ search: `scan-other-${RUN_ID}` })
+        .set("Authorization", `Bearer ${token}`);
+      const originalFileUrl = before.body.data.find((d) => d.id === otherDocId).fileUrl;
+      const originalName = before.body.data.find((d) => d.id === otherDocId).originalName;
+
+      const res = await request(app)
+        .patch(`/finance/other-documents/${otherDocId}`)
+        .set("Authorization", `Bearer ${token}`)
+        .send({ displayName: `Contrat fournisseur NADEC ${RUN_ID}.pdf` });
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.displayName).toBe(`Contrat fournisseur NADEC ${RUN_ID}.pdf`);
+      expect(res.body.data.originalName).toBe(originalName); // jamais modifié
+      expect(res.body.data.fileUrl).toBe(originalFileUrl); // jamais modifié
+
+      // Persisté en base — pas seulement dans la réponse (§TEST 3 : après
+      // refresh, le nouveau nom reste affiché).
+      const after = await request(app)
+        .get("/finance/other-documents")
+        .query({ search: "Contrat fournisseur NADEC" })
+        .set("Authorization", `Bearer ${token}`);
+      expect(after.body.data.some((d) => d.id === otherDocId && d.displayName === `Contrat fournisseur NADEC ${RUN_ID}.pdf`)).toBe(true);
+    });
+
+    test("PATCH /finance/other-documents/:id avec un nom vide → 400, rien modifié", async () => {
+      const res = await request(app)
+        .patch(`/finance/other-documents/${otherDocId}`)
+        .set("Authorization", `Bearer ${token}`)
+        .send({ displayName: "   " });
+      expect(res.status).toBe(400);
+    });
+
+    test("PATCH /finance/other-documents/:id sur un document inexistant → 404", async () => {
+      const res = await request(app)
+        .patch("/finance/other-documents/00000000-0000-0000-0000-000000000000")
+        .set("Authorization", `Bearer ${token}`)
+        .send({ displayName: "x" });
+      expect(res.status).toBe(404);
+    });
+
+    test("DELETE /finance/other-documents/:id → supprimé de la DB et disparaît de la liste", async () => {
+      const del = await request(app).delete(`/finance/other-documents/${otherDocId}`).set("Authorization", `Bearer ${token}`);
+      expect(del.status).toBe(200);
+      expect(del.body.success).toBe(true);
+
+      const after = await request(app)
+        .get("/finance/other-documents")
+        .query({ search: "Contrat fournisseur NADEC" })
+        .set("Authorization", `Bearer ${token}`);
+      expect(after.body.data.some((d) => d.id === otherDocId)).toBe(false);
+
+      // Deuxième suppression du même id → 404 (jamais un succès silencieux
+      // sur un document déjà supprimé — couvre aussi le cas double-clic
+      // niveau backend).
+      const second = await request(app).delete(`/finance/other-documents/${otherDocId}`).set("Authorization", `Bearer ${token}`);
+      expect(second.status).toBe(404);
+    });
+
+    test("POST/GET/PATCH/DELETE /finance/other-documents sans authentification → 401", async () => {
+      const results = await Promise.all([
+        request(app).get("/finance/other-documents"),
+        request(app).post("/finance/other-documents"),
+        request(app).patch("/finance/other-documents/00000000-0000-0000-0000-000000000000"),
+        request(app).delete("/finance/other-documents/00000000-0000-0000-0000-000000000000"),
+      ]);
+      results.forEach((res) => expect(res.status).toBe(401));
+    });
   });
 });

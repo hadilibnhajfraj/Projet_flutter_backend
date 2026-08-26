@@ -22,9 +22,9 @@ const FinancePayment = sequelize.define(
     amount: { type: DataTypes.DECIMAL(14, 2), allowNull: false },
     paidDate: { type: DataTypes.DATEONLY, allowNull: false },
     // "Register payment" (§REGISTER PAYMENT) — dropdown fermé, validé côté
-    // serveur : Carte bancaire | Espèce | Chèque | Traite. Les champs
-    // ci-dessous restent NULL pour les modes qui ne les nécessitent pas
-    // (jamais une valeur inventée pour un mode qui n'en a pas besoin).
+    // serveur : Virement | Versement | Chèque | Traite. Les champs
+    // ci-dessous restent NULL (formulaire minimal, plus collectés par l'UI —
+    // jamais une valeur inventée pour un mode qui n'en a pas besoin).
     method: { type: DataTypes.STRING(100), allowNull: true },
     reference: { type: DataTypes.STRING(150), allowNull: true },
     chequeNumber: { type: DataTypes.STRING(100), allowNull: true },

@@ -4,15 +4,36 @@ const { Op } = require("sequelize");
 const repo = require("../repositories/industrialRecord.repository");
 const logger = require("../../../utils/logger");
 const User = require("../../../models/User");
+const UserProfile = require("../../../models/UserProfile");
 const Notification = require("../../../models/Notification");
 const MaintenanceActivity = require("../../../models/MaintenanceActivity");
 const { sendEmail } = require("../../../services/email.service");
 const { MAINTENANCE_REQUESTER_EMAIL, MAINTENANCE_NOTIFY_EMAIL } = require("../../../config/maintenanceRequester");
 
 // responsable_logistique_achat ne voit/édite que ses propres fiches —
-// admin/superadmin voient tout (même règle que POR PROMESH).
+// admin/superadmin voient tout (même règle que POR PROMESH). finance_production
+// (§MODIFICATION — DASHBOARD PRODUCTION) est délibérément EXCLU de
+// l'owner-scoping — ce rôle consulte toutes les fiches, comme admin/superadmin,
+// mais reste soumis à DELETE_ROLES.
 function isOwnerScoped(role) {
   return role === "responsable_logistique_achat";
+}
+
+// §MODIFICATION — FICHE MÉLANGE : "Opérateur" ne doit JAMAIS être pris tel
+// quel depuis le body (le frontend n'affiche d'ailleurs plus de champ
+// modifiable pour ce module) — même pattern que porPromesh.service.js
+// createOrOpenDraft : nom du profil si renseigné, sinon l'email de
+// l'utilisateur authentifié (req.user/JWT, jamais une valeur du client).
+async function resolveOperateurFromActor(actor) {
+  const requester = await User.findByPk(actor.id, { include: [{ model: UserProfile, as: "profile" }] });
+  return requester?.profile?.name || actor.email;
+}
+
+// TIME (Postgres) rejette une chaîne vide ('' !== NULL) — même piège déjà
+// rencontré côté POR PROMESH (voir sanitizePayload/TIME_FIELDS dans
+// porPromesh.service.js).
+function nullifyEmpty(value) {
+  return value === "" ? null : value;
 }
 
 function isBlank(value) {
@@ -133,6 +154,7 @@ function _buildMaintenanceEmail({ requesterEmail, equipement, typePanne, urgence
 
 async function createRecord(body, actor) {
   const isMaintenance = body.module === "maintenance";
+  const isMelange = body.module === "melange";
 
   // Seul responsable_logistique@cbi-tunisia.com peut créer une demande de
   // maintenance — vérifié AVANT toute écriture : aucune fiche créée, aucun
@@ -147,6 +169,14 @@ async function createRecord(body, actor) {
   const payload = { ...body, createdBy: actor.id };
   if (isMaintenance) {
     payload.statut = "En attente";
+  }
+  // §MODIFICATION — FICHE MÉLANGE : l'opérateur est TOUJOURS dérivé de
+  // l'utilisateur authentifié (req.user/JWT) — jamais du champ `operateur`
+  // envoyé par le client, même si le frontend ne l'affiche plus.
+  if (isMelange) {
+    payload.operateur = await resolveOperateurFromActor(actor);
+    payload.heureDebut = nullifyEmpty(body.heureDebut);
+    payload.heureFin = nullifyEmpty(body.heureFin);
   }
 
   const created = await repo.create(payload);
@@ -255,7 +285,19 @@ async function updateRecord(id, body, actor) {
     assertProbarCanValidate(record, body);
   }
 
-  await repo.update(record, body);
+  const payload = { ...body };
+  // §MODIFICATION — FICHE MÉLANGE : même règle qu'à la création — l'opérateur
+  // et le créateur original d'une fiche MÉLANGE ne changent jamais via une
+  // modification, quel que soit ce qu'un client enverrait dans `operateur`
+  // (Joi a déjà retiré `createdBy` s'il était envoyé — voir validateUpdate).
+  if (record.module === "melange") {
+    delete payload.operateur;
+    delete payload.createdBy;
+    if ("heureDebut" in payload) payload.heureDebut = nullifyEmpty(payload.heureDebut);
+    if ("heureFin" in payload) payload.heureFin = nullifyEmpty(payload.heureFin);
+  }
+
+  await repo.update(record, payload);
   return repo.findById(id);
 }
 

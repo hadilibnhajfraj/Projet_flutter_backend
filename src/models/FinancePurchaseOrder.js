@@ -13,6 +13,13 @@ const FinancePurchaseOrder = sequelize.define(
   {
     id: { type: DataTypes.UUID, defaultValue: DataTypes.UUIDV4, primaryKey: true },
 
+    // Identifiant métier généré par l'application (§IDENTIFICATION DES
+    // DIFFÉRENTS PURCHASE ORDERS) — format "PO-00001", UNIQUE, un seul par
+    // Purchase Order, JAMAIS extrait/deviné (contrairement à `orderNumber`
+    // ci-dessous, qui reste un champ OCR nullable/non-unique). Voir
+    // finance.service.js#generatePoNumber.
+    poNumber: { type: DataTypes.STRING(20), allowNull: true, unique: true },
+
     orderNumber: { type: DataTypes.STRING(100), allowNull: true },
     orderDate: { type: DataTypes.DATEONLY, allowNull: true },
 

@@ -97,9 +97,37 @@ function normalizeDiameter(raw) {
   return s || null;
 }
 
+// §CORRECTION EXTRACTION — SÉPARATION UNITÉ / DIAMÈTRE : dernier filet de
+// sécurité appliqué avant la SAUVEGARDE des lignes Shipment/Invoice (§11
+// "sauvegarde si nécessaire") — jamais à la place de l'extraction
+// positionnelle existante (qui sépare déjà Unité/Diam./Maille quand le
+// document a des colonnes distinctes, voir invoiceFieldExtraction.service.js
+// / deliveryNoteFieldExtraction.service.js), seulement pour les cas où
+// `unit` arrive malgré tout fusionné ("M² 10", "ML 04", ex. repli texte
+// linéaire). Miroir exact de normalizeFinanceUnit() côté Flutter
+// (finance_models.dart) — même règle des deux côtés.
+const KNOWN_UNITS = new Set(["M²", "M2", "ML", "KG", "LITRE", "L", "TONNE", "PIECE", "PCS", "UNITE", "UNITÉ", "MILLILITRE", "MILLILITR"]);
+const MERGED_UNIT_PATTERN = /^([A-Za-zÀ-ÿ²0-9]+)\s+(\d+)$/;
+
+function normalizeUnitAndDiameter(rawUnit, rawDiameter) {
+  const unit = rawUnit === null || rawUnit === undefined ? null : String(rawUnit).trim() || null;
+  const diameter = rawDiameter === null || rawDiameter === undefined ? null : String(rawDiameter).trim() || null;
+
+  // Déjà séparé (ou pas d'unité du tout) — jamais retouché.
+  if (diameter || !unit) return { unit, diameter };
+
+  const match = unit.match(MERGED_UNIT_PATTERN);
+  if (match && KNOWN_UNITS.has(match[1].toUpperCase())) {
+    // Le diamètre capturé n'est JAMAIS reformaté — "04" reste "04".
+    return { unit: match[1], diameter: match[2] };
+  }
+  return { unit, diameter };
+}
+
 module.exports = {
   normalizeNumber,
   normalizeDate,
   normalizeMeshSize,
   normalizeDiameter,
+  normalizeUnitAndDiameter,
 };

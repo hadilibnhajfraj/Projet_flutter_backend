@@ -16,7 +16,11 @@ const FinanceDocument = sequelize.define(
     id: { type: DataTypes.UUID, defaultValue: DataTypes.UUIDV4, primaryKey: true },
 
     module: {
-      type: DataTypes.ENUM("INFLOW_RAW_MATERIALS", "SHIPMENT", "INVOICE", "PAYMENT"),
+      // "OTHER" (§MODIFICATION — FINANCE > OTHER) : stockage documentaire
+      // pur, jamais rattaché à une autre entité Finance — `entityId` reste
+      // NULL pour ce module, contrairement aux autres valeurs qui référencent
+      // (en soft-reference) une ligne finance_shipments/finance_invoices/...
+      type: DataTypes.ENUM("INFLOW_RAW_MATERIALS", "SHIPMENT", "INVOICE", "PAYMENT", "OTHER"),
       allowNull: false,
     },
     entityId: { type: DataTypes.UUID, allowNull: true },
@@ -25,6 +29,13 @@ const FinanceDocument = sequelize.define(
     // financeDocumentUpload.middleware.js#sanitizeOriginalName) — jamais
     // utilisé pour construire un chemin sur disque.
     originalName: { type: DataTypes.STRING(255), allowNull: false },
+    // Nom D'AFFICHAGE modifiable par l'utilisateur (§7/§19 — module "Other"
+    // uniquement pour l'instant) — `originalName` reste inchangé, jamais
+    // utilisé pour construire un chemin sur disque ni pour retrouver le
+    // fichier physique (voir `storedFileName`/`fileUrl`, non affectés par un
+    // renommage). `null` pour tout document créé avant l'ajout de ce champ
+    // ou par un autre module — le DTO retombe alors sur `originalName`.
+    displayName: { type: DataTypes.STRING(255), allowNull: true },
     // Nom réel du fichier sur disque (UUID généré côté serveur).
     storedFileName: { type: DataTypes.STRING(255), allowNull: false },
     fileUrl: { type: DataTypes.STRING(500), allowNull: false },

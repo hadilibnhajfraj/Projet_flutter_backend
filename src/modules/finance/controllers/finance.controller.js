@@ -16,7 +16,18 @@ function actorFrom(req) {
 
 async function getDashboard(req, res) {
   try {
-    const data = await svc.getDashboard();
+    const { startDate, endDate, customer, paymentMethod } = req.query;
+    const data = await svc.getDashboard({ startDate, endDate, customer, paymentMethod });
+    res.json({ success: true, data });
+  } catch (err) {
+    handle(res, err);
+  }
+}
+
+async function getDashboardMonthly(req, res) {
+  try {
+    const { startDate, endDate, customer, paymentMethod } = req.query;
+    const data = await svc.getDashboardMonthly({ startDate, endDate, customer, paymentMethod });
     res.json({ success: true, data });
   } catch (err) {
     handle(res, err);
@@ -58,6 +69,48 @@ async function deleteRawMaterial(req, res) {
   try {
     await svc.deleteRawMaterial(req.params.id, actorFrom(req));
     res.json({ success: true, message: "Purchase order deleted successfully" });
+  } catch (err) {
+    handle(res, err);
+  }
+}
+
+// ── Finance > Other (§MODIFICATION — SCAN SIMPLE DE DOCUMENTS) ──────────
+// Stockage documentaire pur — jamais d'OCR/extraction déclenché ici (voir
+// finance.service.js#uploadOtherDocument).
+
+async function listOtherDocuments(req, res) {
+  try {
+    const { search, type, startDate, endDate, page, pageSize } = req.query;
+    const { data, total, page: p, pageSize: ps } = await svc.listOtherDocuments({ search, type, startDate, endDate, page, pageSize });
+    res.json({ success: true, count: total, page: p, pageSize: ps, data: dto.toDocumentList(data) });
+  } catch (err) {
+    handle(res, err);
+  }
+}
+
+async function uploadOtherDocument(req, res) {
+  try {
+    if (!req.file) return res.status(400).json({ success: false, message: "Fichier requis" });
+    const document = await svc.uploadOtherDocument(req.file, actorFrom(req));
+    res.status(201).json({ success: true, message: "Document uploaded successfully", data: dto.toDocumentResponse(document) });
+  } catch (err) {
+    handle(res, err);
+  }
+}
+
+async function renameOtherDocument(req, res) {
+  try {
+    const document = await svc.renameOtherDocument(req.params.id, req.body?.displayName, actorFrom(req));
+    res.json({ success: true, message: "Document renamed successfully", data: dto.toDocumentResponse(document) });
+  } catch (err) {
+    handle(res, err);
+  }
+}
+
+async function deleteOtherDocument(req, res) {
+  try {
+    await svc.deleteOtherDocument(req.params.id, actorFrom(req));
+    res.json({ success: true, message: "Document deleted successfully" });
   } catch (err) {
     handle(res, err);
   }
@@ -209,10 +262,15 @@ async function deleteInvoice(req, res) {
 
 module.exports = {
   getDashboard,
+  getDashboardMonthly,
   listRawMaterials,
   uploadRawMaterial,
   getRawMaterial,
   deleteRawMaterial,
+  listOtherDocuments,
+  uploadOtherDocument,
+  renameOtherDocument,
+  deleteOtherDocument,
   listShipments,
   createShipment,
   getShipment,

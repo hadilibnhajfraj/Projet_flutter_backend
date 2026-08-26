@@ -23,6 +23,15 @@ function validateExtraction(extraction) {
     reasons.push("invoiceDate_low_confidence");
   }
 
+  // §MODIFICATION — SCAN / OCR DES FACTURES : SUPPORT DE 2 FORMATS —
+  // "Le client est identifié" / "Le matricule fiscal est identifié".
+  // Générique aux deux formats : `extraction.customer` porte toujours le
+  // même nom de champs (name/taxId), qu'il vienne du bloc "Client" SAGE ou
+  // du bloc "Client" fournisseur/NADEC (voir extractSupplierInvoiceFields
+  // Positional — jamais rempli avec le nom/matricule du FOURNISSEUR).
+  if (!extraction.customer?.name?.value) reasons.push("customer_not_detected");
+  if (!extraction.customer?.taxId?.value) reasons.push("customer_taxid_not_detected");
+
   const items = extraction.items || [];
   if (!items.length) {
     reasons.push("no_items_detected");
@@ -45,6 +54,22 @@ function validateExtraction(extraction) {
       const diff = Math.abs(itemsSum - subtotal) / subtotal;
       if (diff > TOTALS_TOLERANCE_RATIO) reasons.push("totals_mismatch");
     }
+  }
+
+  // Total HT + TVA ≈ Total TTC — deuxième contrôle croisé demandé
+  // (§VALIDATION). Simple garde-fou : ne DÉCIDE jamais de la valeur finale
+  // (toujours la valeur imprimée, jamais recalculée — voir
+  // processInvoiceUpload), seulement le statut EXTRACTED/NEEDS_REVIEW. Une
+  // petite différence d'arrondi imprimée sur le document lui-même (ex.
+  // NADEC : 21 280,000 + 4 043,200 = 25 323,200 imprimé vs 25 324,200 réel)
+  // reste sous la tolérance et ne déclenche pas de révision.
+  const totalHT = extraction.totals?.subtotalHT?.value;
+  const totalTax = extraction.totals?.totalTax?.value;
+  const totalTTC = extraction.totals?.totalTTC?.value;
+  if (totalHT != null && totalTax != null && totalTTC != null && totalTTC > 0) {
+    const expectedTTC = totalHT + totalTax;
+    const diff = Math.abs(expectedTTC - totalTTC) / totalTTC;
+    if (diff > TOTALS_TOLERANCE_RATIO) reasons.push("ht_tax_ttc_mismatch");
   }
 
   return { needsReview: reasons.length > 0, reasons };

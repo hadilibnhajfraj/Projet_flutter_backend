@@ -10,6 +10,7 @@ const { Op, col, fn, literal } = require("sequelize");
 const PorPromesh = require("../../../models/PorPromesh");
 const IndustrialRecord = require("../../../models/IndustrialRecord");
 const User = require("../../../models/User");
+const UserProfile = require("../../../models/UserProfile");
 require("../../../models/associations");
 
 const { computeDateRange } = require("../utils/dateRange");
@@ -28,6 +29,9 @@ const INCLUDE_CREATOR = [{ model: User, as: "creator", attributes: ["id", "email
 
 // Même règle que por-promesh/industrial-records : responsable_logistique_achat
 // ne voit que ses propres fiches, admin/superadmin voient tout.
+// finance_production (§MODIFICATION — DASHBOARD PRODUCTION) est
+// délibérément EXCLU de l'owner-scoping — ce rôle consulte toutes les
+// fiches (dashboard, records, summary, stats), comme admin/superadmin.
 function isOwnerScoped(role) {
   return role === "responsable_logistique_achat";
 }
@@ -48,8 +52,24 @@ function parseSort(sort) {
   return { field: key, dir };
 }
 
+// §MODIFICATION — ADMIN > PRODUCTION RECORDS — FILTRE PAR UTILISATEUR :
+// `filters.createdBy` (id utilisateur) est un filtre EXPLICITE, appliqué
+// UNIQUEMENT pour un rôle NON owner-scoped (Admin/superadmin — les seuls
+// pour qui `where` part vide, donc capables de voir plusieurs utilisateurs).
+// SÉCURITÉ CRITIQUE (§5/§10) : pour un rôle owner-scoped
+// (responsable_logistique_achat, y compris production_1..5), `where.createdBy`
+// est DÉJÀ figé à `actor.id` — ce filtre ne doit JAMAIS l'écraser, sinon un
+// compte Production pourrait passer `?createdBy=<autre utilisateur>` et
+// voir les fiches de quelqu'un d'autre. Jamais une valeur envoyée par le
+// client ne doit pouvoir élargir un accès déjà restreint.
+function applyCreatedByFilter(where, filters, actor) {
+  if (filters.createdBy && !isOwnerScoped(actor.role)) where.createdBy = filters.createdBy;
+  return where;
+}
+
 function buildPromeshWhere(filters, actor) {
   const where = isOwnerScoped(actor.role) ? { createdBy: actor.id } : {};
+  applyCreatedByFilter(where, filters, actor);
   if (filters.machineId) where.machine = filters.machineId;
   if (filters.poste) where.poste = filters.poste;
 
@@ -85,6 +105,7 @@ function applyPromeshSearch(where, search) {
 
 function buildProbarWhere(filters, actor) {
   const where = { module: "probar", ...(isOwnerScoped(actor.role) ? { createdBy: actor.id } : {}) };
+  applyCreatedByFilter(where, filters, actor);
   if (filters.machineId) where.machine = filters.machineId;
   if (filters.poste) where.poste = filters.poste;
 
@@ -236,10 +257,15 @@ async function listRecords(filters, actor) {
   };
 }
 
-// Statistiques globales (indépendantes des filtres du tableau — voir cartes
-// KPI en haut de page) : bornées par le scope de rôle uniquement.
-async function getStatistics(actor) {
+// Statistiques globales (indépendantes des filtres période/machine/poste du
+// tableau — voir cartes KPI en haut de page) : bornées par le scope de rôle,
+// PLUS désormais le filtre "Created by" (§11 : les KPI doivent se
+// recalculer quand ce filtre change, ex. "All users" Total=100 →
+// "production_1" Total=25) — jamais les autres filtres (période/machine/
+// poste), qui restent volontairement globaux pour ces cartes.
+async function getStatistics(filters, actor) {
   const scopeWhere = isOwnerScoped(actor.role) ? { createdBy: actor.id } : {};
+  applyCreatedByFilter(scopeWhere, filters, actor);
   const weekRange = computeDateRange("week");
   const monthRange = computeDateRange("month");
 
@@ -586,6 +612,40 @@ async function getFilters(actor) {
   };
 }
 
+// §MODIFICATION — ADMIN > PRODUCTION RECORDS — FILTRE PAR UTILISATEUR (§3) :
+// alimente le dropdown "All users" — UNIQUEMENT les utilisateurs ayant
+// RÉELLEMENT créé au moins une fiche (PROMESH ou PROBAR), jamais la liste
+// complète des comptes de l'application ni une valeur codée en dur côté
+// Flutter. Un rôle owner-scoped n'a de toute façon accès qu'à ses propres
+// fiches (`isOwnerScoped`, voir buildPromeshWhere/buildProbarWhere) — pour
+// lui, cette liste ne peut jamais contenir qu'un seul utilisateur (lui-même),
+// jamais un moyen de découvrir qui d'autre existe.
+async function getCreators(actor) {
+  const promeshWhere = isOwnerScoped(actor.role) ? { createdBy: actor.id } : {};
+  const probarWhere = { module: "probar", ...(isOwnerScoped(actor.role) ? { createdBy: actor.id } : {}) };
+
+  const [promeshIds, probarIds] = await Promise.all([
+    distinctValues(PorPromesh, "createdBy", promeshWhere),
+    distinctValues(IndustrialRecord, "createdBy", probarWhere),
+  ]);
+  const ids = Array.from(new Set([...promeshIds, ...probarIds].filter(Boolean)));
+  if (!ids.length) return [];
+
+  const users = await User.findAll({
+    where: { id: { [Op.in]: ids } },
+    attributes: ["id", "email", "role"],
+    include: [{ model: UserProfile, as: "profile", attributes: ["name", "nom", "prenom"], required: false }],
+    order: [["email", "ASC"]],
+  });
+
+  return users.map((u) => {
+    const j = u.toJSON();
+    const profile = j.profile || {};
+    const fullName = (profile.name && profile.name.trim()) || [profile.prenom, profile.nom].filter(Boolean).join(" ").trim() || null;
+    return { id: j.id, email: j.email, role: j.role, name: fullName || null };
+  });
+}
+
 function parseCompositeId(id) {
   const [type, uuid] = String(id || "").split(":");
   if (!uuid || !["promesh", "probar"].includes(type)) {
@@ -614,4 +674,4 @@ async function getRecordById(compositeId, actor) {
   return buildProbarDetail(toIndustrialRecordResponse(record, { light: false }));
 }
 
-module.exports = { listRecords, getStatistics, getProductionTotals, getProductionSummary, getFilters, getRecordById };
+module.exports = { listRecords, getStatistics, getProductionTotals, getProductionSummary, getFilters, getCreators, getRecordById };

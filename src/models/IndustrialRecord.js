@@ -27,6 +27,16 @@ const IndustrialRecord = sequelize.define(
     description: { type: DataTypes.TEXT, allowNull: true },
     observations: { type: DataTypes.TEXT, allowNull: true },
 
+    // §MODIFICATION — FICHE MÉLANGE : champs structurés dédiés (module
+    // 'melange' uniquement — null pour PROBAR/MAINTENANCE, même convention
+    // que melangeData ci-dessous).
+    heureDebut: { type: DataTypes.TIME, allowNull: true },
+    heureFin: { type: DataTypes.TIME, allowNull: true },
+    promesh: { type: DataTypes.STRING(20), allowNull: true },
+    // §MODIFICATION — FICHE MÉLANGE (simplification) : renommé depuis
+    // "echantillon" — voir migration 20260824020000.
+    dechet: { type: DataTypes.STRING(255), allowNull: true },
+
     // Champ dédié au module MÉLANGE — stocke le JSON complet du formulaire
     // sans limitation de taille. Les autres modules (PROBAR, MAINTENANCE) laissent ce champ null.
     melangeData: { type: DataTypes.JSONB, allowNull: true },

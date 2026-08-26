@@ -15,6 +15,14 @@ const FinanceShipment = sequelize.define(
   {
     id: { type: DataTypes.UUID, defaultValue: DataTypes.UUIDV4, primaryKey: true },
 
+    // Identifiant métier généré INCONDITIONNELLEMENT par l'application
+    // (§MODIFICATION — CUSTOMER SHIPMENTS) — format "SH-00001", UNIQUE, un
+    // seul par Customer Shipment, JAMAIS extrait/deviné. Distinct de
+    // `reference` ci-dessous, qui reste soit le numéro de BL lu par OCR soit
+    // un repli SHIP-{année}-NNNNNN quand l'OCR est peu fiable. Voir
+    // finance.service.js#generateShipmentNumber.
+    shipmentNumber: { type: DataTypes.STRING(20), allowNull: true, unique: true },
+
     reference: { type: DataTypes.STRING(100), allowNull: false, unique: true },
 
     // "New shipment" simplifié : plus de champ Customer/Date dans le

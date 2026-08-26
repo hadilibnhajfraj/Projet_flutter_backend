@@ -49,6 +49,15 @@ function toMelangeSummary(melangeData) {
   };
 }
 
+// HH:mm:ss (Postgres TIME) → HH:mm attendu côté Flutter (TimeOfDay) — la
+// colonne peut aussi être `null` (fiches créées avant §MODIFICATION —
+// FICHE MÉLANGE, ou modules autres que MÉLANGE).
+function formatTime(value) {
+  if (!value) return null;
+  const str = String(value);
+  return str.length >= 5 ? str.slice(0, 5) : str;
+}
+
 function toCreatorRef(user) {
   if (!user) return null;
   const u = user.toJSON ? user.toJSON() : user;
@@ -77,6 +86,15 @@ function toIndustrialRecordResponse(record, { light = false } = {}) {
     urgence: r.urgence,
     description: r.description,
     observations: r.observations,
+
+    // §MODIFICATION — FICHE MÉLANGE : champs structurés dédiés (null pour
+    // PROBAR/MAINTENANCE).
+    heureDebut: formatTime(r.heureDebut),
+    heureFin: formatTime(r.heureFin),
+    promesh: r.promesh,
+    // §MODIFICATION — FICHE MÉLANGE (simplification) : renommé depuis
+    // "echantillon".
+    dechet: r.dechet,
 
     // Champ dédié MÉLANGE (null pour PROBAR / MAINTENANCE)
     melangeData: light ? null : (r.melangeData ?? null),

@@ -29,6 +29,10 @@ function toDocumentResponse(doc) {
     module: d.module,
     entityId: d.entityId,
     originalName: d.originalName,
+    // §MODIFICATION — FINANCE > OTHER : nom d'affichage modifiable (§7/§19).
+    // Retombe sur `originalName` pour tout document créé avant l'ajout de ce
+    // champ ou par un autre module — jamais `null` côté frontend.
+    displayName: d.displayName ?? d.originalName,
     fileUrl: d.fileUrl,
     mimeType: d.mimeType,
     fileSize: d.fileSize,
@@ -70,6 +74,7 @@ function toShipmentResponse(shipment) {
   const s = shipment.toJSON ? shipment.toJSON() : shipment;
   return {
     id: s.id,
+    shipmentNumber: s.shipmentNumber,
     reference: s.reference,
     customerReference: s.customerReference,
     customerId: s.customerId,
@@ -188,6 +193,24 @@ function toInvoiceResponse(invoice) {
     paymentMethod: i.paymentMethod,
     amountInWords: i.amountInWords,
     ocrConfidence: i.ocrConfidence,
+    // §MODIFICATION — SCAN / OCR DES FACTURES : SUPPORT DE 2 FORMATS. Le
+    // format fournisseur/NADEC n'a pas de colonnes DB dédiées pour
+    // supplier{}/references{blNumber,bcNumber} (aucune migration nécessaire,
+    // ces informations n'existent nulle part ailleurs qu'ici) — exposées en
+    // LECTURE SEULE depuis le JSONB `ocrExtraction` déjà stocké à
+    // l'extraction, jamais recalculées. `null` pour les factures SAGE (rien
+    // à mélanger) et pour les factures créées via le flux JSON historique
+    // (aucune extraction OCR effectuée).
+    format: i.ocrExtraction?.format ?? null,
+    supplier: i.ocrExtraction?.supplier ?? null,
+    references: i.ocrExtraction?.references ?? null,
+    // §CORRECTION PRIORITAIRE — EXTRACTION OCR FACTURE NADEC : mêmes
+    // garanties que supplier/references ci-dessus (lecture seule depuis
+    // `ocrExtraction`, `null` pour SAGE/flux JSON historique).
+    operator: i.ocrExtraction?.operator ?? null,
+    seller: i.ocrExtraction?.seller ?? null,
+    page: i.ocrExtraction?.page ?? null,
+    taxesZone: i.ocrExtraction?.taxesZone ?? null,
     taxes: (i.taxes || []).map(toInvoiceTaxResponse),
     payments: (i.payments || []).map(toPaymentResponse),
     items: (i.items || []).map(toInvoiceItemResponse),
@@ -223,6 +246,7 @@ function toPurchaseOrderResponse(order) {
   const o = order.toJSON ? order.toJSON() : order;
   return {
     id: o.id,
+    poNumber: o.poNumber,
     orderNumber: o.orderNumber,
     orderDate: o.orderDate,
     customerId: o.customerId,

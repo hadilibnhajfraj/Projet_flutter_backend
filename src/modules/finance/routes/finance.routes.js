@@ -16,7 +16,11 @@ const {
 // Le module Finance est un espace dédié — rôle finance_probar + les mêmes
 // tiers admin que les autres modules (aucun droit admin supplémentaire
 // accordé, uniquement l'accès en lecture/écriture à ce module précis).
-const FINANCE_ROLES = ["admin", "superadmin", "superadmin2", "finance_probar"];
+// finance_production (§MODIFICATION — INTERFACE PRODUCTION DE
+// DENNISREDFEATHER) conserve le même accès Finance que finance_probar, en
+// plus de son accès Production (voir por-promesh/industrial-records/
+// production-records routes).
+const FINANCE_ROLES = ["admin", "superadmin", "superadmin2", "finance_probar", "finance_production"];
 
 // POST /shipments est du multipart/form-data (pièces jointes) — tout champ
 // non-fichier y arrive en STRING, y compris "products" que le client envoie
@@ -39,6 +43,7 @@ router.use(authRequired);
 router.use(requireRole(...FINANCE_ROLES));
 
 router.get("/dashboard", ctrl.getDashboard);
+router.get("/dashboard/monthly", ctrl.getDashboardMonthly);
 
 // ── Inflow of raw materials ────────────────────────────────────────────
 // IMPORTANT : "/raw-materials/upload" déclaré avant "/raw-materials/:id"
@@ -104,5 +109,17 @@ router.delete("/invoices/:id", ctrl.deleteInvoice);
 
 router.get("/paid-invoices", ctrl.listPaidInvoices);
 router.get("/paid-invoices/:id", ctrl.getInvoice);
+
+// ── Finance > Other (§MODIFICATION — SCAN SIMPLE DE DOCUMENTS) ──────────
+// Stockage documentaire pur, AUCUN OCR/extraction déclenché (voir
+// finance.service.js#uploadOtherDocument) — le fichier reste directement
+// accessible via son `fileUrl` statique existant (`/uploads/finance-
+// documents/...`, déjà servi — voir app.js), pas de route "view" dédiée :
+// le viewer PDF/image générique côté frontend (déjà utilisé par les 3
+// autres modules Finance) le consomme tel quel.
+router.get("/other-documents", ctrl.listOtherDocuments);
+router.post("/other-documents", financeDocumentUpload.single("file"), handleUploadError, ctrl.uploadOtherDocument);
+router.patch("/other-documents/:id", ctrl.renameOtherDocument);
+router.delete("/other-documents/:id", ctrl.deleteOtherDocument);
 
 module.exports = router;

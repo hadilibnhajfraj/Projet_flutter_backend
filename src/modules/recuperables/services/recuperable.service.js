@@ -9,8 +9,11 @@ require("../../../models/associations");
 
 const OPEN_WINDOW_DAYS = 6;
 
-// responsable_logistique_achat ne voit/édite que ses propres fiches —
-// même règle que POR PROMESH / IndustrialRecord.
+// responsable_logistique_achat ne voit/édite que ses propres fiches — même
+// règle que POR PROMESH / IndustrialRecord. finance_production
+// (§MODIFICATION — DASHBOARD PRODUCTION) est délibérément EXCLU de
+// l'owner-scoping — ce rôle consulte toutes les fiches Récupérables, comme
+// admin/superadmin, mais reste soumis à DELETE_ROLES.
 function isOwnerScoped(role) {
   return role === "responsable_logistique_achat";
 }

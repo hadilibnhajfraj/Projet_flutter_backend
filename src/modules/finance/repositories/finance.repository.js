@@ -1,6 +1,6 @@
 "use strict";
 
-const { Op, literal } = require("sequelize");
+const { Op, literal, fn, col } = require("sequelize");
 const FinanceDocument = require("../../../models/FinanceDocument");
 const FinanceShipment = require("../../../models/FinanceShipment");
 const FinanceShipmentItem = require("../../../models/FinanceShipmentItem");
@@ -48,8 +48,13 @@ function findDocuments(where = {}, { limit, offset } = {}) {
   });
 }
 
-function countDocuments(where = {}) {
-  return FinanceDocument.count({ where });
+// `include` optionnel : requis quand `where` référence une colonne de
+// l'association jointe (ex. `'$uploader.email$'`, voir
+// otherDocumentSearchClause) — sans lui, Postgres rejette la requête
+// ("missing FROM-clause entry for table «uploader»"), `count()` ne réutilise
+// jamais automatiquement l'`include` d'un `findAll` voisin.
+function countDocuments(where = {}, { include } = {}) {
+  return FinanceDocument.count({ where, include });
 }
 
 function findDocumentById(id) {
@@ -60,9 +65,64 @@ function destroyDocument(instance, options) {
   return instance.destroy(options);
 }
 
+function updateDocument(instance, data, options) {
+  return instance.update(data, options);
+}
+
 function documentSearchClause(term) {
   const like = `%${term}%`;
   return { originalName: { [Op.iLike]: like } };
+}
+
+// ── FINANCE > OTHER (§MODIFICATION — SCAN SIMPLE DE DOCUMENTS) ─────────────
+// Stockage documentaire pur, réutilisant `finance_documents`/`findDocuments`/
+// `countDocuments`/`createDocument`/`destroyDocument`/`updateDocument`
+// ci-dessus tels quels (module="OTHER", entityId toujours NULL) — seules la
+// recherche (§15) et le filtre "type" (§16) sont spécifiques à ce module.
+
+// `uploader` (belongsTo, UNE seule ligne par document — jamais de
+// multiplication de lignes contrairement aux hasMany paginées ailleurs dans
+// ce fichier) : un where sur `'$uploader.email$'` combiné à l'`include`
+// déjà présent dans `findDocuments` reste donc sûr avec `limit`/`offset`.
+function otherDocumentSearchClause(term) {
+  const like = `%${term}%`;
+  return {
+    [Op.or]: [
+      { displayName: { [Op.iLike]: like } },
+      { originalName: { [Op.iLike]: like } },
+      { mimeType: { [Op.iLike]: like } }, // "pdf"/"image"/... matche par sous-chaîne du mimeType réel
+      { "$uploader.email$": { [Op.iLike]: like } },
+    ],
+  };
+}
+
+const OTHER_DOCUMENT_TYPE_MIME_PATTERNS = {
+  PDF: ["application/pdf"],
+  IMAGE: ["image/"],
+  WORD: ["application/msword", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"],
+  EXCEL: [
+    "application/vnd.ms-excel",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "text/csv",
+    "application/csv",
+  ],
+};
+
+// "Other" (catégorie de filtre, §16) : tout ce qui n'entre dans AUCUNE des
+// catégories connues ci-dessus (ex. .txt) — jamais une valeur stockée, juste
+// le complément logique des autres filtres.
+function otherDocumentTypeClause(type) {
+  const patterns = OTHER_DOCUMENT_TYPE_MIME_PATTERNS[type];
+  if (patterns) {
+    return { [Op.or]: patterns.map((p) => (p.endsWith("/") ? { mimeType: { [Op.iLike]: `${p}%` } } : { mimeType: p })) };
+  }
+  if (type === "OTHER") {
+    const allKnown = Object.values(OTHER_DOCUMENT_TYPE_MIME_PATTERNS).flat();
+    return {
+      [Op.and]: allKnown.map((p) => (p.endsWith("/") ? { mimeType: { [Op.notILike]: `${p}%` } } : { mimeType: { [Op.ne]: p } })),
+    };
+  }
+  return null;
 }
 
 // ── SHIPMENTS ─────────────────────────────────────────────────────────────
@@ -228,6 +288,12 @@ function countPurchaseOrders(where = {}) {
   return FinancePurchaseOrder.count({ where });
 }
 
+// KPI "Total Purchases" du Finance Dashboard (§4) — somme des totaux déjà
+// extraits/enregistrés, jamais recalculée à partir des lignes produit.
+function sumPurchaseOrderAmount(where = {}) {
+  return FinancePurchaseOrder.sum("totalHT", { where });
+}
+
 function findPurchaseOrderById(id) {
   return FinancePurchaseOrder.findByPk(id, { include: PURCHASE_ORDER_INCLUDE });
 }
@@ -253,10 +319,40 @@ function sumPaymentAmountForInvoice(invoiceId, options) {
   return FinancePayment.sum("amount", { where: { invoiceId }, ...options });
 }
 
-// Total payé toutes factures confondues — KPI "Total paid amount" du
-// dashboard (§4), aucun filtre nécessaire pour l'instant.
-function sumPaymentAmount() {
-  return FinancePayment.sum("amount");
+// Total payé toutes factures confondues — KPI "Total Paid" du Finance
+// Dashboard (§4) — `where` optionnel (ex. plage de dates sur `paidDate`,
+// §11) pour respecter les filtres du Dashboard sans affecter les autres
+// appelants (repli par défaut sur l'ancien comportement non filtré).
+function sumPaymentAmount(where = {}) {
+  return FinancePayment.sum("amount", { where });
+}
+
+// ── DASHBOARD FINANCE — ÉVOLUTION MENSUELLE (§5) ────────────────────────
+// GROUP BY date_trunc('month', ...) calculé côté base — jamais recalculé
+// côté client (§16-17). Le mois lui-même est renvoyé comme timestamp brut
+// (formaté en "YYYY-MM" côté service, voir finance.service.js#getDashboardMonthly)
+// pour rester simple/portable plutôt que de dépendre d'un format SQL précis.
+function _sumByMonth(model, dateField, amountField, { start, end, extra = {} }) {
+  const monthExpr = fn("date_trunc", "month", col(dateField));
+  return model.findAll({
+    attributes: [[monthExpr, "month"], [fn("SUM", col(amountField)), "total"]],
+    where: { [dateField]: { [Op.gte]: start, [Op.lte]: end }, ...extra },
+    group: [monthExpr],
+    order: [[monthExpr, "ASC"]],
+    raw: true,
+  });
+}
+
+function sumPurchaseOrdersByMonth({ start, end, extra }) {
+  return _sumByMonth(FinancePurchaseOrder, "orderDate", "totalHT", { start, end, extra });
+}
+
+function sumInvoicesByMonth({ start, end, extra }) {
+  return _sumByMonth(FinanceInvoice, "invoiceDate", "total", { start, end, extra });
+}
+
+function sumPaymentsByMonth({ start, end, extra }) {
+  return _sumByMonth(FinancePayment, "paidDate", "amount", { start, end, extra });
 }
 
 // ── ACTIVITY LOG ──────────────────────────────────────────────────────────
@@ -271,7 +367,10 @@ module.exports = {
   countDocuments,
   findDocumentById,
   destroyDocument,
+  updateDocument,
   documentSearchClause,
+  otherDocumentSearchClause,
+  otherDocumentTypeClause,
   findDocumentsByEntityIds,
 
   createShipment,
@@ -296,6 +395,7 @@ module.exports = {
   createPurchaseOrderItems,
   findPurchaseOrders,
   countPurchaseOrders,
+  sumPurchaseOrderAmount,
   findPurchaseOrderById,
   purchaseOrderSearchClause,
 
@@ -303,6 +403,9 @@ module.exports = {
   findPaymentById,
   sumPaymentAmountForInvoice,
   sumPaymentAmount,
+  sumPurchaseOrdersByMonth,
+  sumInvoicesByMonth,
+  sumPaymentsByMonth,
 
   logActivity,
 };

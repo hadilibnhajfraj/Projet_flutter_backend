@@ -7,8 +7,10 @@ const { authRequired } = require("../../../middleware/auth.middleware");
 const { requireRole } = require("../../../middleware/requireRole");
 
 // Mêmes rôles que POR PROMESH — ce module générique sert PROBAR, MÉLANGE
-// et MAINTENANCE, qui partagent l'espace dédié industriel.
-const READ_WRITE_ROLES = ["admin", "superadmin", "superadmin2", "responsable_logistique_achat"];
+// et MAINTENANCE, qui partagent l'espace dédié industriel. finance_production
+// (§MODIFICATION — INTERFACE PRODUCTION DE DENNISREDFEATHER) reçoit le même
+// accès que responsable_logistique_achat ici, en plus de Finance.
+const READ_WRITE_ROLES = ["admin", "superadmin", "superadmin2", "responsable_logistique_achat", "finance_production"];
 const DELETE_ROLES = ["admin", "superadmin", "superadmin2"];
 
 router.use(authRequired);
