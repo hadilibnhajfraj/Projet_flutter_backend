@@ -417,6 +417,29 @@ async function deleteRawMaterial(id, actor) {
 // `entityId` toujours NULL (document autonome, non rattaché à une autre
 // entité Finance), rien de nouveau créé côté stockage/DB hormis la colonne
 // `displayName` (migration dédiée).
+//
+// §MODIFICATION CRM — SOUS-MENU IMPORT SUR CHAQUE MENU FINANCE : les 4
+// fonctions ci-dessous (list/upload/rename/delete) sont désormais
+// paramétrées par `module` au lieu du seul OTHER_MODULE en dur — même
+// pipeline en 3 étapes, mêmes garanties (AUCUN OCR, entityId toujours NULL),
+// réutilisées TELLES QUELLES pour le nouveau sous-menu "Import" des 4 autres
+// pages Finance (Inflow of raw materials/Shipment/Factured shipments/Paid
+// factures) — voir listImportDocuments/uploadImportDocument/
+// renameImportDocument/deleteImportDocument ci-dessous, jamais une seconde
+// implémentation d'upload. listOtherDocuments/uploadOtherDocument/
+// renameOtherDocument/deleteOtherDocument restent exportées à l'identique
+// (simples enveloppes figées sur OTHER_MODULE) — la route/le comportement
+// "Finance > Other" existants ne changent pas d'un octet.
+// PAID_INVOICE (Paid factures) n'a pas de constante dédiée ailleurs dans ce
+// fichier — Paid factures partage la table finance_invoices (INVOICE_MODULE)
+// avec Factured shipments, distinguées uniquement par un filtre côté
+// frontend (voir migration 20260827000100 pour l'explication complète).
+const PAID_INVOICE_IMPORT_MODULE = "PAID_INVOICE";
+const IMPORT_MODULES = [RAW_MATERIALS_MODULE, SHIPMENT_MODULE, INVOICE_MODULE, PAID_INVOICE_IMPORT_MODULE, OTHER_MODULE];
+
+function assertValidImportModule(module) {
+  if (!IMPORT_MODULES.includes(module)) throw { status: 400, message: "Module d'import invalide" };
+}
 
 function sanitizeDisplayName(name) {
   const base = String(name ?? "")
@@ -441,8 +464,9 @@ function otherDocumentDateRange(filters) {
 
 // Recherche (§15) + filtres date/type (§16) — jamais de ré-extraction, juste
 // une lecture filtrée des métadonnées déjà enregistrées.
-async function listOtherDocuments(filters = {}) {
-  const where = { module: OTHER_MODULE, ...otherDocumentDateRange(filters) };
+async function listImportDocuments(module, filters = {}) {
+  assertValidImportModule(module);
+  const where = { module, entityId: null, ...otherDocumentDateRange(filters) };
   const clauses = [where];
   if (filters.search) clauses.push(repo.otherDocumentSearchClause(filters.search));
   if (filters.type) {
@@ -473,11 +497,12 @@ async function listOtherDocuments(filters = {}) {
 // purchaseOrderFieldExtraction/invoiceFieldExtraction — contrairement à
 // processInvoiceUpload/processShipmentUpload/uploadRawMaterial ci-dessus et
 // ci-dessous, cette fonction ne lit JAMAIS le contenu du fichier.
-async function uploadOtherDocument(file, actor) {
+async function uploadImportDocument(module, file, actor) {
+  assertValidImportModule(module);
   const originalName = sanitizeOriginalName(file.originalname);
   try {
     const document = await repo.createDocument({
-      module: OTHER_MODULE,
+      module,
       entityId: null,
       originalName,
       displayName: originalName, // §6 : identique à originalName au moment de l'upload
@@ -493,7 +518,7 @@ async function uploadOtherDocument(file, actor) {
       entityId: document.id,
       userId: actor.id,
       type: "UPLOAD_OTHER_DOCUMENT",
-      message: `Document "${originalName}" ajouté (Other)`,
+      message: `Document "${originalName}" ajouté (${module})`,
     });
 
     return repo.findDocumentById(document.id);
@@ -506,9 +531,10 @@ async function uploadOtherDocument(file, actor) {
 // Renommage (§7/§12/§19) — modifie UNIQUEMENT `displayName`, jamais
 // `originalName`/`storedFileName`/`fileUrl` : le fichier physique et son URL
 // restent inchangés, l'utilisateur ne peut pas altérer le chemin réel.
-async function renameOtherDocument(id, displayName, actor) {
+async function renameImportDocument(module, id, displayName, actor) {
+  assertValidImportModule(module);
   const document = await repo.findDocumentById(id);
-  if (!document || document.module !== OTHER_MODULE) throw { status: 404, message: "Document introuvable" };
+  if (!document || document.module !== module) throw { status: 404, message: "Document introuvable" };
 
   const clean = sanitizeDisplayName(displayName);
   const previousName = document.displayName ?? document.originalName;
@@ -531,9 +557,10 @@ async function renameOtherDocument(id, displayName, actor) {
 // une seule ligne, transaction à une seule écriture (cohérence conservée
 // malgré tout, même style que les suppressions Purchase Order/Shipment/
 // Invoice ci-dessus).
-async function deleteOtherDocument(id, actor) {
+async function deleteImportDocument(module, id, actor) {
+  assertValidImportModule(module);
   const document = await repo.findDocumentById(id);
-  if (!document || document.module !== OTHER_MODULE) throw { status: 404, message: "Document introuvable" };
+  if (!document || document.module !== module) throw { status: 404, message: "Document introuvable" };
 
   const originalName = document.displayName ?? document.originalName;
   await sequelize.transaction(async (t) => {
@@ -552,11 +579,21 @@ async function deleteOtherDocument(id, actor) {
     entityId: id,
     userId: actor.id,
     type: "DELETE_OTHER_DOCUMENT",
-    message: `Document "${originalName}" supprimé (Other)`,
+    message: `Document "${originalName}" supprimé (${module})`,
   });
 
   return { id };
 }
+
+// ── Finance > Other — enveloppes rétro-compatibles ─────────────────────────
+// Comportement IDENTIQUE à avant cette modification (mêmes signatures, même
+// résultat) : le module reste figé sur OTHER_MODULE, jamais exposé au
+// client. Utilisées par les routes "/other-documents" existantes,
+// inchangées (voir finance.routes.js).
+const listOtherDocuments = (filters) => listImportDocuments(OTHER_MODULE, filters);
+const uploadOtherDocument = (file, actor) => uploadImportDocument(OTHER_MODULE, file, actor);
+const renameOtherDocument = (id, displayName, actor) => renameImportDocument(OTHER_MODULE, id, displayName, actor);
+const deleteOtherDocument = (id, actor) => deleteImportDocument(OTHER_MODULE, id, actor);
 
 // ── SHIPMENT OF PRODUCTS TO THE CUSTOMERS (§7) ──────────────────────────
 //
@@ -1413,6 +1450,14 @@ module.exports = {
   uploadOtherDocument,
   renameOtherDocument,
   deleteOtherDocument,
+  listImportDocuments,
+  uploadImportDocument,
+  renameImportDocument,
+  deleteImportDocument,
+  RAW_MATERIALS_MODULE,
+  SHIPMENT_MODULE,
+  INVOICE_MODULE,
+  PAID_INVOICE_IMPORT_MODULE,
   listShipments,
   createShipment,
   processShipmentUpload,

@@ -387,15 +387,15 @@ async function getProductionTotals(filters, actor) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// "Production Summary" — tableau récapitulatif regroupé par Diamètre
-// (+ Taille de maille pour PROMESH), avec sous-total par diamètre et total
-// général, calculés en SQL (GROUP BY + SUM, jamais de fiches rapatriées
-// pour être sommées côté Node — voir §9 du cahier des charges).
-//
-// Par défaut, seules les fiches VALIDÉES comptent comme production réelle
-// (même règle que getProductionTotals/le verrouillage automatique) — un
-// filtre "Statut" explicite permet néanmoins d'inclure aussi les brouillons
-// ou absolument tout, sur demande explicite du point 4 du cahier des charges.
+// "Production Summary" — le MÊME jeu de fiches que "Production records"
+// (listRecords ci-dessus), une ligne par fiche (id/date/machine/diamètre/
+// cell size/quantité — voir normalizePromesh/normalizeProbar, aucun champ
+// réinventé), borné aux fiches VALIDÉES par défaut (même règle que
+// getProductionTotals/le verrouillage automatique) — un filtre "Statut"
+// explicite permet néanmoins d'inclure aussi les brouillons ou absolument
+// tout. grandTotal/totalRecords sont calculés à partir de CES MÊMES lignes
+// (jamais une requête SQL séparée qui pourrait diverger) — l'écran et
+// l'export Excel/PDF affichent donc toujours exactement les mêmes chiffres.
 // ═══════════════════════════════════════════════════════════════════════
 
 function resolveSummaryStatus(filters) {
@@ -427,115 +427,36 @@ function applyProbarSummaryFilters(where, filters) {
   return where;
 }
 
-// Tri numérique quand la valeur le permet (ex. "4" avant "10"), les valeurs
-// non numériques/absentes sont repoussées en fin de liste — jamais d'erreur
-// sur une valeur composée type "10*10".
-function numericOrderExpr(sqlExpr) {
-  return literal(`CASE WHEN ${sqlExpr} ~ '${NUMERIC_PATTERN}' THEN (${sqlExpr})::numeric ELSE 999999999 END`);
-}
-
 async function buildPromeshSummary(filters, actor) {
   const where = applyPromeshSummaryFilters(buildPromeshWhere(filters, actor), filters);
 
-  const rows = await PorPromesh.findAll({
+  const records = await PorPromesh.findAll({
     where,
-    attributes: [
-      [col("diametreMaille2"), "diameter"],
-      [col("diametreMaille1"), "meshSize"],
-      [fn("SUM", col("productionM2")), "quantity"],
-      [fn("COUNT", col("id")), "records"],
-    ],
-    group: ["diametreMaille2", "diametreMaille1"],
-    order: [
-      [numericOrderExpr('"diametreMaille2"'), "ASC"],
-      [col("diametreMaille1"), "ASC"],
-    ],
-    raw: true,
+    include: INCLUDE_CREATOR,
+    order: [["dateProduction", "DESC"]],
+    limit: HARD_FETCH_CAP,
   });
 
-  // Regroupement Diameter + Cell size (§1/§3 du cahier des charges) : une
-  // ligne par (diamètre, taille de maille), puis un sous-total par diamètre.
-  //
-  // SQL GROUP BY distingue NULL et "" (chaîne vide) — deux valeurs
-  // distinctes pour Postgres — alors que la normalisation JS ci-dessous les
-  // traite toutes deux comme "non renseigné". Sans un second regroupement
-  // PAR VALEUR NORMALISÉE (la Map imbriquée ci-dessous), une fiche avec
-  // `diametreMaille1 = NULL` et une autre avec `diametreMaille1 = ""`
-  // ressortiraient comme deux lignes "taille de maille non renseignée"
-  // distinctes au lieu d'une seule ligne fusionnée — exactement le défaut
-  // que le §3 du cahier des charges interdit ("et non deux lignes séparées").
-  const byDiameter = new Map();
-  for (const r of rows) {
-    const diameter = r.diameter != null && String(r.diameter).trim() !== "" ? String(r.diameter) : null;
-    const meshSize = r.meshSize != null && String(r.meshSize).trim() !== "" ? String(r.meshSize) : null;
-    const diameterKey = diameter ?? "__none__";
-    const meshKey = meshSize ?? "__none__";
+  const rows = records.map(normalizePromesh);
+  const grandTotal = rows.reduce((sum, r) => sum + (r.quantite || 0), 0);
 
-    if (!byDiameter.has(diameterKey)) {
-      byDiameter.set(diameterKey, { diameter, byMeshSize: new Map(), diameterTotal: 0, records: 0 });
-    }
-    const group = byDiameter.get(diameterKey);
-
-    const quantity = toNumberOrZero(r.quantity);
-    const records = parseInt(r.records, 10) || 0;
-    if (!group.byMeshSize.has(meshKey)) {
-      group.byMeshSize.set(meshKey, { meshSize, quantity: 0, records: 0 });
-    }
-    const row = group.byMeshSize.get(meshKey);
-    row.quantity += quantity;
-    row.records += records;
-
-    group.diameterTotal += quantity;
-    group.records += records;
-  }
-
-  const groups = Array.from(byDiameter.values()).map((g) => ({
-    diameter: g.diameter,
-    rows: Array.from(g.byMeshSize.values()),
-    diameterTotal: g.diameterTotal,
-    records: g.records,
-  }));
-  const grandTotal = groups.reduce((sum, g) => sum + g.diameterTotal, 0);
-  const totalRecords = groups.reduce((sum, g) => sum + g.records, 0);
-
-  return { groups, grandTotal, unit: "m²", totalRecords, diameterCount: groups.length };
+  return { rows, grandTotal, unit: "m²", totalRecords: rows.length };
 }
 
 async function buildProbarSummary(filters, actor) {
   const where = applyProbarSummaryFilters(buildProbarWhere(filters, actor), filters);
-  const diameterExpr = `substring("description" from '"dia":"([^"]*)"')`;
 
-  const rows = await IndustrialRecord.findAll({
+  const records = await IndustrialRecord.findAll({
     where,
-    attributes: [
-      [literal(diameterExpr), "diameter"],
-      [fn("SUM", col("quantiteProduite")), "quantity"],
-      [fn("COUNT", col("id")), "records"],
-    ],
-    group: [literal(diameterExpr)],
-    order: [[numericOrderExpr(diameterExpr), "ASC"]],
-    raw: true,
+    include: INCLUDE_CREATOR,
+    order: [["dateFiche", "DESC"]],
+    limit: HARD_FETCH_CAP,
   });
 
-  // PROBAR n'a pas de notion de "Cell size" (§8) : Diameter + Quantity
-  // uniquement. Même précaution que buildPromeshSummary ci-dessus : SQL
-  // distingue une clé "dia" absente (NULL) d'une clé "dia":"" (chaîne vide)
-  // — un second regroupement par valeur normalisée évite deux lignes
-  // "diamètre non renseigné" séparées.
-  const byDiameter = new Map();
-  for (const r of rows) {
-    const diameter = r.diameter != null && String(r.diameter).trim() !== "" ? String(r.diameter) : null;
-    const key = diameter ?? "__none__";
-    if (!byDiameter.has(key)) byDiameter.set(key, { diameter, quantity: 0, records: 0 });
-    const group = byDiameter.get(key);
-    group.quantity += toNumberOrZero(r.quantity);
-    group.records += parseInt(r.records, 10) || 0;
-  }
-  const groups = Array.from(byDiameter.values());
-  const grandTotal = groups.reduce((sum, g) => sum + g.quantity, 0);
-  const totalRecords = groups.reduce((sum, g) => sum + g.records, 0);
+  const rows = records.map(normalizeProbar);
+  const grandTotal = rows.reduce((sum, r) => sum + (r.quantite || 0), 0);
 
-  return { groups, grandTotal, unit: "m", totalRecords, diameterCount: groups.length };
+  return { rows, grandTotal, unit: "m", totalRecords: rows.length };
 }
 
 async function getProductionSummary(filters, actor) {

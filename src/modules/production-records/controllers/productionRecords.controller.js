@@ -62,8 +62,8 @@ async function creators(req, res) {
   }
 }
 
-// "Production Summary" — tableau récapitulatif groupé par Diamètre
-// (+ Taille de maille pour PROMESH), voir getProductionSummary().
+// "Production Summary" — une ligne par fiche (même jeu de données que
+// "Production records"), voir getProductionSummary().
 async function summary(req, res) {
   try {
     const { type, period, startDate, endDate, machineId, poste, createdBy, diameter, status } = req.query;

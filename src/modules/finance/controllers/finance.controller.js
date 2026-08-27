@@ -116,6 +116,65 @@ async function deleteOtherDocument(req, res) {
   }
 }
 
+// ── Sous-menu "Import" (MODIFICATION CRM — AJOUTER UN SOUS-MENU IMPORT À
+// CHAQUE MENU FINANCE) — mêmes 4 opérations que "Finance > Other" ci-dessus
+// (list/upload/rename/delete), réutilisées TELLES QUELLES via
+// svc.*ImportDocument (voir finance.service.js), jamais une seconde
+// implémentation d'upload/OCR : ces 4 handlers ne sont que de fines
+// enveloppes qui fixent `module` selon la page appelante (voir
+// finance.routes.js — un jeu de 4 routes par module, chacune liée à l'un
+// des handlers ci-dessous).
+function makeImportHandlers(module) {
+  return {
+    async list(req, res) {
+      try {
+        const { search, type, startDate, endDate, page, pageSize } = req.query;
+        const { data, total, page: p, pageSize: ps } = await svc.listImportDocuments(module, {
+          search,
+          type,
+          startDate,
+          endDate,
+          page,
+          pageSize,
+        });
+        res.json({ success: true, count: total, page: p, pageSize: ps, data: dto.toDocumentList(data) });
+      } catch (err) {
+        handle(res, err);
+      }
+    },
+    async upload(req, res) {
+      try {
+        if (!req.file) return res.status(400).json({ success: false, message: "Fichier requis" });
+        const document = await svc.uploadImportDocument(module, req.file, actorFrom(req));
+        res.status(201).json({ success: true, message: "Document uploaded successfully", data: dto.toDocumentResponse(document) });
+      } catch (err) {
+        handle(res, err);
+      }
+    },
+    async rename(req, res) {
+      try {
+        const document = await svc.renameImportDocument(module, req.params.id, req.body?.displayName, actorFrom(req));
+        res.json({ success: true, message: "Document renamed successfully", data: dto.toDocumentResponse(document) });
+      } catch (err) {
+        handle(res, err);
+      }
+    },
+    async remove(req, res) {
+      try {
+        await svc.deleteImportDocument(module, req.params.id, actorFrom(req));
+        res.json({ success: true, message: "Document deleted successfully" });
+      } catch (err) {
+        handle(res, err);
+      }
+    },
+  };
+}
+
+const rawMaterialsImport = makeImportHandlers(svc.RAW_MATERIALS_MODULE);
+const shipmentsImport = makeImportHandlers(svc.SHIPMENT_MODULE);
+const facturedShipmentsImport = makeImportHandlers(svc.INVOICE_MODULE);
+const paidInvoicesImport = makeImportHandlers(svc.PAID_INVOICE_IMPORT_MODULE);
+
 // ── Shipment of products to the customers ──────────────────────────────
 
 async function listShipments(req, res) {
@@ -271,6 +330,10 @@ module.exports = {
   uploadOtherDocument,
   renameOtherDocument,
   deleteOtherDocument,
+  rawMaterialsImport,
+  shipmentsImport,
+  facturedShipmentsImport,
+  paidInvoicesImport,
   listShipments,
   createShipment,
   getShipment,

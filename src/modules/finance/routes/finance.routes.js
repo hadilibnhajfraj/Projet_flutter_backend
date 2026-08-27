@@ -46,11 +46,21 @@ router.get("/dashboard", ctrl.getDashboard);
 router.get("/dashboard/monthly", ctrl.getDashboardMonthly);
 
 // ── Inflow of raw materials ────────────────────────────────────────────
-// IMPORTANT : "/raw-materials/upload" déclaré avant "/raw-materials/:id"
-// (même piège que por-promesh/production-records — même méthode HTTP
-// utiliserait sinon le mauvais handler selon l'ordre).
+// IMPORTANT : "/raw-materials/upload" et "/raw-materials/import" déclarés
+// avant "/raw-materials/:id" (même piège que por-promesh/production-records
+// — même méthode HTTP utiliserait sinon le mauvais handler selon l'ordre).
 router.get("/raw-materials", ctrl.listRawMaterials);
 router.post("/raw-materials/upload", financeDocumentUpload.single("file"), handleUploadError, ctrl.uploadRawMaterial);
+// Sous-menu "Import" (MODIFICATION CRM — AJOUTER UN SOUS-MENU IMPORT À
+// CHAQUE MENU FINANCE) — stockage documentaire pur, AUCUN OCR, EXACTEMENT le
+// même comportement que "Finance > Other" (voir ctrl.rawMaterialsImport =
+// makeImportHandlers(RAW_MATERIALS_MODULE) dans finance.controller.js) —
+// distinct de "/raw-materials/upload" ci-dessus, qui LIT le document par OCR
+// pour créer un vrai Purchase Order.
+router.get("/raw-materials/import", ctrl.rawMaterialsImport.list);
+router.post("/raw-materials/import", financeDocumentUpload.single("file"), handleUploadError, ctrl.rawMaterialsImport.upload);
+router.patch("/raw-materials/import/:id", ctrl.rawMaterialsImport.rename);
+router.delete("/raw-materials/import/:id", ctrl.rawMaterialsImport.remove);
 router.get("/raw-materials/:id", ctrl.getRawMaterial);
 router.delete("/raw-materials/:id", ctrl.deleteRawMaterial);
 
@@ -68,6 +78,13 @@ router.post(
   validateCreateShipment,
   ctrl.createShipment
 );
+// Sous-menu "Import" — même principe que "/raw-materials/import" ci-dessus,
+// déclaré avant "/shipments/:id" pour la même raison. Distinct de
+// POST /shipments (qui crée un vrai Shipment via OCR).
+router.get("/shipments/import", ctrl.shipmentsImport.list);
+router.post("/shipments/import", financeDocumentUpload.single("file"), handleUploadError, ctrl.shipmentsImport.upload);
+router.patch("/shipments/import/:id", ctrl.shipmentsImport.rename);
+router.delete("/shipments/import/:id", ctrl.shipmentsImport.remove);
 router.get("/shipments/:id", ctrl.getShipment);
 router.put("/shipments/:id", validateUpdateShipment, ctrl.updateShipment);
 router.delete("/shipments/:id", ctrl.deleteShipment);
@@ -94,6 +111,13 @@ router.post(
   validateCreateInvoice,
   ctrl.createInvoice
 );
+// Sous-menu "Import" de "Factured shipments" — même principe que
+// "/raw-materials/import" (voir plus haut), déclaré avant "/invoices/:id".
+// Distinct de POST /invoices (qui crée une vraie Invoice via OCR).
+router.get("/invoices/import", ctrl.facturedShipmentsImport.list);
+router.post("/invoices/import", financeDocumentUpload.single("file"), handleUploadError, ctrl.facturedShipmentsImport.upload);
+router.patch("/invoices/import/:id", ctrl.facturedShipmentsImport.rename);
+router.delete("/invoices/import/:id", ctrl.facturedShipmentsImport.remove);
 router.get("/invoices/:id", ctrl.getInvoice);
 // "Register payment" — document justificatif optionnel (Chèque/Traite
 // uniquement, champ multipart "document") ; multer laisse passer les
@@ -108,6 +132,15 @@ router.post(
 router.delete("/invoices/:id", ctrl.deleteInvoice);
 
 router.get("/paid-invoices", ctrl.listPaidInvoices);
+// Sous-menu "Import" de "Paid factures" — même principe, module dédié
+// PAID_INVOICE (voir migration 20260827000100 : Paid factures partage la
+// table finance_invoices avec Factured shipments, une valeur ENUM distincte
+// évite que leurs documents "Import" respectifs ne se mélangent). Déclaré
+// avant "/paid-invoices/:id".
+router.get("/paid-invoices/import", ctrl.paidInvoicesImport.list);
+router.post("/paid-invoices/import", financeDocumentUpload.single("file"), handleUploadError, ctrl.paidInvoicesImport.upload);
+router.patch("/paid-invoices/import/:id", ctrl.paidInvoicesImport.rename);
+router.delete("/paid-invoices/import/:id", ctrl.paidInvoicesImport.remove);
 router.get("/paid-invoices/:id", ctrl.getInvoice);
 
 // ── Finance > Other (§MODIFICATION — SCAN SIMPLE DE DOCUMENTS) ──────────
