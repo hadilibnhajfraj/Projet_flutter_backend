@@ -61,9 +61,19 @@ async function resolveOperateurName(actor) {
 // ── Enregistrement (création ou mise à jour en bloc) ────────────────────
 //
 // Une seule fiche par Module + Machine + Ligne + Poste + Date : si elle
-// existe déjà, on l'ouvre et on met à jour ses lignes au lieu d'en créer
-// une nouvelle. `recuperables` est toujours envoyé en bloc (jamais de
-// champs séparés) — chaque entrée est upsertée par diamètre.
+// existe déjà, on l'ouvre et on met à jour ses champs au lieu d'en créer
+// une nouvelle.
+//
+// §MODIFICATION — FICHE RECOVERABLES PROCESSED SIMPLIFIÉE : `waste`/
+// `wasteFinishedProduct` (deux valeurs directes sur la fiche) remplacent le
+// tableau par diamètre pour toute NOUVELLE saisie — voir
+// recuperable_fiche_screen.dart côté Flutter, qui n'envoie plus jamais
+// `recuperables`. Le bloc `recuperables` ci-dessous (upsert par diamètre
+// dans `recuperable_lignes`) est CONSERVÉ tel quel, uniquement pour la
+// compatibilité ascendante (si jamais un ancien payload le renvoie) — il ne
+// s'exécute simplement plus avec le nouveau formulaire, qui n'inclut pas ce
+// tableau. Aucune fiche/ligne existante n'est jamais supprimée par ce
+// changement.
 async function saveFiche(body, actor) {
   const operateur = await resolveOperateurName(actor);
   const combo = { module: body.module, machine: body.machine, ligne: body.ligne, poste: body.poste, date: body.date };
@@ -74,13 +84,21 @@ async function saveFiche(body, actor) {
     await ensureFreshStatut(fiche);
     assertOwnership(fiche, actor);
     assertOpen(fiche);
-    if (operateur && operateur !== fiche.operateur) await repo.updateFiche(fiche, { operateur });
+    const changes = {};
+    if (operateur && operateur !== fiche.operateur) changes.operateur = operateur;
+    if (body.waste !== undefined) changes.waste = body.waste;
+    if (body.wasteFinishedProduct !== undefined) changes.wasteFinishedProduct = body.wasteFinishedProduct;
+    if (body.finishedProduct !== undefined) changes.finishedProduct = body.finishedProduct;
+    if (Object.keys(changes).length) await repo.updateFiche(fiche, changes);
   } else {
     const dateCloture = dayjs().add(OPEN_WINDOW_DAYS, "day").format("YYYY-MM-DD");
     try {
       fiche = await repo.createFiche({
         ...combo,
         operateur,
+        waste: body.waste ?? 0,
+        wasteFinishedProduct: body.wasteFinishedProduct ?? 0,
+        finishedProduct: body.finishedProduct ?? 0,
         statut: "en_cours",
         dateCloture,
         createdBy: actor.id,
@@ -96,6 +114,7 @@ async function saveFiche(body, actor) {
     }
   }
 
+  // Compatibilité ascendante uniquement — voir commentaire ci-dessus.
   for (const item of body.recuperables || []) {
     await repo.upsertLigne(fiche.id, item.diametre, {
       dechetKg: item.dechetKg ?? 0,

@@ -65,10 +65,45 @@ async function getRawMaterial(req, res) {
   }
 }
 
+// §MODIFICATION — INFLOW RAW MATERIALS : "Order date" éditable directement
+// depuis le tableau (req.body déjà validé par validateUpdatePurchaseOrder).
+async function updateRawMaterial(req, res) {
+  try {
+    const { order, documents } = await svc.updateRawMaterial(req.params.id, req.body, actorFrom(req));
+    res.json({ success: true, data: { ...dto.toPurchaseOrderResponse(order), documents: dto.toDocumentList(documents) } });
+  } catch (err) {
+    handle(res, err);
+  }
+}
+
 async function deleteRawMaterial(req, res) {
   try {
     await svc.deleteRawMaterial(req.params.id, actorFrom(req));
     res.json({ success: true, message: "Purchase order deleted successfully" });
+  } catch (err) {
+    handle(res, err);
+  }
+}
+
+// §MODIFICATION — SCAN DOCUMENTS (INCLUDE IMPORT) : PLUSIEURS DOCUMENTS PAR
+// LIGNE (2026-09-01) — ajoute N document(s) à un bon de commande EXISTANT
+// (jamais une nouvelle ligne créée, voir uploadRawMaterial ci-dessus pour la
+// création réelle par OCR).
+async function addRawMaterialDocuments(req, res) {
+  try {
+    if (!req.files || !req.files.length) return res.status(400).json({ success: false, message: "Au moins un fichier est requis" });
+    const { order, documents } = await svc.addRawMaterialDocuments(req.params.id, req.files, actorFrom(req));
+    res.status(201).json({ success: true, data: { ...dto.toPurchaseOrderResponse(order), documents: dto.toDocumentList(documents) } });
+  } catch (err) {
+    handle(res, err);
+  }
+}
+
+// §9 du ticket : supprime UN SEUL document, jamais le bon de commande entier.
+async function deleteRawMaterialDocument(req, res) {
+  try {
+    const { order, documents } = await svc.deleteRawMaterialDocument(req.params.id, req.params.docId, actorFrom(req));
+    res.json({ success: true, data: { ...dto.toPurchaseOrderResponse(order), documents: dto.toDocumentList(documents) } });
   } catch (err) {
     handle(res, err);
   }
@@ -269,6 +304,18 @@ async function getInvoice(req, res) {
   }
 }
 
+// §CORRECTION — FACTURED SHIPMENTS / PAID INVOICES (2026-09-01) : "Invoice
+// date" éditable directement depuis le tableau "Sage Documents" (§1 du
+// ticket) — même principe que updateRawMaterial ci-dessus.
+async function updateInvoice(req, res) {
+  try {
+    const { invoice, documents } = await svc.updateInvoice(req.params.id, req.body, actorFrom(req));
+    res.json({ success: true, data: { ...dto.toInvoiceResponse(invoice), documents: dto.toDocumentList(documents) } });
+  } catch (err) {
+    handle(res, err);
+  }
+}
+
 // "Upload invoice" (multipart, ≥1 fichier) : 1 fichier = 1 facture
 // indépendamment lue par OCR (confirmé avec l'utilisateur) — on ne bloque
 // pas tout le lot si un seul fichier échoue. Flux JSON historique (aucun
@@ -325,7 +372,10 @@ module.exports = {
   listRawMaterials,
   uploadRawMaterial,
   getRawMaterial,
+  updateRawMaterial,
   deleteRawMaterial,
+  addRawMaterialDocuments,
+  deleteRawMaterialDocument,
   listOtherDocuments,
   uploadOtherDocument,
   renameOtherDocument,
@@ -343,6 +393,7 @@ module.exports = {
   listPaidInvoices,
   getInvoice,
   createInvoice,
+  updateInvoice,
   registerPayment,
   deleteInvoice,
 };

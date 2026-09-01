@@ -8,6 +8,56 @@ const productLineSchema = Joi.object({
   unit: Joi.string().max(50).allow("", null).optional(),
 });
 
+// §MODIFICATION — INFLOW RAW MATERIALS : "Order date" éditable directement
+// depuis le tableau. Validé comme une STRING "AAAA-MM-JJ" (jamais
+// `Joi.date()`, qui convertirait en objet `Date` JS) — `FinancePurchaseOrder.
+// orderDate` est une colonne DATEONLY côté Sequelize, qui attend justement
+// une chaîne de date pure ; faire transiter un objet `Date` ici risquerait un
+// décalage d'un jour selon le fuseau horaire du serveur au moment de la
+// sérialisation (§5 du ticket — "éviter le décalage UTC"). Jamais fait
+// confiance à la seule validation Flutter (§4) — cette contrainte est
+// revérifiée ici, côté serveur.
+const isoDateOnlySchema = Joi.string()
+  .pattern(/^\d{4}-\d{2}-\d{2}$/)
+  .required()
+  .messages({
+    "string.pattern.base": "orderDate doit être au format AAAA-MM-JJ.",
+    "any.required": "orderDate est obligatoire.",
+  });
+
+const updatePurchaseOrderSchema = Joi.object({
+  orderDate: isoDateOnlySchema,
+});
+
+// §MODIFICATION — CUSTOMER SHIPMENTS / SCAN : "Delivery date" éditable
+// depuis la section "Documents requiring extraction" (même endpoint
+// PUT /finance/shipments/:id déjà existant, réutilisé tel quel — voir §10 du
+// ticket). Même raisonnement que isoDateOnlySchema ci-dessus : STRING
+// "AAAA-MM-JJ" plutôt que `Joi.date()` pour ce champ, `FinanceShipment.
+// shipmentDate` étant lui aussi une colonne DATEONLY (§11 du ticket —
+// "ne pas appliquer une conversion UTC").
+const isoDateOnlyOptionalSchema = Joi.string()
+  .pattern(/^\d{4}-\d{2}-\d{2}$/)
+  .optional()
+  .messages({
+    "string.pattern.base": "shipmentDate doit être au format AAAA-MM-JJ.",
+  });
+
+// §CORRECTION — FACTURED SHIPMENTS / PAID INVOICES (2026-09-01) : "Invoice
+// date" éditable directement depuis le tableau "Sage Documents" (§1 du
+// ticket) — même raisonnement/même format que orderDate/shipmentDate
+// ci-dessus : STRING "AAAA-MM-JJ", jamais `Joi.date()` (`FinanceInvoice.
+// invoiceDate` est aussi une colonne DATEONLY — éviter tout décalage UTC).
+const updateInvoiceSchema = Joi.object({
+  invoiceDate: Joi.string()
+    .pattern(/^\d{4}-\d{2}-\d{2}$/)
+    .required()
+    .messages({
+      "string.pattern.base": "invoiceDate doit être au format AAAA-MM-JJ.",
+      "any.required": "invoiceDate est obligatoire.",
+    }),
+});
+
 const SHIPMENT_STATUSES = ["DRAFT", "PREPARED", "SHIPPED", "DELIVERED", "CANCELLED"];
 
 // "New shipment" simplifié : le formulaire ne collecte plus que des
@@ -29,7 +79,7 @@ const createShipmentSchema = Joi.object({
 const updateShipmentSchema = Joi.object({
   reference: Joi.string().max(100).optional(),
   customerId: Joi.number().integer().optional(),
-  shipmentDate: Joi.date().iso().optional(),
+  shipmentDate: isoDateOnlyOptionalSchema,
   products: Joi.array().items(productLineSchema).optional(),
   totalQuantity: Joi.number().min(0).allow(null).empty("").optional(),
   totalAmount: Joi.number().min(0).allow(null).empty("").optional(),
@@ -63,7 +113,19 @@ const createInvoiceSchema = Joi.object({
 // règlement extraite par OCR) quand absents. Les champs Chèque/Traite
 // restent optionnels et inutilisés par le nouveau formulaire, mais on les
 // garde acceptés pour ne rien casser côté backend (§13).
-const PAYMENT_METHODS = ["Virement", "Versement", "Chèque", "Traite"];
+//
+// §CORRECTION — REGISTER PAYMENT DEPUIS SCAN DOCUMENTS (2026-08-31) :
+// "Carte bancaire"/"Espèce" ajoutés à la demande explicite du ticket
+// (5 modes désormais). Valeur stockée = le libellé français lui-même
+// (comme c'était déjà le cas pour Virement/Versement/Chèque/Traite) —
+// jamais un code anglais (CARD/CASH/...) : `method` est une simple colonne
+// STRING validée par cette liste, pas un ENUM Postgres, et les paiements
+// déjà enregistrés stockent déjà leur libellé français tel quel. Introduire
+// des codes anglais casserait l'affichage de l'historique existant
+// (finance_invoice_detail_dialog.dart#_PaymentHistoryList affiche `p.method`
+// littéralement) sans bénéfice — le ticket autorise explicitement cette
+// approche ("adapter... aux modèles/API déjà présents").
+const PAYMENT_METHODS = ["Carte bancaire", "Espèce", "Chèque", "Virement", "Traite"];
 
 const registerPaymentSchema = Joi.object({
   amount: Joi.number().greater(0).empty("").optional(),
@@ -97,5 +159,7 @@ module.exports = {
   validateUpdateShipment: validate(updateShipmentSchema),
   validateCreateInvoice: validate(createInvoiceSchema),
   validateRegisterPayment: validate(registerPaymentSchema),
+  validateUpdatePurchaseOrder: validate(updatePurchaseOrderSchema),
+  validateUpdateInvoice: validate(updateInvoiceSchema),
   PAYMENT_METHODS,
 };

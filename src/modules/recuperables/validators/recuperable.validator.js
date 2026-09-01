@@ -49,6 +49,27 @@ const saveFicheSchema = Joi.object({
   // côté serveur depuis le profil de l'utilisateur connecté — jamais fait
   // confiance à cette valeur pour l'enregistrement définitif.
   operateur: Joi.string().max(255).allow(null, "").optional(),
+  // §MODIFICATION — FICHE RECOVERABLES PROCESSED SIMPLIFIÉE : remplace le
+  // tableau par diamètre par deux valeurs directes (noms EXACTS demandés
+  // par le ticket). `recuperables` reste accepté pour compatibilité
+  // ascendante (jamais envoyé par le nouveau formulaire, voir
+  // recuperable.service.js#saveFiche) — aucune ancienne donnée affectée.
+  waste: Joi.number().min(0).default(0).messages({
+    "number.base": "Waste (kg) doit être un nombre.",
+    "number.min": "Waste (kg) ne peut pas être négatif.",
+  }),
+  // Champ hérité (formulaire combiné retiré depuis) — accepté pour
+  // compatibilité ascendante uniquement, plus jamais envoyé par le
+  // formulaire actuel (voir `finishedProduct` ci-dessous, la valeur
+  // INDÉPENDANTE désormais utilisée).
+  wasteFinishedProduct: Joi.number().min(0).default(0).messages({
+    "number.base": "Waste + Finished Product (kg) doit être un nombre.",
+    "number.min": "Waste + Finished Product (kg) ne peut pas être négatif.",
+  }),
+  finishedProduct: Joi.number().min(0).default(0).messages({
+    "number.base": "Finished Product (kg) doit être un nombre.",
+    "number.min": "Finished Product (kg) ne peut pas être négatif.",
+  }),
   recuperables: Joi.array().items(recuperableItemSchema).default([]),
 });
 

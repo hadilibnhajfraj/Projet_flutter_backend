@@ -4,7 +4,23 @@
 // doit être marquée NEEDS_REVIEW — même principe que
 // invoiceValidation.service.js : jamais d'invention, une donnée douteuse
 // reste visible mais signalée pour vérification humaine.
-
+//
+// §CORRECTION — WORKFLOW OCR CUSTOMER SHIPMENTS (2026-08-31) : deux
+// vérifications ("deliveryDate_low_confidence" sur la date, et
+// "item_low_confidence" sur CHAQUE ligne produit) étaient PLUS STRICTES ici
+// que dans purchaseOrderValidation.service.js (Inflow of raw materials, la
+// référence explicite du ticket) — orderDate n'y vérifie QUE sa présence
+// (jamais sa confiance), et aucune vérification de confiance par ligne
+// n'existe pour les Purchase Orders. Conséquence concrète observée : un Bon
+// de Livraison correctement extrait (client/adresse/date/2 lignes produit
+// avec quantités cohérentes, ocrConfidence global 81%) restait classé
+// NEEDS_REVIEW à cause de la SEULE raison "item_low_confidence" — un
+// Purchase Order avec une extraction de qualité équivalente aurait, lui,
+// été classé EXTRACTED. Les deux vérifications retirées ci-dessous
+// n'existent PAS côté Purchase Order — retirées ici pour un statut
+// EXTRACTED/NEEDS_REVIEW cohérent entre les deux modules (§"reuse the SAME
+// business logic/status transition" du ticket), jamais pour élargir/
+// restreindre la logique au-delà de ce qui existe déjà côté Inflow.
 const CONFIDENCE_THRESHOLD = 0.8;
 const TOTAL_TOLERANCE_RATIO = 0.02;
 
@@ -19,8 +35,6 @@ function validateExtraction(extraction) {
 
   if (!extraction.deliveryDate?.value) {
     reasons.push("deliveryDate_not_detected");
-  } else if (extraction.deliveryDate.confidence < CONFIDENCE_THRESHOLD) {
-    reasons.push("deliveryDate_low_confidence");
   }
 
   const items = extraction.items || [];
@@ -29,9 +43,6 @@ function validateExtraction(extraction) {
   } else {
     const hasInvalidQuantity = items.some((it) => it.quantity !== undefined && it.quantity !== null && !Number.isFinite(it.quantity));
     if (hasInvalidQuantity) reasons.push("item_quantity_not_numeric");
-
-    const anyLowConfidenceItem = items.some((it) => (it.confidence || 0) < CONFIDENCE_THRESHOLD);
-    if (anyLowConfidenceItem) reasons.push("item_low_confidence");
 
     // Le total du document doit correspondre à la somme des quantités des
     // lignes — un écart signale une extraction douteuse (ex. une ligne

@@ -27,6 +27,13 @@ function toFicheResponse(fiche, meta = {}) {
     poste: f.poste,
     date: f.date,
     operateur: f.operateur,
+    // §MODIFICATION — FICHE RECOVERABLES PROCESSED SIMPLIFIÉE : `null` pour
+    // toute fiche créée avant ce ticket (jamais recalculé depuis
+    // `recuperables` — les deux notions restent indépendantes, voir
+    // recuperable.service.js#saveFiche).
+    waste: f.waste != null ? Number(f.waste) : null,
+    wasteFinishedProduct: f.wasteFinishedProduct != null ? Number(f.wasteFinishedProduct) : null,
+    finishedProduct: f.finishedProduct != null ? Number(f.finishedProduct) : null,
     statut: f.statut,
     dateCloture: f.dateCloture,
     createdBy: f.createdBy,

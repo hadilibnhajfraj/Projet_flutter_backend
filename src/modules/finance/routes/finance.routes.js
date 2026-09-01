@@ -11,6 +11,8 @@ const {
   validateUpdateShipment,
   validateCreateInvoice,
   validateRegisterPayment,
+  validateUpdatePurchaseOrder,
+  validateUpdateInvoice,
 } = require("../validators/finance.validator");
 
 // Le module Finance est un espace dédié — rôle finance_probar + les mêmes
@@ -62,6 +64,24 @@ router.post("/raw-materials/import", financeDocumentUpload.single("file"), handl
 router.patch("/raw-materials/import/:id", ctrl.rawMaterialsImport.rename);
 router.delete("/raw-materials/import/:id", ctrl.rawMaterialsImport.remove);
 router.get("/raw-materials/:id", ctrl.getRawMaterial);
+// §MODIFICATION — INFLOW RAW MATERIALS : "Order date" éditable directement
+// depuis le tableau (§2-§5 du ticket) — mêmes rôles Finance que le reste de
+// ce routeur (RBAC existant, jamais contourné, §12) : aucun rôle "lecture
+// seule" distinct n'existe aujourd'hui dans ce module, donc pas de nouvelle
+// vérification à ajouter au-delà de `requireRole(...FINANCE_ROLES)` déjà en
+// place ci-dessus.
+router.patch("/raw-materials/:id", validateUpdatePurchaseOrder, ctrl.updateRawMaterial);
+// §MODIFICATION — SCAN DOCUMENTS (INCLUDE IMPORT) : PLUSIEURS DOCUMENTS PAR
+// LIGNE (2026-09-01) — ajoute N document(s) à un bon de commande EXISTANT
+// (jamais une nouvelle ligne créée) ; supprime UN SEUL document sans
+// toucher aux autres ni au bon de commande lui-même (§9 du ticket).
+router.post(
+  "/raw-materials/:id/documents",
+  financeDocumentUpload.array("documents", 10),
+  handleUploadError,
+  ctrl.addRawMaterialDocuments
+);
+router.delete("/raw-materials/:id/documents/:docId", ctrl.deleteRawMaterialDocument);
 router.delete("/raw-materials/:id", ctrl.deleteRawMaterial);
 
 // ── Shipment of products to the customers ──────────────────────────────
@@ -119,6 +139,10 @@ router.post("/invoices/import", financeDocumentUpload.single("file"), handleUplo
 router.patch("/invoices/import/:id", ctrl.facturedShipmentsImport.rename);
 router.delete("/invoices/import/:id", ctrl.facturedShipmentsImport.remove);
 router.get("/invoices/:id", ctrl.getInvoice);
+// §CORRECTION — FACTURED SHIPMENTS / PAID INVOICES (2026-09-01) : "Invoice
+// date" éditable directement depuis le tableau "Sage Documents" (§1 du
+// ticket) — même principe que PATCH /raw-materials/:id.
+router.patch("/invoices/:id", validateUpdateInvoice, ctrl.updateInvoice);
 // "Register payment" — document justificatif optionnel (Chèque/Traite
 // uniquement, champ multipart "document") ; multer laisse passer les
 // requêtes sans fichier (Carte bancaire/Espèce) sans y toucher.

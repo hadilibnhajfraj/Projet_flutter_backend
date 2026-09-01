@@ -194,6 +194,30 @@ async function getRawMaterial(id) {
   return { order, documents };
 }
 
+// §MODIFICATION — INFLOW RAW MATERIALS : "Order date" éditable directement
+// depuis le tableau — corrige une date que l'OCR n'a pas trouvée ou a mal
+// lue (§3 du ticket), sans jamais re-déclencher d'OCR ni toucher aux autres
+// champs déjà extraits (numéro, client, lignes...). `body.orderDate` est
+// déjà validé "AAAA-MM-JJ" par validateUpdatePurchaseOrder (voir
+// finance.validator.js — jamais fait confiance à la seule validation
+// Flutter, §4/§12) avant d'arriver ici.
+async function updateRawMaterial(id, body, actor) {
+  const order = await repo.findPurchaseOrderById(id);
+  if (!order) throw { status: 404, message: "Bon de commande introuvable" };
+
+  await repo.updatePurchaseOrder(order, { orderDate: body.orderDate });
+
+  await repo.logActivity({
+    entityType: "PURCHASE_ORDER",
+    entityId: id,
+    userId: actor.id,
+    type: "UPDATE_PURCHASE_ORDER_ORDER_DATE",
+    message: `Order date mise à jour ("${body.orderDate}") pour le bon de commande "${order.orderNumber ?? id}"`,
+  });
+
+  return getRawMaterial(id);
+}
+
 // Moyenne des confidences des champs top-level effectivement détectés
 // (0-100) — indicateur global, jamais utilisé seul pour décider
 // EXTRACTED/NEEDS_REVIEW (voir purchaseOrderValidation.service.js).
@@ -359,6 +383,51 @@ async function processRawMaterialUpload(file, actor) {
   }
 }
 
+// §MODIFICATION — SCAN DOCUMENTS (INCLUDE IMPORT) : PLUSIEURS DOCUMENTS PAR
+// LIGNE (2026-09-01) — ajoute N document(s) supplémentaire(s) à UN bon de
+// commande déjà EXISTANT (jamais une nouvelle ligne métier, contrairement à
+// processRawMaterialUpload ci-dessus qui, lui, crée toujours un nouveau PO) :
+// aucune ré-extraction OCR, aucun champ du bon de commande touché. Même
+// boucle "1 FinanceDocument par fichier" que processShipmentUpload
+// (attache-tous-les-fichiers-à-une-seule-entité), adaptée à une entité déjà
+// existante plutôt qu'à une entité fraîchement créée.
+async function addRawMaterialDocuments(id, files, actor) {
+  if (!files || !files.length) throw { status: 400, message: "Au moins un fichier est requis" };
+  const order = await repo.findPurchaseOrderById(id);
+  if (!order) throw { status: 404, message: "Bon de commande introuvable" };
+
+  await sequelize.transaction(async (t) => {
+    for (const file of files) {
+      const originalName = sanitizeOriginalName(file.originalname);
+      await repo.createDocument(
+        {
+          module: RAW_MATERIALS_MODULE,
+          entityId: order.id,
+          originalName,
+          storedFileName: file.filename,
+          fileUrl: docUrl(file),
+          mimeType: file.mimetype,
+          fileSize: file.size,
+          uploadedBy: actor.id,
+        },
+        { transaction: t }
+      );
+      await repo.logActivity(
+        {
+          entityType: "DOCUMENT",
+          entityId: order.id,
+          userId: actor.id,
+          type: "UPLOAD_DOCUMENT",
+          message: `Document "${originalName}" ajouté au bon de commande "${order.orderNumber ?? order.id}"`,
+        },
+        { transaction: t }
+      );
+    }
+  });
+
+  return getRawMaterial(id);
+}
+
 // ── SUPPRESSION (§AJOUTER LA SUPPRESSION DES DOCUMENTS FINANCE) ─────────
 // Logique commune aux 3 modules (Purchase Order / Shipment / Invoice) :
 // les enfants "forts" (items, payments) sont supprimés par CASCADE au
@@ -406,6 +475,47 @@ async function deleteRawMaterial(id, actor) {
   });
 
   return { id };
+}
+
+// §MODIFICATION — SCAN DOCUMENTS (INCLUDE IMPORT) : PLUSIEURS DOCUMENTS PAR
+// LIGNE (2026-09-01, §9 du ticket) — supprime UN SEUL document d'un bon de
+// commande, jamais le bon de commande entier (voir deleteRawMaterial
+// ci-dessus pour ce cas-là, inchangé) : les autres documents de la même
+// ligne ne sont jamais touchés. Même transaction/suppression physique que
+// deleteImportDocument plus bas, mais vérifie ICI en plus que le document
+// appartient réellement au bon de commande demandé (`entityId === orderId`)
+// — nécessaire ici car ce document est rattaché à une vraie entité métier
+// (contrairement à un document "Import" autonome, où seul le module compte).
+async function deleteRawMaterialDocument(orderId, docId, actor) {
+  const order = await repo.findPurchaseOrderById(orderId);
+  if (!order) throw { status: 404, message: "Bon de commande introuvable" };
+
+  const document = await repo.findDocumentById(docId);
+  if (!document || document.module !== RAW_MATERIALS_MODULE || document.entityId !== orderId) {
+    throw { status: 404, message: "Document introuvable" };
+  }
+
+  const originalName = document.displayName ?? document.originalName;
+  await sequelize.transaction(async (t) => {
+    await repo.destroyDocument(document, { transaction: t });
+  });
+
+  const filePath = path.join(UPLOAD_DIR, document.storedFileName);
+  try {
+    await fs.promises.unlink(filePath);
+  } catch (_) {
+    // Fichier déjà absent du disque — ne bloque jamais la suppression en base.
+  }
+
+  await repo.logActivity({
+    entityType: "DOCUMENT",
+    entityId: orderId,
+    userId: actor.id,
+    type: "DELETE_DOCUMENT",
+    message: `Document "${originalName}" supprimé du bon de commande "${order.orderNumber ?? orderId}"`,
+  });
+
+  return getRawMaterial(orderId);
 }
 
 // ── FINANCE > OTHER (§MODIFICATION — SCAN SIMPLE DE DOCUMENTS) ─────────────
@@ -703,6 +813,43 @@ function computeShipmentOverallConfidence(extraction) {
 // précédemment pour cet écran, contrairement aux factures) : le PREMIER
 // fichier est le document analysé par OCR, tous les fichiers sont attachés
 // comme documents du shipment créé.
+// §CORRECTION — WORKFLOW OCR CUSTOMER SHIPMENTS (2026-08-31) : un document
+// qui n'est PAS un vrai Bon de Livraison (facture, page blanche scannée,
+// document sans rapport...) peut faire lire à l'OCR un texte beaucoup plus
+// long que ce qu'attend une colonne VARCHAR bornée (ex. `reference`
+// STRING(100), `customerName` STRING(255) — voir models/FinanceShipment.js)
+// — Postgres renvoie alors "value too long for type character varying(N)",
+// une VRAIE SequelizeDatabaseError (PAS une SequelizeUniqueConstraintError),
+// qui n'est donc jamais retentée par la boucle ci-dessous et remonte comme
+// un 500 générique pour un cas pourtant parfaitement normal ("document
+// incompatible", déjà géré par OCR_FAILED/NEEDS_REVIEW pour toutes les
+// AUTRES formes d'échec). Ce clamp élimine catégoriquement cette classe
+// d'erreur AVANT l'insertion — la valeur BRUTE, non tronquée, reste de
+// toute façon conservée intégralement dans `ocrExtraction` (JSONB, sans
+// limite de longueur) pour audit ; seule la colonne relationnelle bornée
+// reçoit la version tronquée. Ne touche ni à l'OCR ni à l'extraction elle-
+// même — uniquement à la sauvegarde.
+function clampToColumn(value, maxLength) {
+  if (typeof value !== "string") return value;
+  return value.length > maxLength ? value.slice(0, maxLength) : value;
+}
+
+// §CORRECTION — WORKFLOW OCR CUSTOMER SHIPMENTS (2026-08-31) : même principe
+// que clampToColumn ci-dessus, pour les colonnes NUMÉRIQUES bornées
+// (finance_shipments.totalQuantity DECIMAL(12,2), finance_shipment_items.
+// quantity DECIMAL(12,3) — voir les modèles correspondants). Un document
+// sans rapport (ex. un rapport texte confondu avec un Bon de Livraison, où
+// l'extraction "lignes produit" capture des fragments de texte non
+// numériques ou des nombres aberrants) peut produire une valeur non finie
+// ou hors plage — Postgres rejette alors l'insertion ("numeric field
+// overflow"/"invalid input syntax"), une VRAIE erreur SQL qui ne doit
+// jamais faire échouer tout l'upload : la valeur est simplement traitée
+// comme non détectée (null), jamais inventée/arrondie.
+function safeNumeric(value, maxAbs) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return null;
+  return Math.abs(value) > maxAbs ? null : value;
+}
+
 async function processShipmentUpload(files, actor) {
   if (!files.length) throw { status: 400, message: "Au moins un document est requis" };
   const primaryFile = files[0];
@@ -759,29 +906,32 @@ async function processShipmentUpload(files, actor) {
     let shipmentId;
     try {
       await sequelize.transaction(async (t) => {
-        const reference = hasReliableDeliveryNumber ? extraction.deliveryNumber.value : await generateShipmentReference(t);
+        const reference = clampToColumn(
+          hasReliableDeliveryNumber ? extraction.deliveryNumber.value : await generateShipmentReference(t),
+          100
+        );
         const shipmentNumber = await generateShipmentNumber(t);
 
         const shipment = await repo.createShipment(
           {
             shipmentNumber,
             reference,
-            customerReference: extraction.reference.value,
+            customerReference: clampToColumn(extraction.reference.value, 150),
             customerId: null, // jamais résolu automatiquement vers un client existant (nom/tél/adresse lus, pas un id)
-            customerName: extraction.customer.name.value,
-            customerPhone: extraction.customerPhone.value,
+            customerName: clampToColumn(extraction.customer.name.value, 255),
+            customerPhone: clampToColumn(extraction.customerPhone.value, 50),
             customerAddress: extraction.customer.address.value,
-            customerGovernorate: extraction.customer.governorate.value,
-            customerTaxId: extraction.customer.taxId.value,
-            customerCode: extraction.customer.code.value,
+            customerGovernorate: clampToColumn(extraction.customer.governorate.value, 100),
+            customerTaxId: clampToColumn(extraction.customer.taxId.value, 100),
+            customerCode: clampToColumn(extraction.customer.code.value, 100),
             customerHeadOfficeAddress: extraction.customer.headOfficeAddress.value,
-            truckRegistration: extraction.delivery.truckRegistration.value,
-            truckManufacturer: extraction.delivery.manufacturer.value,
-            driverName: extraction.delivery.driverName.value,
+            truckRegistration: clampToColumn(extraction.delivery.truckRegistration.value, 50),
+            truckManufacturer: clampToColumn(extraction.delivery.manufacturer.value, 100),
+            driverName: clampToColumn(extraction.delivery.driverName.value, 150),
             deliveryAddress: extraction.delivery.deliveryAddress.value,
             shipmentDate: extraction.deliveryDate.value,
             products: [],
-            totalQuantity: extraction.total.value,
+            totalQuantity: safeNumeric(extraction.total.value, 1e9),
             totalAmount: 0,
             status,
             ocrConfidence: overallConfidence,
@@ -803,12 +953,12 @@ async function processShipmentUpload(files, actor) {
               return {
                 shipmentId: shipment.id,
                 sortOrder: i,
-                reference: it.reference ?? null,
+                reference: clampToColumn(it.reference ?? null, 100),
                 designation: it.designation ?? null,
-                unit: unit ?? null,
-                diameter: diameter ?? null,
-                meshSize: it.meshSize ?? null,
-                quantity: it.quantity ?? null,
+                unit: clampToColumn(unit ?? null, 50),
+                diameter: clampToColumn(diameter ?? null, 50),
+                meshSize: clampToColumn(it.meshSize ?? null, 50),
+                quantity: safeNumeric(it.quantity ?? null, 1e9),
               };
             }),
             { transaction: t }
@@ -886,6 +1036,15 @@ async function processShipmentUpload(files, actor) {
       if (hasReliableDeliveryNumber && err?.name === "SequelizeUniqueConstraintError" && !isShipmentNumberConflict) {
         throw { status: 409, message: `Un shipment avec le numéro "${extraction.deliveryNumber.value}" existe déjà` };
       }
+      // §CORRECTION — WORKFLOW OCR CUSTOMER SHIPMENTS (2026-08-31) : la
+      // cause RÉELLE de l'erreur (message + stack) était jusqu'ici perdue —
+      // seul le message générique "Échec du traitement..." (déjà renvoyé au
+      // client) atteignait les logs. Cette ligne ne change AUCUN
+      // comportement HTTP (même throw ensuite) : elle rend seulement visible
+      // en logs ce qui a réellement échoué, pour distinguer une vraie
+      // erreur serveur (bug/DB) d'un cas métier normal (document illisible,
+      // déjà géré plus haut via status=OCR_FAILED — voir ocrFailed).
+      logger.error("[DELIVERY] Échec réel du traitement (avant enveloppe générique) :", err?.stack || err?.message || err);
       throw err.status ? err : { status: 500, message: "Échec du traitement du Bon de Livraison" };
     }
   }
@@ -1015,6 +1174,28 @@ async function getInvoice(id) {
   const documents = await repo.findDocuments({ module: INVOICE_MODULE, entityId: id });
   const plain = await attachPaymentDocuments(invoice.toJSON());
   return { invoice: plain, documents };
+}
+
+// §CORRECTION — FACTURED SHIPMENTS / PAID INVOICES (2026-09-01) : "Invoice
+// date" éditable directement depuis le tableau "Sage Documents" (§1 du
+// ticket) — même principe que updateRawMaterial/updateShipment (endpoint
+// dédié, réutilise `repo.updateInvoice`, déjà utilisé par registerPayment
+// ci-dessus, jamais une deuxième implémentation de mise à jour).
+async function updateInvoice(id, body, actor) {
+  const invoice = await repo.findInvoiceById(id);
+  if (!invoice) throw { status: 404, message: "Facture introuvable" };
+
+  await repo.updateInvoice(invoice, { invoiceDate: body.invoiceDate });
+
+  await repo.logActivity({
+    entityType: "INVOICE",
+    entityId: id,
+    userId: actor.id,
+    type: "UPDATE_INVOICE_DATE",
+    message: `Invoice date mise à jour ("${body.invoiceDate}") pour la facture "${invoice.invoiceNumber}"`,
+  });
+
+  return getInvoice(id);
 }
 
 // Supprime la facture, ses lignes (finance_invoice_items) ET ses paiements
@@ -1204,28 +1385,31 @@ async function processInvoiceUpload(file, actor) {
     let invoiceId;
     try {
       await sequelize.transaction(async (t) => {
-        const invoiceNumber = hasReliableInvoiceNumber ? extraction.invoiceNumber.value : await generateInvoiceNumber(t);
+        const invoiceNumber = clampToColumn(
+          hasReliableInvoiceNumber ? extraction.invoiceNumber.value : await generateInvoiceNumber(t),
+          100
+        );
 
         const invoice = await repo.createInvoice(
           {
             invoiceNumber,
-            reference: extraction.reference.value,
+            reference: clampToColumn(extraction.reference.value, 150),
             customerId: null, // jamais résolu automatiquement vers un client existant (nom/tél/adresse lus, pas un id)
-            customerName: extraction.customer.name.value,
-            customerPhone: extraction.customer.phone.value,
+            customerName: clampToColumn(extraction.customer.name.value, 255),
+            customerPhone: clampToColumn(extraction.customer.phone.value, 50),
             customerAddress: extraction.customer.address.value,
-            customerGovernorate: extraction.customer.governorate.value,
-            customerTaxId: extraction.customer.taxId.value,
-            customerCode: extraction.customer.code.value,
+            customerGovernorate: clampToColumn(extraction.customer.governorate.value, 100),
+            customerTaxId: clampToColumn(extraction.customer.taxId.value, 100),
+            customerCode: clampToColumn(extraction.customer.code.value, 100),
             invoiceDate: extraction.invoiceDate.value,
-            amount: amount ?? 0,
-            tax: tax ?? 0,
-            total: total ?? 0,
-            downPayment: extraction.totals.downPayment?.value ?? null,
-            netToPay: extraction.totals.netToPay?.value ?? null,
-            paymentCondition: extraction.payment?.condition?.value ?? null,
+            amount: safeNumeric(amount, 1e11) ?? 0,
+            tax: safeNumeric(tax, 1e11) ?? 0,
+            total: safeNumeric(total, 1e11) ?? 0,
+            downPayment: safeNumeric(extraction.totals.downPayment?.value ?? null, 1e11),
+            netToPay: safeNumeric(extraction.totals.netToPay?.value ?? null, 1e11),
+            paymentCondition: clampToColumn(extraction.payment?.condition?.value ?? null, 150),
             paymentDate: extraction.payment?.date?.value ?? null,
-            paymentMethod: extraction.payment?.method?.value ?? null,
+            paymentMethod: clampToColumn(extraction.payment?.method?.value ?? null, 50),
             amountInWords: extraction.amountInWords?.value ?? null,
             status,
             ocrConfidence: overallConfidence,
@@ -1245,17 +1429,17 @@ async function processInvoiceUpload(file, actor) {
               return {
                 invoiceId: invoice.id,
                 sortOrder: i,
-                reference: it.reference ?? null,
+                reference: clampToColumn(it.reference ?? null, 100),
                 designation: it.designation ?? null,
-                unit: unit ?? null,
-                diameter: diameter ?? null,
-                meshSize: it.meshSize ?? null,
-                quantity: it.quantity ?? null,
-                unitPriceHT: it.unitPriceHT ?? null,
-                rms: it.rms ?? null,
-                amountHT: it.amountHT ?? null,
-                tax1: it.tax1 ?? null,
-                tax2: it.tax2 ?? null,
+                unit: clampToColumn(unit ?? null, 50),
+                diameter: clampToColumn(diameter ?? null, 50),
+                meshSize: clampToColumn(it.meshSize ?? null, 50),
+                quantity: safeNumeric(it.quantity ?? null, 1e9),
+                unitPriceHT: safeNumeric(it.unitPriceHT ?? null, 1e11),
+                rms: safeNumeric(it.rms ?? null, 1e9),
+                amountHT: safeNumeric(it.amountHT ?? null, 1e11),
+                tax1: safeNumeric(it.tax1 ?? null, 1e11),
+                tax2: safeNumeric(it.tax2 ?? null, 1e11),
               };
             }),
             { transaction: t }
@@ -1267,10 +1451,10 @@ async function processInvoiceUpload(file, actor) {
             extraction.taxes.map((tx, i) => ({
               invoiceId: invoice.id,
               sortOrder: i,
-              code: tx.code ?? null,
-              base: tx.base ?? null,
-              rate: tx.rate ?? null,
-              amount: tx.amount ?? null,
+              code: clampToColumn(tx.code ?? null, 20),
+              base: safeNumeric(tx.base ?? null, 1e11),
+              rate: safeNumeric(tx.rate ?? null, 9999),
+              amount: safeNumeric(tx.amount ?? null, 1e11),
             })),
             { transaction: t }
           );
@@ -1332,6 +1516,10 @@ async function processInvoiceUpload(file, actor) {
       if (hasReliableInvoiceNumber && err?.name === "SequelizeUniqueConstraintError") {
         throw { status: 409, message: `Une facture avec le numéro "${extraction.invoiceNumber.value}" existe déjà` };
       }
+      // §CORRECTION — WORKFLOW OCR FACTURED SHIPMENTS (2026-08-31) : même
+      // correctif que processShipmentUpload ci-dessus — la cause RÉELLE de
+      // l'erreur était perdue avant d'atteindre les logs.
+      logger.error("[INVOICE] Échec réel du traitement (avant enveloppe générique) :", err?.stack || err?.message || err);
       throw err.status ? err : { status: 500, message: "Échec du traitement de la facture" };
     }
   }
@@ -1366,7 +1554,15 @@ async function registerPayment(invoiceId, body, file, actor) {
   // de bloquer l'enregistrement pour des champs que l'UI ne collecte plus
   // (§5) : montant = total de la facture (paiement complet), date = date de
   // règlement déjà extraite par l'OCR, sinon aujourd'hui.
-  if (!file) throw { status: 400, message: "Un justificatif est requis pour enregistrer le paiement" };
+  //
+  // §CORRECTION — REGISTER PAYMENT DEPUIS SCAN DOCUMENTS (2026-08-31, §3 du
+  // ticket) : "Espèce" est l'unique mode où AUCUN justificatif n'est requis
+  // ("aucun document de paiement supplémentaire n'est obligatoire") — tous
+  // les autres modes (y compris le nouveau "Carte bancaire") conservent
+  // l'exigence existante.
+  if (!file && body.method !== "Espèce") {
+    throw { status: 400, message: "Un justificatif est requis pour enregistrer le paiement" };
+  }
 
   const amount = body.amount != null ? body.amount : Number(invoice.total) || 0;
   const paidDate = body.paidDate || invoice.paymentDate || new Date().toISOString().slice(0, 10);
@@ -1410,7 +1606,17 @@ async function registerPayment(invoiceId, body, file, actor) {
       const totalPaid = Number(await repo.sumPaymentAmountForInvoice(invoiceId, { transaction: t })) || 0;
       const total = Number(invoice.total) || 0;
       let status = invoice.status === "CANCELLED" ? "CANCELLED" : "ISSUED";
-      if (total > 0 && totalPaid >= total) status = "PAID";
+      // §CORRECTION — REGISTER PAYMENT / TOTAL À 0 (2026-09-01, §2-§4 du
+      // ticket) : `total > 0 && totalPaid >= total` ne peut JAMAIS être vrai
+      // quand l'OCR n'a pas réussi à extraire le total (total=0, cas
+      // fréquent pour les factures dans "Scan Documents") — Register
+      // Payment retournait 201/success=true mais la facture restait
+      // invisible dans Paid Invoices EN PERMANENCE, quel que soit le
+      // paiement enregistré. Un total <= 0 signifie "aucune référence
+      // fiable à comparer" : l'action même de Register Payment fait foi et
+      // marque la facture payée, exactement comme un total réel entièrement
+      // couvert le ferait déjà.
+      if (total <= 0 || totalPaid >= total) status = "PAID";
       else if (totalPaid > 0) status = "PARTIALLY_PAID";
       await repo.updateInvoice(invoice, { status }, { transaction: t });
 
@@ -1445,7 +1651,10 @@ module.exports = {
   listRawMaterials,
   processRawMaterialUpload,
   getRawMaterial,
+  updateRawMaterial,
   deleteRawMaterial,
+  addRawMaterialDocuments,
+  deleteRawMaterialDocument,
   listOtherDocuments,
   uploadOtherDocument,
   renameOtherDocument,
@@ -1468,6 +1677,7 @@ module.exports = {
   listPaidInvoices,
   getInvoice,
   createInvoice,
+  updateInvoice,
   processInvoiceUpload,
   registerPayment,
   deleteInvoice,

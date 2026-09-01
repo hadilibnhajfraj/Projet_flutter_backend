@@ -4,6 +4,9 @@
  * Strips internal Sequelize fields and normalises Finance records for API responses.
  */
 
+const deliveryNoteValidation = require("../services/deliveryNoteValidation.service");
+const invoiceValidation = require("../services/invoiceValidation.service");
+
 function toUserRef(user) {
   if (!user) return null;
   const u = user.toJSON ? user.toJSON() : user;
@@ -97,6 +100,22 @@ function toShipmentResponse(shipment) {
     deliveryInfo: s.deliveryInfo,
     status: s.status,
     ocrConfidence: s.ocrConfidence,
+    // §CORRECTION — WORKFLOW OCR CUSTOMER SHIPMENTS (2026-08-31) : `reference`
+    // n'est PAS un équivalent fiable de `FinancePurchaseOrder.orderNumber`
+    // pour décider si l'extraction est exploitable — contrairement à
+    // `orderNumber` (nullable, jamais généré), `reference` reçoit TOUJOURS
+    // une valeur (repli `generateShipmentReference` quand l'OCR n'a rien lu
+    // de fiable, voir finance_shipments.reference: allowNull:false, unique).
+    // Un champ distinct était donc nécessaire pour exposer le MÊME signal
+    // que Purchase Orders tirent de `orderNumber == null` : recalculé ici
+    // depuis `ocrExtraction.deliveryNumber` (déjà stocké à l'upload, jamais
+    // une deuxième extraction) avec le MÊME seuil de confiance
+    // (deliveryNoteValidation.CONFIDENCE_THRESHOLD) que celui utilisé pour
+    // décider `hasReliableDeliveryNumber` côté service au moment de la
+    // création.
+    hasReliableReference:
+      Boolean(s.ocrExtraction?.deliveryNumber?.value) &&
+      (s.ocrExtraction?.deliveryNumber?.confidence ?? 0) >= deliveryNoteValidation.CONFIDENCE_THRESHOLD,
     invoices: (s.invoices || []).map(toInvoiceRef),
     items: (s.items || []).map(toShipmentItemResponse),
     documents: toDocumentList(s.documents || []),
@@ -186,6 +205,18 @@ function toInvoiceResponse(invoice) {
     amount: i.amount,
     tax: i.tax,
     total: i.total,
+    // §CORRECTION — WORKFLOW OCR FACTURED SHIPMENTS (2026-08-31) : même
+    // raisonnement que `hasReliableReference` sur les Shipments ci-dessus —
+    // `invoiceNumber` reçoit TOUJOURS une valeur (repli auto-généré quand
+    // l'OCR ne trouve rien de fiable, voir finance_invoices.invoiceNumber :
+    // allowNull:false, unique) et ne peut donc pas jouer, côté frontend, le
+    // rôle que joue `orderNumber` (nullable) pour les Purchase Orders.
+    // Recalculé depuis `ocrExtraction.invoiceNumber`, déjà stocké à
+    // l'upload, avec le même seuil de confiance que celui utilisé pour
+    // décider `invoiceNumber`/`status` à la création.
+    hasReliableInvoiceNumber:
+      Boolean(i.ocrExtraction?.invoiceNumber?.value) &&
+      (i.ocrExtraction?.invoiceNumber?.confidence ?? 0) >= invoiceValidation.CONFIDENCE_THRESHOLD,
     downPayment: i.downPayment,
     netToPay: i.netToPay,
     paymentCondition: i.paymentCondition,

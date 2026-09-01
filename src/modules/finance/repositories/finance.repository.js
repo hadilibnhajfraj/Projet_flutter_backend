@@ -298,6 +298,12 @@ function findPurchaseOrderById(id) {
   return FinancePurchaseOrder.findByPk(id, { include: PURCHASE_ORDER_INCLUDE });
 }
 
+// §MODIFICATION — INFLOW RAW MATERIALS : "Order date" éditable — même
+// pattern que updateShipment/updateInvoice ci-dessus, jamais dupliqué.
+function updatePurchaseOrder(instance, data) {
+  return instance.update(data);
+}
+
 function purchaseOrderSearchClause(term) {
   const like = `%${term}%`;
   return {
@@ -397,6 +403,7 @@ module.exports = {
   countPurchaseOrders,
   sumPurchaseOrderAmount,
   findPurchaseOrderById,
+  updatePurchaseOrder,
   purchaseOrderSearchClause,
 
   createPayment,

@@ -20,6 +20,19 @@ const RecuperableFiche = sequelize.define(
     date: { type: DataTypes.DATEONLY, allowNull: false },
     operateur: { type: DataTypes.STRING(255), allowNull: true },
 
+    // §MODIFICATION — FICHE RECOVERABLES PROCESSED SIMPLIFIÉE : remplace la
+    // saisie par diamètre (table `recuperable_lignes`, conservée telle
+    // quelle pour les anciennes fiches — voir recuperable.dto.js) par des
+    // valeurs directes. NULL pour toute fiche créée avant ce ticket.
+    waste: { type: DataTypes.DECIMAL(10, 2), allowNull: true },
+    // Colonne héritée d'un ticket antérieur ("Waste + Finished Product" —
+    // champ combiné, retiré de l'UI depuis) — conservée pour ne rien
+    // supprimer, mais N'EST PLUS ALIMENTÉE par aucun écran. `finishedProduct`
+    // ci-dessous est la valeur "Finished Product" INDÉPENDANTE demandée
+    // ensuite — jamais une somme avec `waste`, jamais la même colonne.
+    wasteFinishedProduct: { type: DataTypes.DECIMAL(10, 2), allowNull: true },
+    finishedProduct: { type: DataTypes.DECIMAL(10, 2), allowNull: true },
+
     statut: {
       type: DataTypes.ENUM("en_cours", "cloturee"),
       allowNull: false,

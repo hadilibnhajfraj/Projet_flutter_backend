@@ -9,6 +9,7 @@
 const { Op, col, fn, literal } = require("sequelize");
 const PorPromesh = require("../../../models/PorPromesh");
 const IndustrialRecord = require("../../../models/IndustrialRecord");
+const RecuperableFiche = require("../../../models/RecuperableFiche");
 const User = require("../../../models/User");
 const UserProfile = require("../../../models/UserProfile");
 require("../../../models/associations");
@@ -427,6 +428,42 @@ function applyProbarSummaryFilters(where, filters) {
   return where;
 }
 
+// §MODIFICATION — PRODUCTION SUMMARY : AJOUT DU WASTE DEPUIS RECOVERABLES —
+// correspondance = module + date UNIQUEMENT (jamais machine/ligne/poste,
+// §4 du ticket), jamais recalculé depuis Quantity/Diameter/Finished Product
+// (§15) : toujours `RecuperableFiche.waste` tel quel. UNE SEULE requête
+// agrégée (GROUP BY date), bornée aux dates déjà présentes dans `rows`
+// (§14 — anti N+1, jamais une requête par ligne). Si plusieurs fiches
+// Recoverables partagent le même module+date, leurs `waste` sont additionnés
+// (§4) et cette MÊME valeur agrégée est reportée sur CHAQUE ligne de
+// production partageant cette date (jamais de doublon de ligne créé dans le
+// tableau, §4 "IMPORTANT"). Absent → 0, jamais null/undefined/NaN (§5).
+// Owner-scoped (responsable_logistique_achat) : le Waste est lui aussi
+// borné à ses propres fiches Recoverables, même philosophie que
+// buildPromeshWhere/buildProbarWhere — jamais de fuite inter-utilisateur via
+// cette jointure.
+//
+// Retourne le total Waste (§6/§7) — somme des dates DISTINCTES réellement
+// présentes dans `rows` (jamais une somme "par ligne", qui doublonnerait une
+// date partagée par plusieurs lignes de production).
+async function attachWaste(rows, module, actor) {
+  const dates = Array.from(new Set(rows.map((r) => r.date).filter(Boolean)));
+  const wasteByDate = new Map();
+  if (dates.length) {
+    const where = { module, date: { [Op.in]: dates } };
+    if (isOwnerScoped(actor.role)) where.createdBy = actor.id;
+    const aggregated = await RecuperableFiche.findAll({
+      where,
+      attributes: ["date", [fn("SUM", col("waste")), "totalWaste"]],
+      group: ["date"],
+      raw: true,
+    });
+    for (const a of aggregated) wasteByDate.set(String(a.date), toNumberOrZero(a.totalWaste));
+  }
+  for (const r of rows) r.waste = wasteByDate.get(String(r.date)) ?? 0;
+  return dates.reduce((sum, d) => sum + (wasteByDate.get(String(d)) ?? 0), 0);
+}
+
 async function buildPromeshSummary(filters, actor) {
   const where = applyPromeshSummaryFilters(buildPromeshWhere(filters, actor), filters);
 
@@ -439,8 +476,9 @@ async function buildPromeshSummary(filters, actor) {
 
   const rows = records.map(normalizePromesh);
   const grandTotal = rows.reduce((sum, r) => sum + (r.quantite || 0), 0);
+  const grandTotalWaste = await attachWaste(rows, "PROMESH", actor);
 
-  return { rows, grandTotal, unit: "m²", totalRecords: rows.length };
+  return { rows, grandTotal, unit: "m²", totalRecords: rows.length, grandTotalWaste, wasteUnit: "kg" };
 }
 
 async function buildProbarSummary(filters, actor) {
@@ -455,8 +493,9 @@ async function buildProbarSummary(filters, actor) {
 
   const rows = records.map(normalizeProbar);
   const grandTotal = rows.reduce((sum, r) => sum + (r.quantite || 0), 0);
+  const grandTotalWaste = await attachWaste(rows, "PROBAR", actor);
 
-  return { rows, grandTotal, unit: "m", totalRecords: rows.length };
+  return { rows, grandTotal, unit: "m", totalRecords: rows.length, grandTotalWaste, wasteUnit: "kg" };
 }
 
 async function getProductionSummary(filters, actor) {

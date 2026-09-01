@@ -87,7 +87,7 @@ app.use(
       "https://api.crmprobar.com"
       ,"http://localhost:57745"
     ],
-    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     credentials: true,
     allowedHeaders: ["Content-Type", "Authorization"]
   })

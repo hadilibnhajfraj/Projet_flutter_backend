@@ -34,6 +34,8 @@ const EMAILS = [
   "production_5@cbi-tunisia.com",
 ];
 
+
+
 module.exports = {
   async up(queryInterface) {
     const passwordHash = await bcrypt.hash(PASSWORD, 12);
