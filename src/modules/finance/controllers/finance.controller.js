@@ -258,6 +258,30 @@ async function deleteShipment(req, res) {
   }
 }
 
+// §MODIFICATION — CUSTOMER SHIPMENTS / SCAN DOCUMENTS : PLUSIEURS DOCUMENTS
+// PAR LIGNE (2026-09-01) — ajoute N document(s) à un shipment EXISTANT
+// (jamais un nouveau shipment créé, voir createShipment ci-dessus pour la
+// création réelle par OCR).
+async function addShipmentDocuments(req, res) {
+  try {
+    if (!req.files || !req.files.length) return res.status(400).json({ success: false, message: "Au moins un fichier est requis" });
+    const { shipment, documents } = await svc.addShipmentDocuments(req.params.id, req.files, actorFrom(req));
+    res.status(201).json({ success: true, data: { ...dto.toShipmentResponse(shipment), documents: dto.toDocumentList(documents) } });
+  } catch (err) {
+    handle(res, err);
+  }
+}
+
+// §8 du ticket : supprime UN SEUL document, jamais le shipment entier.
+async function deleteShipmentDocument(req, res) {
+  try {
+    const { shipment, documents } = await svc.deleteShipmentDocument(req.params.id, req.params.docId, actorFrom(req));
+    res.json({ success: true, data: { ...dto.toShipmentResponse(shipment), documents: dto.toDocumentList(documents) } });
+  } catch (err) {
+    handle(res, err);
+  }
+}
+
 // ── Factured shipments / Paid factures ─────────────────────────────────
 
 async function listInvoices(req, res) {
@@ -366,6 +390,30 @@ async function deleteInvoice(req, res) {
   }
 }
 
+// §MODIFICATION — FACTURED SHIPMENTS / SCAN DOCUMENTS (INCLUDE EXPORT) :
+// PLUSIEURS DOCUMENTS PAR LIGNE (2026-09-02) — ajoute N document(s) à une
+// facture EXISTANTE (jamais une nouvelle facture créée, voir createInvoice
+// ci-dessus pour la création réelle par OCR).
+async function addInvoiceDocuments(req, res) {
+  try {
+    if (!req.files || !req.files.length) return res.status(400).json({ success: false, message: "Au moins un fichier est requis" });
+    const { invoice, documents } = await svc.addInvoiceDocuments(req.params.id, req.files, actorFrom(req));
+    res.status(201).json({ success: true, data: { ...dto.toInvoiceResponse(invoice), documents: dto.toDocumentList(documents) } });
+  } catch (err) {
+    handle(res, err);
+  }
+}
+
+// §6 du ticket : supprime UN SEUL document, jamais la facture entière.
+async function deleteInvoiceDocument(req, res) {
+  try {
+    const { invoice, documents } = await svc.deleteInvoiceDocument(req.params.id, req.params.docId, actorFrom(req));
+    res.json({ success: true, data: { ...dto.toInvoiceResponse(invoice), documents: dto.toDocumentList(documents) } });
+  } catch (err) {
+    handle(res, err);
+  }
+}
+
 module.exports = {
   getDashboard,
   getDashboardMonthly,
@@ -389,6 +437,8 @@ module.exports = {
   getShipment,
   updateShipment,
   deleteShipment,
+  addShipmentDocuments,
+  deleteShipmentDocument,
   listInvoices,
   listPaidInvoices,
   getInvoice,
@@ -396,4 +446,6 @@ module.exports = {
   updateInvoice,
   registerPayment,
   deleteInvoice,
+  addInvoiceDocuments,
+  deleteInvoiceDocument,
 };

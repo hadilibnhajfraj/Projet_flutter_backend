@@ -2,3 +2,6 @@ node_modules/
 .env
 .env.*
 !.env.example
+# Uploaded files - NEVER commit
+uploads/
+uploads/**

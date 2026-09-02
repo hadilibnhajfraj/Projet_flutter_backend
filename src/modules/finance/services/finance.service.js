@@ -1061,6 +1061,51 @@ async function getShipment(id) {
   return { shipment, documents };
 }
 
+// §MODIFICATION — CUSTOMER SHIPMENTS / SCAN DOCUMENTS : PLUSIEURS DOCUMENTS
+// PAR LIGNE (2026-09-01) — ajoute N document(s) supplémentaire(s) à UN
+// shipment déjà EXISTANT (jamais un nouveau shipment créé, contrairement à
+// processShipmentUpload plus bas qui, lui, crée toujours un nouveau
+// shipment) : aucune ré-extraction OCR, aucun champ du shipment touché.
+// Même boucle "1 FinanceDocument par fichier" que processShipmentUpload,
+// adaptée à une entité déjà existante plutôt qu'à une entité fraîchement
+// créée — même principe que addRawMaterialDocuments ci-dessus.
+async function addShipmentDocuments(id, files, actor) {
+  if (!files || !files.length) throw { status: 400, message: "Au moins un fichier est requis" };
+  const shipment = await repo.findShipmentById(id);
+  if (!shipment) throw { status: 404, message: "Shipment introuvable" };
+
+  await sequelize.transaction(async (t) => {
+    for (const file of files) {
+      const originalName = sanitizeOriginalName(file.originalname);
+      await repo.createDocument(
+        {
+          module: SHIPMENT_MODULE,
+          entityId: shipment.id,
+          originalName,
+          storedFileName: file.filename,
+          fileUrl: docUrl(file),
+          mimeType: file.mimetype,
+          fileSize: file.size,
+          uploadedBy: actor.id,
+        },
+        { transaction: t }
+      );
+      await repo.logActivity(
+        {
+          entityType: "DOCUMENT",
+          entityId: shipment.id,
+          userId: actor.id,
+          type: "UPLOAD_DOCUMENT",
+          message: `Document "${originalName}" ajouté au shipment "${shipment.reference}"`,
+        },
+        { transaction: t }
+      );
+    }
+  });
+
+  return getShipment(id);
+}
+
 async function updateShipment(id, body, actor) {
   const shipment = await repo.findShipmentById(id);
   if (!shipment) throw { status: 404, message: "Shipment introuvable" };
@@ -1097,6 +1142,46 @@ async function deleteShipment(id, actor) {
   });
 
   return { id };
+}
+
+// §MODIFICATION — CUSTOMER SHIPMENTS / SCAN DOCUMENTS : PLUSIEURS DOCUMENTS
+// PAR LIGNE (2026-09-01, §8 du ticket) — supprime UN SEUL document d'un
+// shipment, jamais le shipment entier (voir deleteShipment ci-dessus pour ce
+// cas-là, inchangé) : les autres documents de la même ligne ne sont jamais
+// touchés. Même transaction/suppression physique que deleteImportDocument
+// plus bas, mais vérifie ICI en plus que le document appartient réellement
+// au shipment demandé (`entityId === shipmentId`) — même principe que
+// deleteRawMaterialDocument ci-dessus.
+async function deleteShipmentDocument(shipmentId, docId, actor) {
+  const shipment = await repo.findShipmentById(shipmentId);
+  if (!shipment) throw { status: 404, message: "Shipment introuvable" };
+
+  const document = await repo.findDocumentById(docId);
+  if (!document || document.module !== SHIPMENT_MODULE || document.entityId !== shipmentId) {
+    throw { status: 404, message: "Document introuvable" };
+  }
+
+  const originalName = document.displayName ?? document.originalName;
+  await sequelize.transaction(async (t) => {
+    await repo.destroyDocument(document, { transaction: t });
+  });
+
+  const filePath = path.join(UPLOAD_DIR, document.storedFileName);
+  try {
+    await fs.promises.unlink(filePath);
+  } catch (_) {
+    // Fichier déjà absent du disque — ne bloque jamais la suppression en base.
+  }
+
+  await repo.logActivity({
+    entityType: "DOCUMENT",
+    entityId: shipmentId,
+    userId: actor.id,
+    type: "DELETE_DOCUMENT",
+    message: `Document "${originalName}" supprimé du shipment "${shipment.reference}"`,
+  });
+
+  return getShipment(shipmentId);
 }
 
 // ── FACTURED SHIPMENTS / PAID FACTURES (§8-9) ───────────────────────────
@@ -1198,6 +1283,52 @@ async function updateInvoice(id, body, actor) {
   return getInvoice(id);
 }
 
+// §MODIFICATION — FACTURED SHIPMENTS / SCAN DOCUMENTS (INCLUDE EXPORT) :
+// PLUSIEURS DOCUMENTS PAR LIGNE (2026-09-02) — ajoute N document(s)
+// supplémentaire(s) à UNE facture déjà EXISTANTE (jamais une nouvelle ligne
+// créée, contrairement à processInvoiceUpload plus bas qui, lui, crée
+// toujours une nouvelle facture par fichier) : aucune ré-extraction OCR,
+// aucun champ de la facture touché (Invoice date reste indépendante, §8 du
+// ticket). Même boucle "1 FinanceDocument par fichier" que
+// processShipmentUpload/addRawMaterialDocuments/addShipmentDocuments,
+// adaptée à une entité déjà existante.
+async function addInvoiceDocuments(id, files, actor) {
+  if (!files || !files.length) throw { status: 400, message: "Au moins un fichier est requis" };
+  const invoice = await repo.findInvoiceById(id);
+  if (!invoice) throw { status: 404, message: "Facture introuvable" };
+
+  await sequelize.transaction(async (t) => {
+    for (const file of files) {
+      const originalName = sanitizeOriginalName(file.originalname);
+      await repo.createDocument(
+        {
+          module: INVOICE_MODULE,
+          entityId: invoice.id,
+          originalName,
+          storedFileName: file.filename,
+          fileUrl: docUrl(file),
+          mimeType: file.mimetype,
+          fileSize: file.size,
+          uploadedBy: actor.id,
+        },
+        { transaction: t }
+      );
+      await repo.logActivity(
+        {
+          entityType: "DOCUMENT",
+          entityId: invoice.id,
+          userId: actor.id,
+          type: "UPLOAD_DOCUMENT",
+          message: `Document "${originalName}" ajouté à la facture "${invoice.invoiceNumber}"`,
+        },
+        { transaction: t }
+      );
+    }
+  });
+
+  return getInvoice(id);
+}
+
 // Supprime la facture, ses lignes (finance_invoice_items) ET ses paiements
 // (finance_payments) — les deux sont en CASCADE au niveau BASE (voir
 // migrations correspondantes) — puis ses documents/fichiers associés. Ne
@@ -1217,6 +1348,46 @@ async function deleteInvoice(id, actor) {
   });
 
   return { id };
+}
+
+// §MODIFICATION — FACTURED SHIPMENTS / SCAN DOCUMENTS (INCLUDE EXPORT) :
+// PLUSIEURS DOCUMENTS PAR LIGNE (2026-09-02, §6 du ticket) — supprime UN
+// SEUL document d'une facture, jamais la facture entière (voir deleteInvoice
+// ci-dessus pour ce cas-là, inchangé) : les autres documents de la même
+// ligne ne sont jamais touchés. Même transaction/suppression physique que
+// deleteImportDocument plus bas, mais vérifie ICI en plus que le document
+// appartient réellement à la facture demandée (`entityId === invoiceId`) —
+// même principe que deleteRawMaterialDocument/deleteShipmentDocument.
+async function deleteInvoiceDocument(invoiceId, docId, actor) {
+  const invoice = await repo.findInvoiceById(invoiceId);
+  if (!invoice) throw { status: 404, message: "Facture introuvable" };
+
+  const document = await repo.findDocumentById(docId);
+  if (!document || document.module !== INVOICE_MODULE || document.entityId !== invoiceId) {
+    throw { status: 404, message: "Document introuvable" };
+  }
+
+  const originalName = document.displayName ?? document.originalName;
+  await sequelize.transaction(async (t) => {
+    await repo.destroyDocument(document, { transaction: t });
+  });
+
+  const filePath = path.join(UPLOAD_DIR, document.storedFileName);
+  try {
+    await fs.promises.unlink(filePath);
+  } catch (_) {
+    // Fichier déjà absent du disque — ne bloque jamais la suppression en base.
+  }
+
+  await repo.logActivity({
+    entityType: "DOCUMENT",
+    entityId: invoiceId,
+    userId: actor.id,
+    type: "DELETE_DOCUMENT",
+    message: `Document "${originalName}" supprimé de la facture "${invoice.invoiceNumber}"`,
+  });
+
+  return getInvoice(invoiceId);
 }
 
 // Deux flux coexistent ici :
@@ -1673,6 +1844,8 @@ module.exports = {
   getShipment,
   updateShipment,
   deleteShipment,
+  addShipmentDocuments,
+  deleteShipmentDocument,
   listInvoices,
   listPaidInvoices,
   getInvoice,
@@ -1681,4 +1854,6 @@ module.exports = {
   processInvoiceUpload,
   registerPayment,
   deleteInvoice,
+  addInvoiceDocuments,
+  deleteInvoiceDocument,
 };

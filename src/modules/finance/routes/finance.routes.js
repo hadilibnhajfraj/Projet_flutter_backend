@@ -107,6 +107,18 @@ router.patch("/shipments/import/:id", ctrl.shipmentsImport.rename);
 router.delete("/shipments/import/:id", ctrl.shipmentsImport.remove);
 router.get("/shipments/:id", ctrl.getShipment);
 router.put("/shipments/:id", validateUpdateShipment, ctrl.updateShipment);
+// §MODIFICATION — CUSTOMER SHIPMENTS / SCAN DOCUMENTS : PLUSIEURS DOCUMENTS
+// PAR LIGNE (2026-09-01) — même principe que /raw-materials/:id/documents
+// ci-dessus : ajoute N document(s) à un shipment EXISTANT (jamais un
+// nouveau shipment créé) ; supprime UN SEUL document sans toucher aux
+// autres ni au shipment lui-même (§8 du ticket).
+router.post(
+  "/shipments/:id/documents",
+  financeDocumentUpload.array("documents", 10),
+  handleUploadError,
+  ctrl.addShipmentDocuments
+);
+router.delete("/shipments/:id/documents/:docId", ctrl.deleteShipmentDocument);
 router.delete("/shipments/:id", ctrl.deleteShipment);
 
 // ── Factured shipments - by facture / Paid factures ─────────────────────
@@ -143,6 +155,19 @@ router.get("/invoices/:id", ctrl.getInvoice);
 // date" éditable directement depuis le tableau "Sage Documents" (§1 du
 // ticket) — même principe que PATCH /raw-materials/:id.
 router.patch("/invoices/:id", validateUpdateInvoice, ctrl.updateInvoice);
+// §MODIFICATION — FACTURED SHIPMENTS / SCAN DOCUMENTS (INCLUDE EXPORT) :
+// PLUSIEURS DOCUMENTS PAR LIGNE (2026-09-02) — même principe que
+// /raw-materials/:id/documents et /shipments/:id/documents ci-dessus :
+// ajoute N document(s) à une facture EXISTANTE (jamais une nouvelle facture
+// créée) ; supprime UN SEUL document sans toucher aux autres ni à la
+// facture elle-même (§6 du ticket).
+router.post(
+  "/invoices/:id/documents",
+  financeDocumentUpload.array("documents", 10),
+  handleUploadError,
+  ctrl.addInvoiceDocuments
+);
+router.delete("/invoices/:id/documents/:docId", ctrl.deleteInvoiceDocument);
 // "Register payment" — document justificatif optionnel (Chèque/Traite
 // uniquement, champ multipart "document") ; multer laisse passer les
 // requêtes sans fichier (Carte bancaire/Espèce) sans y toucher.
