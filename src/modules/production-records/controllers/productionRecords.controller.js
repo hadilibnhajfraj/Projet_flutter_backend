@@ -42,9 +42,20 @@ async function list(req, res) {
   }
 }
 
+// §MODIFICATION — PRODUCTION SUMMARY : PARITÉ RESPONSABLE_LOGISTIQUE_ACHAT /
+// SUPERADMIN (2026-09-02) — `?scope=summary` (envoyé UNIQUEMENT par l'écran
+// "Production Summary", voir production_records_service.dart#fetchFilters)
+// désactive l'owner-scoping pour CET appel (dropdowns Machine/Diameter),
+// jamais pour l'appel de l'écran "Production Records" (aucun `scope`).
+// `hasFullProductionSummaryVisibility` (exception NOMINATIVE, pas tout le
+// rôle) garantit que seul responsable_logistique@cbi-tunisia.com en
+// bénéficie — les comptes production_1..5, qui partagent le même rôle,
+// restent owner-scoped même avec `?scope=summary` dans l'URL.
 async function filters(req, res) {
   try {
-    const data = await svc.getFilters(actorFrom(req));
+    const actor = actorFrom(req);
+    const ignoreOwnerScope = req.query.scope === "summary" && svc.hasFullProductionSummaryVisibility(actor);
+    const data = await svc.getFilters(actor, { ignoreOwnerScope });
     res.json({ success: true, data });
   } catch (err) {
     handle(res, err);

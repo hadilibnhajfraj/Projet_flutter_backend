@@ -37,6 +37,22 @@ function isOwnerScoped(role) {
   return role === "responsable_logistique_achat";
 }
 
+// §MODIFICATION — PRODUCTION SUMMARY : PARITÉ RESPONSABLE_LOGISTIQUE_ACHAT /
+// SUPERADMIN (2026-09-02) — exception NOMINATIVE (par email), PAS une
+// exception de rôle : le rôle `responsable_logistique_achat` est PARTAGÉ par
+// les comptes production_1..5@cbi-tunisia.com (voir production-accounts.
+// seeder.js), qui doivent RESTER owner-scoped partout, y compris sur
+// Production Summary (verrouillé par productionRecords.createdByFilter.
+// test.js). Seul le compte responsable_logistique@cbi-tunisia.com obtient la
+// même vue Production Summary qu'un superadmin — son rôle n'est PAS changé
+// (§9/§16 du ticket) et il reste owner-scoped sur tous les autres écrans/
+// endpoints (Production Records list, KPI cards, filtres hors Summary...).
+const PRODUCTION_SUMMARY_FULL_VISIBILITY_EMAILS = new Set(["responsable_logistique@cbi-tunisia.com"]);
+
+function hasFullProductionSummaryVisibility(actor) {
+  return !isOwnerScoped(actor.role) || PRODUCTION_SUMMARY_FULL_VISIBILITY_EMAILS.has(actor.email);
+}
+
 const HARD_FETCH_CAP = 1000;
 
 // Colonne réelle par source pour chaque clé de tri exposée côté API.
@@ -63,14 +79,25 @@ function parseSort(sort) {
 // compte Production pourrait passer `?createdBy=<autre utilisateur>` et
 // voir les fiches de quelqu'un d'autre. Jamais une valeur envoyée par le
 // client ne doit pouvoir élargir un accès déjà restreint.
-function applyCreatedByFilter(where, filters, actor) {
-  if (filters.createdBy && !isOwnerScoped(actor.role)) where.createdBy = filters.createdBy;
+function applyCreatedByFilter(where, filters, ownerScoped) {
+  if (filters.createdBy && !ownerScoped) where.createdBy = filters.createdBy;
   return where;
 }
 
-function buildPromeshWhere(filters, actor) {
-  const where = isOwnerScoped(actor.role) ? { createdBy: actor.id } : {};
-  applyCreatedByFilter(where, filters, actor);
+// §MODIFICATION — PRODUCTION SUMMARY : PARITÉ RESPONSABLE_LOGISTIQUE_ACHAT /
+// SUPERADMIN (2026-09-02) — `ignoreOwnerScope` permet à un appelant précis
+// (uniquement buildPromeshSummary/buildProbarSummary/attachWaste ci-dessous,
+// donc UNIQUEMENT le endpoint "Production Summary") de désactiver l'owner-
+// scoping pour CET appel précis, sans toucher au comportement par défaut de
+// cette fonction pour tous les autres appelants (listRecords/getStatistics/
+// getProductionTotals — Production Records/KPI cards, inchangés). Seul
+// `responsable_logistique_achat` est concerné dans les faits : c'est le seul
+// rôle pour lequel `isOwnerScoped` renvoie `true` (voir plus haut) — pour
+// tous les autres rôles, ce drapeau est un no-op.
+function buildPromeshWhere(filters, actor, { ignoreOwnerScope = false } = {}) {
+  const ownerScoped = !ignoreOwnerScope && isOwnerScoped(actor.role);
+  const where = ownerScoped ? { createdBy: actor.id } : {};
+  applyCreatedByFilter(where, filters, ownerScoped);
   if (filters.machineId) where.machine = filters.machineId;
   if (filters.poste) where.poste = filters.poste;
 
@@ -104,9 +131,10 @@ function applyPromeshSearch(where, search) {
   return where;
 }
 
-function buildProbarWhere(filters, actor) {
-  const where = { module: "probar", ...(isOwnerScoped(actor.role) ? { createdBy: actor.id } : {}) };
-  applyCreatedByFilter(where, filters, actor);
+function buildProbarWhere(filters, actor, { ignoreOwnerScope = false } = {}) {
+  const ownerScoped = !ignoreOwnerScope && isOwnerScoped(actor.role);
+  const where = { module: "probar", ...(ownerScoped ? { createdBy: actor.id } : {}) };
+  applyCreatedByFilter(where, filters, ownerScoped);
   if (filters.machineId) where.machine = filters.machineId;
   if (filters.poste) where.poste = filters.poste;
 
@@ -265,8 +293,9 @@ async function listRecords(filters, actor) {
 // "production_1" Total=25) — jamais les autres filtres (période/machine/
 // poste), qui restent volontairement globaux pour ces cartes.
 async function getStatistics(filters, actor) {
-  const scopeWhere = isOwnerScoped(actor.role) ? { createdBy: actor.id } : {};
-  applyCreatedByFilter(scopeWhere, filters, actor);
+  const ownerScoped = isOwnerScoped(actor.role);
+  const scopeWhere = ownerScoped ? { createdBy: actor.id } : {};
+  applyCreatedByFilter(scopeWhere, filters, ownerScoped);
   const weekRange = computeDateRange("week");
   const monthRange = computeDateRange("month");
 
@@ -446,12 +475,12 @@ function applyProbarSummaryFilters(where, filters) {
 // Retourne le total Waste (§6/§7) — somme des dates DISTINCTES réellement
 // présentes dans `rows` (jamais une somme "par ligne", qui doublonnerait une
 // date partagée par plusieurs lignes de production).
-async function attachWaste(rows, module, actor) {
+async function attachWaste(rows, module, actor, { ignoreOwnerScope = false } = {}) {
   const dates = Array.from(new Set(rows.map((r) => r.date).filter(Boolean)));
   const wasteByDate = new Map();
   if (dates.length) {
     const where = { module, date: { [Op.in]: dates } };
-    if (isOwnerScoped(actor.role)) where.createdBy = actor.id;
+    if (!ignoreOwnerScope && isOwnerScoped(actor.role)) where.createdBy = actor.id;
     const aggregated = await RecuperableFiche.findAll({
       where,
       attributes: ["date", [fn("SUM", col("waste")), "totalWaste"]],
@@ -464,8 +493,23 @@ async function attachWaste(rows, module, actor) {
   return dates.reduce((sum, d) => sum + (wasteByDate.get(String(d)) ?? 0), 0);
 }
 
+// §MODIFICATION — PRODUCTION SUMMARY : PARITÉ RESPONSABLE_LOGISTIQUE_ACHAT /
+// SUPERADMIN (2026-09-02, ticket "Corrige le module Production Summary...") —
+// `hasFullProductionSummaryVisibility(actor)` UNIQUEMENT ici
+// (buildPromeshSummary/buildProbarSummary, exclusivement utilisées par
+// getProductionSummary → route GET /production-records/summary) :
+// responsable_logistique@cbi-tunisia.com (exception NOMINATIVE, pas tout le
+// rôle — voir hasFullProductionSummaryVisibility, production_1..5 restent
+// owner-scoped) obtient exactement le même périmètre de lecture que
+// superadmin/finance_production pour l'écran "Production Summary" (toutes
+// les machines PROMESH/PROBAR, tous les créateurs, mêmes totaux/records/
+// waste), SANS toucher à listRecords/getStatistics/getProductionTotals
+// (Production Records + cartes KPI, qui restent owner-scoped pour ce
+// compte, inchangés) ni aux modules por-promesh/industrial-records
+// (isOwnerScoped y reste défini séparément, jamais modifié par ce ticket).
 async function buildPromeshSummary(filters, actor) {
-  const where = applyPromeshSummaryFilters(buildPromeshWhere(filters, actor), filters);
+  const ignoreOwnerScope = hasFullProductionSummaryVisibility(actor);
+  const where = applyPromeshSummaryFilters(buildPromeshWhere(filters, actor, { ignoreOwnerScope }), filters);
 
   const records = await PorPromesh.findAll({
     where,
@@ -476,13 +520,14 @@ async function buildPromeshSummary(filters, actor) {
 
   const rows = records.map(normalizePromesh);
   const grandTotal = rows.reduce((sum, r) => sum + (r.quantite || 0), 0);
-  const grandTotalWaste = await attachWaste(rows, "PROMESH", actor);
+  const grandTotalWaste = await attachWaste(rows, "PROMESH", actor, { ignoreOwnerScope });
 
   return { rows, grandTotal, unit: "m²", totalRecords: rows.length, grandTotalWaste, wasteUnit: "kg" };
 }
 
 async function buildProbarSummary(filters, actor) {
-  const where = applyProbarSummaryFilters(buildProbarWhere(filters, actor), filters);
+  const ignoreOwnerScope = hasFullProductionSummaryVisibility(actor);
+  const where = applyProbarSummaryFilters(buildProbarWhere(filters, actor, { ignoreOwnerScope }), filters);
 
   const records = await IndustrialRecord.findAll({
     where,
@@ -493,7 +538,7 @@ async function buildProbarSummary(filters, actor) {
 
   const rows = records.map(normalizeProbar);
   const grandTotal = rows.reduce((sum, r) => sum + (r.quantite || 0), 0);
-  const grandTotalWaste = await attachWaste(rows, "PROBAR", actor);
+  const grandTotalWaste = await attachWaste(rows, "PROBAR", actor, { ignoreOwnerScope });
 
   return { rows, grandTotal, unit: "m", totalRecords: rows.length, grandTotalWaste, wasteUnit: "kg" };
 }
@@ -549,8 +594,15 @@ function sortDiameters(values) {
   });
 }
 
-async function getFilters(actor) {
-  const scopeWhere = isOwnerScoped(actor.role) ? { createdBy: actor.id } : {};
+// `ignoreOwnerScope` (§MODIFICATION — PRODUCTION SUMMARY, 2026-09-02) : passé
+// à `true` UNIQUEMENT quand cet appel vient de l'écran "Production Summary"
+// (voir ctrl.filters — `req.query.scope === "summary"`), pour que ses
+// dropdowns Machine/Diameter listent TOUTES les valeurs (parité superadmin),
+// exactement comme buildPromeshSummary/buildProbarSummary ci-dessus. L'appel
+// venant de l'écran "Production Records" (aucun `scope`) garde le
+// comportement par défaut, inchangé.
+async function getFilters(actor, { ignoreOwnerScope = false } = {}) {
+  const scopeWhere = !ignoreOwnerScope && isOwnerScoped(actor.role) ? { createdBy: actor.id } : {};
   const probarScopeWhere = { ...scopeWhere, module: "probar" };
 
   const [promeshMachines, probarMachines, promeshPostes, probarPostes, promeshDiameters, probarDiameters] = await Promise.all([
@@ -634,4 +686,13 @@ async function getRecordById(compositeId, actor) {
   return buildProbarDetail(toIndustrialRecordResponse(record, { light: false }));
 }
 
-module.exports = { listRecords, getStatistics, getProductionTotals, getProductionSummary, getFilters, getCreators, getRecordById };
+module.exports = {
+  listRecords,
+  getStatistics,
+  getProductionTotals,
+  getProductionSummary,
+  getFilters,
+  getCreators,
+  getRecordById,
+  hasFullProductionSummaryVisibility,
+};
