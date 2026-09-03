@@ -72,7 +72,7 @@ const app = express();
 // un client de FALSIFIER son IP via l'en-tête X-Forwarded-For et de
 // contourner tous les rate-limiters — à confirmer/activer uniquement après
 // vérification de la topologie réseau réelle en prod.
-// app.set("trust proxy", 1); // décommenter si (et seulement si) un proxy de confiance est bien en amont
+app.set("trust proxy", 1); // décommenter si (et seulement si) un proxy de confiance est bien en amont
 
 app.use(helmet());
 app.use(express.json({ limit: "10mb" }));
