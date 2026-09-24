@@ -20,6 +20,18 @@ function getTransporter() {
   });
 }
 
+// Masque une adresse e-mail pour les logs/diagnostics (JAMAIS l'adresse
+// complète, JAMAIS un mot de passe) — ex. "cbitunisia@cbi-tunisia.com" →
+// "cb***@cbi-tunisia.com". Conserve le domaine (utile au diagnostic : "est-ce
+// bien le bon fournisseur ?") sans jamais révéler l'identifiant complet.
+function maskEmail(address) {
+  if (!address) return null;
+  const [local, domain] = String(address).split("@");
+  if (!domain) return "***";
+  const visible = local.slice(0, Math.min(2, local.length));
+  return `${visible}${"*".repeat(Math.max(3, local.length - visible.length))}@${domain}`;
+}
+
 // Extrait l'adresse "bare" (sans le nom affiché) d'un header du type
 // `"CBI Tunisia" <cbitunisia@cbi-tunisia.com>` — utilisé pour construire
 // l'enveloppe SMTP explicitement (MAIL FROM) plutôt que de laisser
@@ -128,4 +140,28 @@ async function sendMail({ to, subject, html, text }) {
   }
 }
 
-module.exports = { sendMail };
+// Vérifie la connexion SMTP réelle (transporter.verify) — sans envoyer de
+// message. Ne renvoie JAMAIS EMAIL_PASS ni aucun identifiant : uniquement
+// hôte / port / mode sécurisé / utilisateur SMTP MASQUÉ / expéditeur MASQUÉ.
+// Diagnostic §4 : userMasked/fromMasked sont ce qui doit être loggé ou
+// renvoyé à un appelant — user/from (adresses complètes) restent réservés à
+// un usage interne (envoi réel), jamais exposés tels quels.
+async function verifyConnection() {
+  const user = process.env.EMAIL_USER || null;
+  const from = extractBareAddress(process.env.EMAIL_FROM || process.env.EMAIL_USER);
+  const info = {
+    host: process.env.EMAIL_HOST || null,
+    port: Number(process.env.EMAIL_PORT || 587),
+    secure: String(process.env.EMAIL_SECURE || "false") === "true",
+    user: maskEmail(user),
+    from: maskEmail(from),
+  };
+  try {
+    await getTransporter().verify();
+    return { ok: true, ...info };
+  } catch (err) {
+    return { ok: false, ...info, error: describeSmtpError(err) };
+  }
+}
+
+module.exports = { sendMail, verifyConnection, maskEmail };

@@ -40,6 +40,13 @@ require("./cron/googleCalendarChannelRenewal.job");
 // Verrouillage automatique des fiches PROBAR/PROMESH 24h après création —
 // actif par défaut (AUTO_VALIDATION_ENABLED=false pour désactiver).
 require("./cron/ficheAutoValidation.job");
+// Contrôle quotidien des fiches PROD 1 / PROD 2 + alertes email (heure de Tunis) —
+// actif par défaut (PRODUCTION_COMPLIANCE_ENABLED=false pour désactiver).
+require("./cron/productionCompliance.job");
+// "Production Follow-up" — suivi quotidien des journées SANS AUCUNE fiche
+// (23:00 heure de Tunis), complémentaire à Production Compliance ci-dessus —
+// actif par défaut (PRODUCTION_FOLLOW_UP_ENABLED=false pour désactiver).
+require("./cron/productionFollowUp.job");
 
 // ── CRM Pipeline Modules ──────────────────────────────────
 const pipelineStageRoutes = require("./modules/pipeline/routes/pipelineStage.routes");
@@ -55,6 +62,10 @@ const googleCalendarRoutes = require("./routes/googleCalendar.routes");
 const porPromeshRoutes = require("./modules/por-promesh/routes/porPromesh.routes");
 const industrialRecordRoutes = require("./modules/industrial-records/routes/industrialRecord.routes");
 const productionRecordsRoutes = require("./modules/production-records/routes/productionRecords.routes");
+const reportsRoutes = require("./modules/reports/routes/reports.routes");
+const productionComplianceRoutes = require("./modules/production-compliance/routes/productionCompliance.routes");
+const productionDraftArchiveRoutes = require("./modules/production-draft-archive/routes/draftArchive.routes");
+const productionFollowUpRoutes = require("./modules/production-follow-up/routes/productionFollowUp.routes");
 const hrRequestRoutes = require("./modules/hr-requests/routes/hrRequest.routes");
 const recuperableRoutes = require("./modules/recuperables/routes/recuperable.routes");
 const adminDashboardRoutes = require("./modules/admin-dashboard/routes/adminDashboard.routes");
@@ -110,6 +121,10 @@ app.use("/crm", crmRoutes);
 app.use("/por-promesh", porPromeshRoutes);
 app.use("/industrial-records", industrialRecordRoutes);
 app.use("/production-records", productionRecordsRoutes);
+app.use("/reports", reportsRoutes);
+app.use("/production-compliance", productionComplianceRoutes);
+app.use("/production-draft-archive", productionDraftArchiveRoutes);
+app.use("/production-follow-up", productionFollowUpRoutes);
 app.use("/hr-requests", hrRequestRoutes);
 app.use("/recuperables", recuperableRoutes);
 app.use("/admin-dashboard", adminDashboardRoutes);

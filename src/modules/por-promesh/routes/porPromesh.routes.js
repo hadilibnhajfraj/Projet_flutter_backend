@@ -7,6 +7,7 @@ const { authRequired } = require("../../../middleware/auth.middleware");
 const { requireRole } = require("../../../middleware/requireRole");
 const { attachmentUpload } = require("../../../middleware/porPromeshAttachment.middleware");
 const { handleUploadError } = require("../../../middleware/projectAction.validation");
+const { complianceGuard } = require("../../production-compliance/middleware/productionComplianceGuard");
 
 // Create/read/update: admin, superadmin, and the logistics/purchasing role
 // (the latter scoped to its own fiches — enforced in the service layer).
@@ -20,11 +21,11 @@ const DELETE_ROLES = ["admin", "superadmin", "superadmin2"];
 
 router.use(authRequired);
 
-router.post("/", requireRole(...READ_WRITE_ROLES), validateCreate, ctrl.createPorPromesh);
+router.post("/", requireRole(...READ_WRITE_ROLES), validateCreate, complianceGuard({ source: "promesh", mode: "create" }), ctrl.createPorPromesh);
 router.get("/", requireRole(...READ_WRITE_ROLES), ctrl.listPorPromesh);
 
 // Bouton "Nouvelle fiche" — rouvre le brouillon en cours ou en crée un.
-router.post("/new", requireRole(...READ_WRITE_ROLES), validateCreateOrOpenDraft, ctrl.createOrOpenDraft);
+router.post("/new", requireRole(...READ_WRITE_ROLES), validateCreateOrOpenDraft, complianceGuard({ source: "promesh", mode: "createDraft" }), ctrl.createOrOpenDraft);
 
 // Liste déroulante "Opérateur" — ouvert aux mêmes rôles que la création/
 // modification de fiches (pas réservé admin/superadmin comme GET /users).
@@ -36,7 +37,7 @@ router.get("/dashboard", requireRole(...READ_WRITE_ROLES), ctrl.getDashboard);
 router.get("/stats", requireRole(...READ_WRITE_ROLES), ctrl.getStats);
 
 router.get("/:id", requireRole(...READ_WRITE_ROLES), ctrl.getPorPromesh);
-router.put("/:id", requireRole(...READ_WRITE_ROLES), validateUpdate, ctrl.updatePorPromesh);
+router.put("/:id", requireRole(...READ_WRITE_ROLES), validateUpdate, complianceGuard({ source: "promesh", mode: "update" }), ctrl.updatePorPromesh);
 router.delete("/:id", requireRole(...DELETE_ROLES), ctrl.deletePorPromesh);
 
 // Verrouillage définitif (BROUILLON → VALIDE) : l'auteur de la fiche

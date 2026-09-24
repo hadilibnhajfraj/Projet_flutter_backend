@@ -60,7 +60,7 @@ function sanitizePayload(body) {
 
 function assertOwnership(report, actor) {
   if (isOwnerScoped(actor.role) && report.createdBy !== actor.id) {
-    throw { status: 403, message: "Vous ne pouvez accéder qu'à vos propres fiches PorPromesh" };
+    throw { status: 403, code: "NOT_OWNER", message: "Vous ne pouvez accéder qu'à vos propres fiches PorPromesh" };
   }
 }
 
@@ -181,6 +181,12 @@ async function applyDerivedProcessControl(porPromeshId, machineFields, children,
 // fiche déjà verrouillée (validée définitivement via /validate).
 const LOCKED_MESSAGE = "Cette fiche POR PROMESH est validée définitivement.";
 
+// Message renvoyé pour toute tentative de modification/suppression d'une
+// fiche ARCHIVÉE (brouillon resté incomplet plus de 2h — voir
+// modules/production-draft-archive) — seule une demande de désarchivage
+// approuvée par un responsable la remet en BROUILLON modifiable.
+const ARCHIVED_MESSAGE = "Cette fiche POR PROMESH est archivée. Une demande de désarchivage est nécessaire pour la modifier.";
+
 async function createPorPromesh(body, actor) {
   const { mainFields, children } = splitFields(sanitizePayload(body));
 
@@ -219,6 +225,9 @@ function buildWhere(actor, filters = {}) {
     case "valide":
       where.status = "VALIDE";
       break;
+    case "archived":
+      where.status = "ARCHIVED";
+      break;
     case "conforme":
       where.conformite = "conforme";
       break;
@@ -226,6 +235,11 @@ function buildWhere(actor, filters = {}) {
       where.conformite = "non_conforme";
       break;
   }
+  // Sauf demande EXPLICITE (status=archived), jamais les fiches ARCHIVÉES
+  // dans la liste normale ("Fiches du poste") — y compris combinées à
+  // machine/poste/date/conforme — visibles uniquement via ce filtre explicite
+  // ou l'écran Archiving/History (§7 du ticket).
+  if (!where.status) where.status = { [Op.ne]: "ARCHIVED" };
   return where;
 }
 
@@ -246,10 +260,10 @@ async function listPorPromesh(actor, filters = {}) {
 // ── Bouton "Nouvelle fiche" : crée toujours une fiche neuve et indépendante,
 // jamais de réutilisation d'un brouillon existant — aucune donnée d'une
 // fiche précédente (même non validée) ne doit réapparaître.
-async function createOrOpenDraft(actor, { machine, poste, operateurName }) {
+async function createOrOpenDraft(actor, { machine, poste, operateurName, dateProduction: requestedDate }) {
   const machineStr = machine == null ? null : String(machine);
   const now = new Date();
-  const dateProduction = now.toISOString().slice(0, 10);
+  const dateProduction = requestedDate || now.toISOString().slice(0, 10);
   const heureDebut = now.toTimeString().slice(0, 8);
   // heureFin ne doit jamais être vide — par défaut = heureDebut (modifiable
   // par l'utilisateur avant validation).
@@ -374,7 +388,10 @@ async function updatePorPromesh(id, body, actor) {
     assertOwnership(report, actor);
 
     if (report.isLocked) {
-      throw { status: 403, message: LOCKED_MESSAGE };
+      throw { status: 403, code: "SHEET_LOCKED", message: LOCKED_MESSAGE };
+    }
+    if (report.status === "ARCHIVED") {
+      throw { status: 403, code: "SHEET_ARCHIVED", message: ARCHIVED_MESSAGE, ficheId: report.id, ficheType: "PROMESH" };
     }
 
     if (Object.keys(mainFields).length) {
@@ -402,7 +419,10 @@ async function deletePorPromesh(id, actor) {
   assertOwnership(report, actor);
 
   if (report.isLocked) {
-    throw { status: 403, message: LOCKED_MESSAGE };
+    throw { status: 403, code: "SHEET_LOCKED", message: LOCKED_MESSAGE };
+  }
+  if (report.status === "ARCHIVED") {
+    throw { status: 403, code: "SHEET_ARCHIVED", message: ARCHIVED_MESSAGE, ficheId: report.id, ficheType: "PROMESH" };
   }
 
   await repo.destroy(report);
@@ -437,7 +457,7 @@ async function validatePorPromesh(id, actor) {
   assertOwnership(report, actor);
 
   if (report.isLocked) {
-    throw { status: 403, message: LOCKED_MESSAGE };
+    throw { status: 403, code: "SHEET_LOCKED", message: LOCKED_MESSAGE };
   }
 
   const missing = missingRequiredFieldsForValidation(report);

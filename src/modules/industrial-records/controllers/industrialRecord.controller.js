@@ -9,6 +9,9 @@ function handle(res, err) {
   if (status >= 500) logger.error("IndustrialRecord error:", err);
   res.status(status).json({
     success: false,
+    ...(err.code ? { code: err.code } : {}),
+    ...(err.ficheId ? { ficheId: err.ficheId } : {}),
+    ...(err.ficheType ? { ficheType: err.ficheType } : {}),
     message: err.message || "Internal server error",
   });
 }

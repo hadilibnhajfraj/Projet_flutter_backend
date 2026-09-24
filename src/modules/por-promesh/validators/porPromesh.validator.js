@@ -186,6 +186,9 @@ const createOrOpenDraftSchema = Joi.object({
   machine: Joi.alternatives(Joi.string(), Joi.number()).required(),
   poste: Joi.string().valid("matin", "nuit").required(),
   operateurName: Joi.string().max(255).allow(null, "").optional(),
+  // Date de production (YYYY-MM-DD) — aujourd'hui par défaut ; une date antérieure
+  // exige une autorisation de rattrapage pour les comptes PROD 1 / PROD 2.
+  dateProduction: Joi.string().pattern(/^\d{4}-\d{2}-\d{2}$/).optional(),
 });
 
 function validate(schema) {

@@ -22,61 +22,44 @@ console.log("🔥 FOLLOWUP CRON LOADED");
 
 const FOLLOWUP_AUTOMATION_EMAIL = "info@probardistribution.com";
 
-// ─── CLIENT FOLLOW-UP EMAILS — DÉSACTIVÉS (URGENT) ────────────────────────
-// checkFollowup() ci-dessous envoyait un email directement au CLIENT
-// (contact.email) — deux appels sendEmail(contact.email, ...) — ce qui
-// saturait le rate-limit SMTP Hostinger ("451 4.7.1 Ratelimit
-// hostinger_out_ratelimit exceeded") dès que plusieurs contacts étaient
-// traités dans le même tick. Règle : CLIENT → FOLLOW-UP → EMAIL = INTERDIT.
-// La détection/l'enregistrement/l'affichage des Follow-up ne sont PAS
-// concernés (voir la boucle plus bas) — seul l'appel sendEmail() vers le
-// client est bloqué, AVANT toute tentative SMTP. Volontairement codé en dur
-// (pas une variable d'env) : personne ne doit pouvoir réactiver l'envoi aux
-// clients par une simple configuration. Les rappels internes
-// (commercial/admin) dans checkReminders()/checkActionReminders() ci-dessous
-// ne sont PAS concernés par ce blocage — ils continuent de fonctionner.
-const CLIENT_FOLLOWUP_EMAILS_ENABLED = false;
+// ─── RÈGLE MÉTIER DÉFINITIVE — AUCUN EMAIL VERS UN CLIENT ─────────────────
+// checkFollowup() ci-dessous envoyait auparavant un email directement au
+// CLIENT (contact.email) — deux appels sendEmail(contact.email, ...). Ce
+// comportement est INTERDIT et a été RÉELLEMENT SUPPRIMÉ (pas seulement
+// masqué derrière un indicateur) : aucun appel sendEmail()/Nodemailer ne
+// référence plus jamais contact.email dans ce fichier ni ailleurs (vérifié,
+// tous les autres appels sendEmail() du backend ciblent un User interne —
+// manager/requester/admin/commercial/ownerEmail — jamais un contact/client).
+// La détection des Follow-up (relances, notification interne "email
+// manquant") n'est PAS concernée par cette règle — seul l'envoi vers le
+// client est supprimé, et aucun log ne mentionne plus ce traitement
+// (ignoré silencieusement, voir la boucle ci-dessous). Les rappels internes
+// (commercial/admin) dans checkReminders()/checkActionReminders() plus bas
+// ne sont pas concernés — ils continuent de fonctionner normalement.
 
 // =========================
 // 🔥 MAIN FUNCTION
 // =========================
 const checkFollowup = async () => {
-  const now = dayjs();
-  const today = now.format("YYYY-MM-DD");
-
   console.log("🚀 CRON START (FOLLOW-UP)");
-  console.log("📅 TODAY:", today);
 
   try {
     // =========================
-    // 👥 1. GET ALL CONTACTS
+    // 👥 GET ALL CONTACTS
     // =========================
     const contacts = await CommercialContact.findAll();
     console.log("👥 TOTAL CONTACTS:", contacts.length);
 
     // =========================
-    // 📅 2. GET TODAY RELANCES
-    // =========================
-    const relances = await CommercialContactRelance.findAll({
-      where: { dateRelance: today },
-    });
-
-    console.log("📊 RELANCES TODAY:", relances.length);
-
-    // 🔥 OPTIMISATION (lookup rapide)
-    const relanceMap = new Map();
-    relances.forEach((r) => {
-      relanceMap.set(r.commercialContactId, r);
-    });
-
-    // =========================
-    // 🔁 LOOP CONTACTS
+    // 🔁 LOOP CONTACTS — traitement interne uniquement (jamais d'email au
+    // client, voir règle ci-dessus) ; ignoré silencieusement dans tous les
+    // autres cas (aucun log par contact).
     // =========================
     for (let contact of contacts) {
       try {
         if (!contact.email) {
-          console.log(`ℹ️ Client email skipped: ${contact.nom}`);
-
+          // Notification CRM interne (pour l'auteur du contact) — pas un
+          // envoi vers le client, donc non concernée par la règle ci-dessus.
           await Notification.create({
             userId: contact.createdBy,
             type: "FOLLOWUP_MISSING",
@@ -84,92 +67,6 @@ const checkFollowup = async () => {
             message: `Le contact ${contact.nom} n'a pas d'email`,
             isRead: false,
           });
-
-          continue;
-        }
-
-        const relance = relanceMap.get(contact.id);
-
-        // =========================
-        // ✅ RELANCE AUJOURD’HUI
-        // =========================
-        if (relance) {
-          if (relance.emailSent) {
-            console.log(`⏭️ Already sent: ${contact.nom}`);
-            continue;
-          }
-
-          console.log(`📅 Relance TODAY: ${contact.nom}`);
-
-          // ⛔ EMAIL CLIENT BLOQUÉ — le Follow-up reste détecté/enregistré
-          // (relance existe déjà en base), seul l'envoi SMTP au client est
-          // interdit. Ne JAMAIS appeler sendEmail(contact.email, ...) ici.
-          if (!CLIENT_FOLLOWUP_EMAILS_ENABLED) {
-            console.log(`⏭️ Follow-up email skipped for client: ${contact.nom}`);
-            continue;
-          }
-
-          const result = await sendEmail(
-            contact.email,
-            "🔔 Rappel Follow-up",
-            `Relance prévue aujourd’hui pour ${contact.nom} ${contact.prenom}.`
-          );
-
-          if (result.success) {
-            console.log(`✅ EMAIL SENT: ${contact.nom}`);
-
-            // 🔥 UPDATE RELANCE
-            relance.emailSent = true;
-            await relance.save();
-
-            // 🔥 NOTIFICATION
-            await Notification.create({
-              userId: relance.createdBy,
-              type: "FOLLOWUP",
-              title: "Relance envoyée",
-              message: `Email envoyé à ${contact.nom} ${contact.prenom}`,
-              isRead: false,
-            });
-          } else {
-            console.log(`❌ EMAIL FAILED: ${contact.nom}`);
-
-            await Notification.create({
-              userId: relance.createdBy,
-              type: "FOLLOWUP_ERROR",
-              title: "Erreur envoi",
-              message: `Échec d'envoi pour ${contact.nom}`,
-              isRead: false,
-            });
-          }
-        }
-
-        // =========================
-        // ❌ PAS DE RELANCE
-        // =========================
-        else {
-          console.log(`⚠️ No follow-up: ${contact.nom}`);
-
-          // ⛔ EMAIL CLIENT BLOQUÉ — voir commentaire ci-dessus (même règle).
-          if (!CLIENT_FOLLOWUP_EMAILS_ENABLED) {
-            console.log(`⏭️ Follow-up email skipped for client: ${contact.nom}`);
-            continue;
-          }
-
-          const result = await sendEmail(
-            contact.email,
-            "⚠️ Follow-up manquant",
-            `Aucun follow-up défini pour ${contact.nom}. Merci de planifier une relance.`
-          );
-
-          if (result.success) {
-            await Notification.create({
-              userId: contact.createdBy,
-              type: "FOLLOWUP_MISSING",
-              title: "Relance manquante",
-              message: `Aucune relance définie pour ${contact.nom}`,
-              isRead: false,
-            });
-          }
         }
       } catch (err) {
         console.error("❌ LOOP ERROR:", err.message);

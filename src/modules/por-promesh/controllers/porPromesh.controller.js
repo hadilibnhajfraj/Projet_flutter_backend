@@ -9,6 +9,11 @@ function handle(res, err) {
   if (status >= 500) logger.error("PorPromesh error:", err);
   res.status(status).json({
     success: false,
+    ...(err.code ? { code: err.code } : {}),
+    // ficheId/ficheType (SHEET_ARCHIVED) : permet au frontend de proposer
+    // directement "Demander le désarchivage" sans changer chaque écran appelant.
+    ...(err.ficheId ? { ficheId: err.ficheId } : {}),
+    ...(err.ficheType ? { ficheType: err.ficheType } : {}),
     message: err.message || "Internal server error",
   });
 }
@@ -31,8 +36,8 @@ async function createPorPromesh(req, res) {
 
 async function createOrOpenDraft(req, res) {
   try {
-    const { machine, poste, operateurName } = req.body;
-    const report = await svc.createOrOpenDraft(actorFrom(req), { machine, poste, operateurName });
+    const { machine, poste, operateurName, dateProduction } = req.body;
+    const report = await svc.createOrOpenDraft(actorFrom(req), { machine, poste, operateurName, dateProduction });
     res.status(201).json({
       success: true,
       data: { id: report.id, machine: report.machine, poste: report.poste, status: report.status },

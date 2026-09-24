@@ -139,6 +139,17 @@ const PorPromesh = sequelize.define(
     // Horodatage de la validation définitive (NULL tant que non validée).
     validatedAt: { type: DataTypes.DATE, allowNull: true },
 
+    // Archivage automatique des brouillons > 2h (voir
+    // modules/production-draft-archive) — NULL tant que non archivée ;
+    // remis à NULL par un désarchivage approuvé (la fiche n'est alors plus
+    // "actuellement archivée"). L'historique complet (y compris les cycles
+    // archivage/désarchivage précédents) reste dans production_draft_archive_log.
+    archivedAt: { type: DataTypes.DATE, allowNull: true },
+    archivedBy: { type: DataTypes.STRING(255), allowNull: true },
+    archiveReason: { type: DataTypes.TEXT, allowNull: true },
+    unarchivedAt: { type: DataTypes.DATE, allowNull: true },
+    unarchivedBy: { type: DataTypes.STRING(255), allowNull: true },
+
     createdBy: { type: DataTypes.UUID, allowNull: false },
   },
   {

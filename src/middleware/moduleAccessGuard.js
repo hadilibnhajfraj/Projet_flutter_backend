@@ -9,6 +9,8 @@ const ALLOWED_PREFIXES_BY_ROLE = {
     "/por-promesh",
     "/industrial-records",
     "/production-records",
+    "/production-compliance",
+    "/production-draft-archive",
     "/hr-requests",
     "/recuperables",
     "/maintenance-requests",
@@ -33,6 +35,8 @@ const ALLOWED_PREFIXES_BY_ROLE = {
     "/por-promesh",
     "/industrial-records",
     "/production-records",
+    "/production-compliance",
+    "/production-draft-archive",
     "/recuperables",
     "/auth",
     "/users/me",
@@ -60,6 +64,7 @@ function moduleAccessGuard(req, res, next) {
   if (!isAllowed) {
     return res.status(403).json({
       success: false,
+      code: "PERMISSION_DENIED",
       message: "Accès refusé : ce rôle n'a pas accès à ce module",
     });
   }

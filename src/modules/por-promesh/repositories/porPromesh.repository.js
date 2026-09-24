@@ -42,13 +42,14 @@ const SORTS = {
 // inchangé : tout appelant existant (écran détail, PDF, Excel, CRM
 // liste/historique/dashboard) continue de recevoir les fiches pleinement
 // hydratées comme avant.
-function findAll(where = {}, { order, limit, offset, light = false } = {}) {
+function findAll(where = {}, { order, limit, offset, light = false, transaction } = {}) {
   return PorPromesh.findAll({
     where,
     include: light ? [] : INCLUDE_CHILDREN,
     order: SORTS[order] || SORTS.date_desc,
     limit,
     offset,
+    transaction,
   });
 }
 

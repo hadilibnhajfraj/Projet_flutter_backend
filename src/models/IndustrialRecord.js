@@ -43,6 +43,14 @@ const IndustrialRecord = sequelize.define(
 
     statut: { type: DataTypes.STRING(50), allowNull: false, defaultValue: "enregistree" },
 
+    // Archivage automatique des brouillons > 2h (voir
+    // modules/production-draft-archive) — mêmes colonnes que PorPromesh.
+    archivedAt: { type: DataTypes.DATE, allowNull: true },
+    archivedBy: { type: DataTypes.STRING(255), allowNull: true },
+    archiveReason: { type: DataTypes.TEXT, allowNull: true },
+    unarchivedAt: { type: DataTypes.DATE, allowNull: true },
+    unarchivedBy: { type: DataTypes.STRING(255), allowNull: true },
+
     createdBy: { type: DataTypes.UUID, allowNull: false },
   },
   {

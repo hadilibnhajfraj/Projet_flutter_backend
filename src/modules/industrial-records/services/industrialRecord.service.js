@@ -74,7 +74,18 @@ function assertProbarCanValidate(record, body) {
 
 function assertOwnership(record, actor) {
   if (isOwnerScoped(actor.role) && record.createdBy !== actor.id) {
-    throw { status: 403, message: "Vous ne pouvez accéder qu'à vos propres fiches" };
+    throw { status: 403, code: "NOT_OWNER", message: "Vous ne pouvez accéder qu'à vos propres fiches" };
+  }
+}
+
+// Message renvoyé pour toute tentative de modification/suppression d'une
+// fiche PROBAR archivée automatiquement (brouillon incomplet resté plus de
+// 2h — voir modules/production-draft-archive). Seule une demande de
+// désarchivage approuvée par un responsable la remet en circulation.
+const ARCHIVED_MESSAGE = "Cette fiche est archivée. Une demande de désarchivage est nécessaire pour la modifier.";
+function assertNotArchived(record) {
+  if (record.statut === "archivee") {
+    throw { status: 403, code: "SHEET_ARCHIVED", message: ARCHIVED_MESSAGE, ficheId: record.id, ficheType: "PROBAR" };
   }
 }
 
@@ -247,6 +258,16 @@ async function listRecords(filters, actor) {
   if (filters.module) where.module = filters.module;
   if (filters.machine) where.machine = filters.machine;
   if (filters.poste) where.poste = filters.poste;
+  if (filters.statut === "archivee") {
+    where.statut = "archivee";
+  } else if (filters.statut) {
+    where.statut = filters.statut;
+  } else {
+    // Sauf demande EXPLICITE (statut=archivee), jamais les fiches archivées
+    // dans la liste normale — visibles uniquement via ce filtre ou l'écran
+    // Archiving/History (§7 du ticket).
+    where.statut = { [Op.ne]: "archivee" };
+  }
 
   // Pagination bornée — évite de rapatrier un historique illimité en une
   // seule requête. pageSize par défaut généreux (500) pour ne rien changer
@@ -280,6 +301,7 @@ async function updateRecord(id, body, actor) {
   const record = await repo.findBareById(id);
   if (!record) throw { status: 404, message: "Fiche introuvable" };
   assertOwnership(record, actor);
+  assertNotArchived(record);
 
   if (body.statut === "validee" && record.module === "probar") {
     assertProbarCanValidate(record, body);
@@ -305,6 +327,7 @@ async function deleteRecord(id, actor) {
   const record = await repo.findBareById(id);
   if (!record) throw { status: 404, message: "Fiche introuvable" };
   assertOwnership(record, actor);
+  assertNotArchived(record);
 
   await repo.destroy(record);
   return { id };
@@ -334,7 +357,10 @@ function autoValidationCutoffAt() {
 
 function isEligibleForAutoValidation(record, now = new Date()) {
   if (!isAutoValidationEnabled()) return false;
-  if (record.module !== "probar" || record.statut === "validee") return false;
+  // "archivee" (voir production-draft-archive : brouillon incomplet archivé
+  // après 2h) n'est jamais éligible — seul un désarchivage manuel (Super
+  // Admin) la remet en circulation, jamais cette règle automatique.
+  if (record.module !== "probar" || record.statut === "validee" || record.statut === "archivee") return false;
   if (!record.createdAt) return false;
   const createdAt = new Date(record.createdAt);
   if (createdAt < autoValidationCutoffAt()) return false; // ancienne fiche — jamais touchée
@@ -362,7 +388,7 @@ async function sweepAutoValidation() {
 
   const candidates = await repo.findAll({
     module: "probar",
-    statut: { [Op.ne]: "validee" },
+    statut: { [Op.notIn]: ["validee", "archivee"] },
     createdAt: { [Op.gte]: autoValidationCutoffAt(), [Op.lte]: new Date(Date.now() - AUTO_VALIDATION_DELAY_MS) },
   });
 
