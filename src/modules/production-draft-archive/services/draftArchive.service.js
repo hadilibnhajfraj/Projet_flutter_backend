@@ -1,7 +1,9 @@
 "use strict";
 
 // ═══════════════════════════════════════════════════════════════════════
-// Archivage automatique des brouillons PROMESH/PROBAR après 2h.
+// Archivage automatique des brouillons PROMESH/PROBAR après 8h
+// (§MODIFICATION 2026-09-29 : délai porté de 2h à 8h — seul le délai change,
+// règle/requête/cron/journal identiques ; voir DRAFT_ARCHIVE_DELAY_HOURS).
 //
 // CORRECTION (ticket précédent) : la version d'origine exemptait une fiche
 // déjà "complète" (mêmes champs que la validation manuelle/24h :
@@ -13,7 +15,7 @@
 // BROUILLON). La règle des 2h s'applique donc À TOUTE fiche encore en
 // brouillon après 2h, sans exception de "complétude" — exactement la requête
 // demandée :
-//   WHERE status = DRAFT AND createdAt <= NOW() - INTERVAL '2 hours'
+//   WHERE status = DRAFT AND createdAt <= NOW() - INTERVAL '8 hours'
 //     AND archivedAt IS NULL
 //
 // CE TICKET (re-vérification scheduler) : en plus du statut, chaque fiche
@@ -60,8 +62,12 @@ const User = require("../../../models/User");
 const Notification = require("../../../models/Notification");
 const logger = require("../../../utils/logger");
 
-const DRAFT_ARCHIVE_DELAY_MS = 2 * 60 * 60 * 1000; // 2h, exigence exacte du ticket
-const REASON = "Automatically archived after 2 hours in draft.";
+// Délai calculé depuis createdAt (jamais updatedAt : modifier une fiche ne
+// repousse pas l'échéance). Seuil inclus : createdAt <= now - 8h → archivée
+// (7h59 → active, 8h00 → archivable). Ancienne valeur : 2h.
+const DRAFT_ARCHIVE_DELAY_HOURS = 8;
+const DRAFT_ARCHIVE_DELAY_MS = DRAFT_ARCHIVE_DELAY_HOURS * 60 * 60 * 1000;
+const REASON = `Automatically archived after ${DRAFT_ARCHIVE_DELAY_HOURS} hours in draft.`;
 const ARCHIVED_BY_SYSTEM = "SYSTEM";
 
 function isDraftArchiveEnabled() {
@@ -101,8 +107,8 @@ function draftWherePromesh(cutoff) {
 
 // Une fiche désarchivée (demande APPROUVÉE) retrouve un délai de brouillon
 // complet (DRAFT_ARCHIVE_DELAY_MS) à compter de son désarchivage — sans ça,
-// son createdAt d'origine (> 2h) la faisait ré-archiver au tick suivant du
-// cron (≤ 5 min), rendant l'approbation inutilisable. Même règle des 2h,
+// son createdAt d'origine (> délai) la faisait ré-archiver au tick suivant du
+// cron (≤ 5 min), rendant l'approbation inutilisable. Même règle du délai,
 // simplement comptée depuis max(createdAt, unarchivedAt).
 function notRecentlyUnarchived(now) {
   return { [Op.or]: [{ unarchivedAt: null }, { unarchivedAt: { [Op.lte]: new Date(now.getTime() - DRAFT_ARCHIVE_DELAY_MS) } }] };
@@ -158,7 +164,7 @@ async function countDraftsAndExpired(now, transaction) {
   return { drafts: dp + db_, expired: ep + eb };
 }
 
-/** PROMESH — archive TOUTE fiche BROUILLON créée il y a plus de 2h (aucune exception de complétude). */
+/** PROMESH — archive TOUTE fiche BROUILLON créée il y a 8h ou plus (aucune exception de complétude). */
 async function sweepDraftArchivePromesh(now = new Date(), transaction) {
   if (!isDraftArchiveEnabled()) return { checked: 0, archived: 0 };
 
@@ -196,7 +202,7 @@ async function sweepDraftArchivePromesh(now = new Date(), transaction) {
       await notifyOwner(
         owner.id,
         owner.email,
-        `Votre fiche de production PROMESH du ${report.dateProduction || "-"} a été archivée automatiquement car elle est restée en brouillon pendant plus de 2 heures. Vous pouvez demander son désarchivage.`,
+        `Votre fiche de production PROMESH du ${report.dateProduction || "-"} a été archivée automatiquement car elle est restée en brouillon pendant plus de ${DRAFT_ARCHIVE_DELAY_HOURS} heures. Vous pouvez demander son désarchivage.`,
         transaction
       );
     }
@@ -239,7 +245,7 @@ async function sweepDraftArchiveProbar(now = new Date(), transaction) {
       await notifyOwner(
         owner.id,
         owner.email,
-        `Votre fiche de production PROBAR du ${record.dateFiche || "-"} a été archivée automatiquement car elle est restée en brouillon pendant plus de 2 heures. Vous pouvez demander son désarchivage.`,
+        `Votre fiche de production PROBAR du ${record.dateFiche || "-"} a été archivée automatiquement car elle est restée en brouillon pendant plus de ${DRAFT_ARCHIVE_DELAY_HOURS} heures. Vous pouvez demander son désarchivage.`,
         transaction
       );
     }
@@ -326,6 +332,7 @@ async function listArchivedSheets({ ficheType } = {}) {
 }
 
 module.exports = {
+  DRAFT_ARCHIVE_DELAY_HOURS,
   DRAFT_ARCHIVE_DELAY_MS,
   REASON,
   ARCHIVED_BY_SYSTEM,

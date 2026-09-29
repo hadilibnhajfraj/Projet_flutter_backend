@@ -5,7 +5,7 @@ const industrialRecordService = require("../modules/industrial-records/services/
 const draftArchiveService = require("../modules/production-draft-archive/services/draftArchive.service");
 
 console.log("🔒 FICHE AUTO-VALIDATION CRON LOADED");
-console.log("🗄️  PRODUCTION DRAFT AUTO-ARCHIVE (2h) — same cron tick, no second scheduler");
+console.log("🗄️  PRODUCTION DRAFT AUTO-ARCHIVE (8h) — same cron tick, no second scheduler");
 logger.info("[PRODUCTION-DRAFT-ARCHIVE] JOB STARTED");
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -67,7 +67,7 @@ async function runDraftArchiveSweep() {
     const total = promesh.archived + probar.archived;
     if (total > 0) {
       logger.info(
-        `[PRODUCTION-DRAFT-ARCHIVE] Archivage automatique (2h) — PROMESH ${promesh.archived}/${promesh.checked} vérifiées, ` +
+        `[PRODUCTION-DRAFT-ARCHIVE] Archivage automatique (8h) — PROMESH ${promesh.archived}/${promesh.checked} vérifiées, ` +
           `PROBAR ${probar.archived}/${probar.checked} vérifiées`
       );
     } else {
@@ -99,10 +99,10 @@ async function runFicheLifecycleSweep(isFirstRun = false) {
 if (AUTO_VALIDATION_ENABLED) {
   console.log("[ficheAutoValidation.job] Déverrouillage automatique 24h : actif.");
 } else {
-  console.log("[ficheAutoValidation.job] AUTO_VALIDATION_ENABLED=false — règle des 24h désactivée (le cron reste programmé pour l'archivage à 2h).");
+  console.log("[ficheAutoValidation.job] AUTO_VALIDATION_ENABLED=false — règle des 24h désactivée (le cron reste programmé pour l'archivage à 8h).");
 }
 if (!draftArchiveService.isDraftArchiveEnabled()) {
-  console.log("[production-draft-archive] PRODUCTION_DRAFT_ARCHIVE_ENABLED=false — archivage à 2h désactivé (le cron reste programmé pour la règle des 24h).");
+  console.log("[production-draft-archive] PRODUCTION_DRAFT_ARCHIVE_ENABLED=false — archivage à 8h désactivé (le cron reste programmé pour la règle des 24h).");
 }
 
 // Toutes les 5 minutes — cadence explicitement demandée pour les deux règles.

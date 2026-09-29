@@ -300,20 +300,22 @@ describe("Autorisation Production — responsable logistique OU superadmin (une 
     expect(edit.status).toBe(403);
   });
 
-  test("§6 — l'archivage automatique ne ré-archive PAS une fiche désarchivée depuis moins de 2h (régression)", async () => {
-    // Fiche désarchivée à l'instant (createdAt vieux de 5h) + fiche témoin
-    // brouillon de 3h jamais archivée : seule la témoin doit être archivée.
-    const unarchived = await insertFiche({ userId: users.p1.id, status: "BROUILLON", createdAgoHours: 5, date: D_P1_APPROVED });
+  test("§6 — l'archivage automatique ne ré-archive PAS une fiche désarchivée depuis moins que le délai (8h) (régression)", async () => {
+    // Fiche désarchivée à l'instant (createdAt au-delà du délai) + fiche
+    // témoin brouillon au-delà du délai jamais archivée : seule la témoin
+    // doit être archivée. Âges dérivés du délai réel (DRAFT_ARCHIVE_DELAY_HOURS).
+    const delayH = draftArchive.DRAFT_ARCHIVE_DELAY_HOURS;
+    const unarchived = await insertFiche({ userId: users.p1.id, status: "BROUILLON", createdAgoHours: delayH + 2, date: D_P1_APPROVED });
     await sequelize.query(`UPDATE por_promesh SET "unarchivedAt" = NOW(), "unarchivedBy" = :e WHERE id = :id`, { replacements: { id: unarchived, e: SUPERADMIN } });
-    const control = await insertFiche({ userId: users.p1.id, status: "BROUILLON", createdAgoHours: 3, date: D_P1_APPROVED });
+    const control = await insertFiche({ userId: users.p1.id, status: "BROUILLON", createdAgoHours: delayH + 1, date: D_P1_APPROVED });
 
     const t = await sequelize.transaction();
     try {
       await draftArchive.sweepDraftArchivePromesh(new Date(), t);
       expect(await ficheStatus(control, t)).toBe("ARCHIVED");
       expect(await ficheStatus(unarchived, t)).toBe("BROUILLON");
-      // 2h après le désarchivage, la règle normale s'applique à nouveau.
-      await draftArchive.sweepDraftArchivePromesh(new Date(Date.now() + 2 * 3600 * 1000 + 60 * 1000), t);
+      // Une fois le délai écoulé depuis le désarchivage, la règle normale s'applique à nouveau.
+      await draftArchive.sweepDraftArchivePromesh(new Date(Date.now() + draftArchive.DRAFT_ARCHIVE_DELAY_MS + 60 * 1000), t);
       expect(await ficheStatus(unarchived, t)).toBe("ARCHIVED");
     } finally {
       await t.rollback(); // aucun effet réel sur les autres brouillons de la base
