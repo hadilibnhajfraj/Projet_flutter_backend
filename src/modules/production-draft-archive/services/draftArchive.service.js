@@ -99,8 +99,23 @@ function draftWherePromesh(cutoff) {
   return where;
 }
 
+// Une fiche désarchivée (demande APPROUVÉE) retrouve un délai de brouillon
+// complet (DRAFT_ARCHIVE_DELAY_MS) à compter de son désarchivage — sans ça,
+// son createdAt d'origine (> 2h) la faisait ré-archiver au tick suivant du
+// cron (≤ 5 min), rendant l'approbation inutilisable. Même règle des 2h,
+// simplement comptée depuis max(createdAt, unarchivedAt).
+function notRecentlyUnarchived(now) {
+  return { [Op.or]: [{ unarchivedAt: null }, { unarchivedAt: { [Op.lte]: new Date(now.getTime() - DRAFT_ARCHIVE_DELAY_MS) } }] };
+}
+
+function draftClockStart(fiche) {
+  const created = new Date(fiche.createdAt).getTime();
+  const unarchived = fiche.unarchivedAt ? new Date(fiche.unarchivedAt).getTime() : 0;
+  return new Date(Math.max(created, unarchived));
+}
+
 function expiredWherePromesh(now, cutoff) {
-  const where = { status: "BROUILLON", createdAt: { [Op.lte]: new Date(now.getTime() - DRAFT_ARCHIVE_DELAY_MS) } };
+  const where = { status: "BROUILLON", createdAt: { [Op.lte]: new Date(now.getTime() - DRAFT_ARCHIVE_DELAY_MS) }, ...notRecentlyUnarchived(now) };
   if (cutoff) where.createdAt[Op.gte] = cutoff;
   return where;
 }
@@ -112,7 +127,7 @@ function draftWhereProbar(cutoff) {
 }
 
 function expiredWhereProbar(now, cutoff) {
-  const where = { module: "probar", statut: "enregistree", createdAt: { [Op.lte]: new Date(now.getTime() - DRAFT_ARCHIVE_DELAY_MS) } };
+  const where = { module: "probar", statut: "enregistree", createdAt: { [Op.lte]: new Date(now.getTime() - DRAFT_ARCHIVE_DELAY_MS) }, ...notRecentlyUnarchived(now) };
   if (cutoff) where.createdAt[Op.gte] = cutoff;
   return where;
 }
@@ -153,7 +168,7 @@ async function sweepDraftArchivePromesh(now = new Date(), transaction) {
   const owners = new Map();
   for (const report of candidates) {
     const ficheCreatedAt = new Date(report.createdAt);
-    const expiresAt = new Date(ficheCreatedAt.getTime() + DRAFT_ARCHIVE_DELAY_MS);
+    const expiresAt = new Date(draftClockStart(report).getTime() + DRAFT_ARCHIVE_DELAY_MS);
     logger.info(`[PRODUCTION-DRAFT-ARCHIVE]\nARCHIVING\nmodule=PROMESH\nid=${report.id}\ncreatedAt=${ficheCreatedAt.toISOString()}\nexpiresAt=${expiresAt.toISOString()}\nstatus=draft`);
 
     // UPDATE conditionnel (§13) : n'archive que si la fiche est TOUJOURS
@@ -201,7 +216,7 @@ async function sweepDraftArchiveProbar(now = new Date(), transaction) {
   const owners = new Map();
   for (const record of candidates) {
     const ficheCreatedAt = new Date(record.createdAt);
-    const expiresAt = new Date(ficheCreatedAt.getTime() + DRAFT_ARCHIVE_DELAY_MS);
+    const expiresAt = new Date(draftClockStart(record).getTime() + DRAFT_ARCHIVE_DELAY_MS);
     logger.info(`[PRODUCTION-DRAFT-ARCHIVE]\nARCHIVING\nmodule=PROBAR\nid=${record.id}\ncreatedAt=${ficheCreatedAt.toISOString()}\nexpiresAt=${expiresAt.toISOString()}\nstatus=draft`);
 
     // Même UPDATE conditionnel + mêmes 3 champs directs que PROMESH (§13, §7).

@@ -86,6 +86,48 @@ async function enqueueEmail({ to, subject, text, html, context = null, meta = nu
 }
 
 /**
+ * Variante IDEMPOTENTE d'enqueueEmail : `dedupeKey` (UNIQUE en base) garantit
+ * qu'un même événement ne crée qu'UNE ligne — donc un seul envoi — même si
+ * l'appelant est rejoué (refresh, polling, reconnexion, cron exécuté deux
+ * fois). Un doublon ne déclenche AUCUN envoi et renvoie la ligne existante.
+ * Les retries restent ceux d'enqueueEmail (erreurs SMTP temporaires
+ * uniquement) ; une ligne n'est SENT qu'après un succès SMTP réel.
+ * Ne rejette jamais.
+ * @returns {Promise<{jobId: string|null, status: string, duplicate: boolean}>}
+ */
+async function enqueueEmailOnce({ dedupeKey, to, subject, text, html, context = null, meta = null, userId = null }) {
+  if (!dedupeKey) throw new Error("enqueueEmailOnce: dedupeKey is required");
+  const { UniqueConstraintError } = require("sequelize");
+  let job;
+  try {
+    job = await EmailQueue.create({
+      dedupeKey,
+      to,
+      subject,
+      text: text || null,
+      html: html || null,
+      context,
+      meta,
+      userId,
+      status: "PENDING",
+      attempts: 0,
+      maxAttempts: MAX_ATTEMPTS,
+    });
+  } catch (err) {
+    if (err instanceof UniqueConstraintError) {
+      const existing = await EmailQueue.findOne({ where: { dedupeKey }, attributes: ["id", "status"] }).catch(() => null);
+      logger.info("EMAIL_QUEUE: doublon ignoré (dedupeKey déjà présente)", { dedupeKey, jobId: existing?.id, status: existing?.status });
+      return { jobId: existing?.id || null, status: existing?.status || "DUPLICATE", duplicate: true };
+    }
+    logger.error("EMAIL_QUEUE: impossible de créer la ligne (DB)", { to, dedupeKey, error: err.message });
+    return { jobId: null, status: "FAILED", duplicate: false };
+  }
+
+  await processJob(job);
+  return { jobId: job.id, status: job.status, duplicate: false };
+}
+
+/**
  * Exécute UNE tentative d'envoi pour `job` (attempt = job.attempts + 1) et
  * dispatch vers markSent / retryJob / markFailed selon le résultat.
  */
@@ -313,6 +355,7 @@ async function resumePendingEmailQueue() {
 
 module.exports = {
   enqueueEmail,
+  enqueueEmailOnce,
   resumePendingEmailQueue,
   findActiveJob,
   cancelJob,

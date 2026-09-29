@@ -57,6 +57,9 @@ const FinancePayment = require("./FinancePayment");
 const FinanceActivity = require("./FinanceActivity");
 const FinancePurchaseOrder = require("./FinancePurchaseOrder");
 const FinancePurchaseOrderItem = require("./FinancePurchaseOrderItem");
+const QualityControl = require("./QualityControl");
+const QualityControlItem = require("./QualityControlItem");
+const QualityControlHistory = require("./QualityControlHistory");
 
 // ── PIPELINE STAGE <-> PROJECT ────────────────────────────
 
@@ -516,6 +519,18 @@ FinanceActivity.belongsTo(User, { foreignKey: "userId", as: "user" });
 
 console.log("FINANCE PROBAR ASSOCIATIONS LOADED");
 
+// ── CONTRÔLE QUALITÉ (checklist de production) ────────────
+// Pas d'onDelete CASCADE : un contrôle n'est jamais supprimé physiquement
+// (paranoid), ses paramètres et son historique non plus.
+QualityControl.hasMany(QualityControlItem, { foreignKey: "qualityControlId", as: "items" });
+QualityControlItem.belongsTo(QualityControl, { foreignKey: "qualityControlId", as: "qualityControl" });
+
+QualityControl.hasMany(QualityControlHistory, { foreignKey: "qualityControlId", as: "history" });
+QualityControlHistory.belongsTo(QualityControl, { foreignKey: "qualityControlId", as: "qualityControl" });
+
+QualityControl.belongsTo(User, { foreignKey: "controllerUserId", as: "controller" });
+User.hasMany(QualityControl, { foreignKey: "controllerUserId", as: "qualityControls" });
+
 // ── EXPORTS ───────────────────────────────────────────────
 
 module.exports = {
@@ -571,4 +586,7 @@ module.exports = {
   FinanceActivity,
   FinancePurchaseOrder,
   FinancePurchaseOrderItem,
+  QualityControl,
+  QualityControlItem,
+  QualityControlHistory,
 };

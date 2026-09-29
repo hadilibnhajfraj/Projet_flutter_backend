@@ -22,6 +22,8 @@ const logger = require("../../../utils/logger");
 // du module production-compliance — mêmes responsables que le contrôle
 // PROD1/PROD2, jamais un 2e système de permissions/notifications.
 const compliance = require("../../production-compliance/services/compliance.service");
+const { PERMISSIONS } = require("../../../config/productionWorkflow");
+const workflowNotify = require("../../production-requests/services/notify.service");
 
 class AppError extends Error {
   constructor(status, code, message) {
@@ -31,9 +33,9 @@ class AppError extends Error {
   }
 }
 
-async function assertManager(managerId, transaction) {
+async function assertManager(managerId, transaction, permission) {
   const manager = await User.findByPk(managerId, { attributes: ["id", "email", "role", "isActive"], transaction });
-  if (!manager || manager.isActive === false || !compliance.isComplianceManagerUser(manager)) {
+  if (!manager || manager.isActive === false || !compliance.hasProductionPermission(manager, permission)) {
     throw new AppError(403, "NOT_A_MANAGER", "Only a production compliance manager can do this.");
   }
   return manager;
@@ -146,6 +148,9 @@ async function createUnarchiveRequest({ userId, email, ficheType, ficheId, reaso
     title: `Demande de désarchivage — ${row.ficheType}`,
     message: `${row.userEmail} demande le désarchivage de sa fiche ${row.ficheType} du ${row.dateProduction || "-"} (machine ${row.machine || "-"}, poste ${row.poste || "-"}). Motif : ${row.reason}`,
   });
+  // Email du workflow Production (productioncbiftunisia@gmail.com) —
+  // idempotent (une demande = un email), jamais au client.
+  await workflowNotify.notifyUnarchiveRequestCreated(row);
   logger.info(`[production-draft-archive] UNARCHIVE REQUEST CREATED request=${row.id} user=${row.userEmail} fiche=${row.ficheType}#${row.ficheId} notified=${notified}`);
   return { request: viewRequest(row), alreadyPending: false };
 }
@@ -185,7 +190,7 @@ async function loadPendingForUpdate(id, transaction) {
 async function approveUnarchiveRequest({ managerId, id, note }) {
   const now = new Date();
   const { row, manager } = await sequelize.transaction(async (t) => {
-    const manager = await assertManager(managerId, t);
+    const manager = await assertManager(managerId, t, PERMISSIONS.ARCHIVE_APPROVE);
     const row = await loadPendingForUpdate(id, t);
 
     const fiche = await loadFiche(row.ficheType, row.ficheId, t);
@@ -226,7 +231,7 @@ async function rejectUnarchiveRequest({ managerId, id, note }) {
   }
   const now = new Date();
   const { row, manager } = await sequelize.transaction(async (t) => {
-    const manager = await assertManager(managerId, t);
+    const manager = await assertManager(managerId, t, PERMISSIONS.ARCHIVE_REJECT);
     const row = await loadPendingForUpdate(id, t);
     await row.update(
       { status: "REJECTED", reviewedAt: now, reviewedBy: manager.id, reviewerEmail: manager.email, reviewNote: String(note).trim().slice(0, 1000) },

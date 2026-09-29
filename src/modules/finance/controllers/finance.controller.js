@@ -7,7 +7,15 @@ const logger = require("../../../utils/logger");
 function handle(res, err) {
   const status = err.status || 500;
   if (status >= 500) logger.error("Finance error:", err);
-  res.status(status).json({ success: false, message: err.message || "Internal server error" });
+  // code/step/error : cause réelle d'un échec d'upload (voir
+  // finance.service#uploadFailure) — absents pour les autres erreurs.
+  res.status(status).json({
+    success: false,
+    message: err.message || "Internal server error",
+    ...(err.code ? { code: err.code } : {}),
+    ...(err.step ? { step: err.step } : {}),
+    ...(err.error ? { error: err.error } : {}),
+  });
 }
 
 function actorFrom(req) {

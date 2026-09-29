@@ -24,6 +24,8 @@ const svc = require("./compliance.service");
 const mail = require("./mail");
 const logger = require("../../../utils/logger");
 const Authorization = require("../../../models/ProductionComplianceAuthorization");
+const { PERMISSIONS } = require("../../../config/productionWorkflow");
+const workflowNotify = require("../../production-requests/services/notify.service");
 
 const { cfg, ComplianceError } = svc;
 
@@ -230,6 +232,9 @@ async function createRequest({ userId, email, reason, requestedDate, now = svc.g
     },
     transaction
   );
+  // Email du workflow Production (productioncbiftunisia@gmail.com) — en plus
+  // de l'email existant ci-dessus, idempotent (une demande = un email).
+  await workflowNotify.notifyAuthorizationRequestCreated(row);
   logger.info(
     `[PRODUCTION-AUTHORIZATION] REQUEST CREATED request=${row.id} user=${prod.email} dates=${row.missingDates.join(",")} requestedDate=${row.requestedDate} production=${prod.key} status=PENDING email=${emailStatus} crmNotified=${notified}`
   );
@@ -305,7 +310,7 @@ async function notifyUserApproved(row, dates, manager, expiresAt, transaction) {
 /** Crée UNE autorisation BACKFILL_PREVIOUS_PRODUCTION par date manquante de la demande. */
 async function approveRequest({ managerId, id, note, now = svc.getNow(), externalTransaction }) {
   const run = async (transaction) => {
-    const manager = await svc.assertManager(managerId, transaction);
+    const manager = await svc.assertManager(managerId, transaction, PERMISSIONS.AUTHORIZATION_APPROVE);
     const row = await loadPendingForUpdate(id, now, transaction);
     const dates = Array.isArray(row.missingDates) && row.missingDates.length ? row.missingDates : [row.missingDate];
     const reasonBase = [`Demande ${row.id.slice(0, 8)}`, row.reason, note && `Note responsable : ${note}`].filter(Boolean).join(" — ");
@@ -333,6 +338,7 @@ async function approveRequest({ managerId, id, note, now = svc.getNow(), externa
         now,
         transaction,
         notify: false, // une seule notification groupée à la fin, voir notifyUserApproved
+        permission: PERMISSIONS.AUTHORIZATION_APPROVE,
       });
       authIds.push(auth.id);
       expiresAt = auth.expiresAt;
@@ -370,7 +376,7 @@ async function rejectRequest({ managerId, id, note, now = svc.getNow(), external
     throw new ComplianceError(400, "REASON_REQUIRED", "A reason is required to reject this request.", "Le motif est obligatoire pour refuser cette demande.");
   }
   const run = async (transaction) => {
-    const manager = await svc.assertManager(managerId, transaction);
+    const manager = await svc.assertManager(managerId, transaction, PERMISSIONS.AUTHORIZATION_REJECT);
     const row = await loadPendingForUpdate(id, now, transaction);
     await row.update(
       { status: "REJECTED", reviewedAt: now, reviewedBy: manager.id, reviewerEmail: manager.email, reviewNote: note ? String(note).slice(0, 1000) : null },

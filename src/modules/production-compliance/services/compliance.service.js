@@ -97,6 +97,14 @@ const isSuperAdminRole = (role) => SUPER_ADMIN_ROLES.includes(String(role || "")
 // n'a pas (ou plus) été ajouté à PRODUCTION_COMPLIANCE_MANAGERS.
 const isComplianceManagerUser = (user) => !!user && (isManagerEmail(user.email) || isSuperAdminRole(user.role));
 
+// Permission fine du workflow des demandes Production (voir
+// config/productionWorkflow.js) : les responsables ci-dessus gardent TOUT ;
+// un compte listé dans PRODUCTION_WORKFLOW_MANAGERS (responsable logistique)
+// n'obtient que les permissions production.* qui lui sont accordées.
+const workflowCfg = require("../../../config/productionWorkflow");
+const hasProductionPermission = (user, permission) =>
+  !!user && (isComplianceManagerUser(user) || (!!permission && workflowCfg.hasEmailPermission(user.email, permission)));
+
 async function findUserByEmail(email, transaction) {
   return User.findOne({ where: { email }, attributes: ["id", "email", "role", "isActive"], transaction });
 }
@@ -437,10 +445,10 @@ async function assertCanCreate({ email, userId, productionDate, now = clock(), t
   return { allowed: true, kind: "regular", production: prod, date };
 }
 
-async function consumeAuthorization(authId, { type, id }, now = clock(), transaction) {
+async function consumeAuthorization(authId, { type, id, usedBy = null, usedByEmail = null }, now = clock(), transaction) {
   const run = async (t) => {
     const [count] = await Authorization.update(
-      { usedAt: now, usedFicheType: type, usedFicheId: id },
+      { usedAt: now, usedFicheType: type, usedFicheId: id, usedBy, usedByEmail },
       { where: { id: authId, usedAt: null }, transaction: t }
     );
     if (count > 0) {
@@ -460,7 +468,7 @@ async function consumeAuthorization(authId, { type, id }, now = clock(), transac
   };
   // Autorisation et demande passent à USED ensemble (jamais d'état intermédiaire visible).
   const count = transaction ? await run(transaction) : await sequelize.transaction(run);
-  if (count > 0) logger.info(`[PRODUCTION-AUTHORIZATION] AUTHORIZATION USED authorization=${authId} ficheType=${type} ficheId=${id}`);
+  if (count > 0) logger.info(`[PRODUCTION-AUTHORIZATION] AUTHORIZATION USED authorization=${authId} ficheType=${type} ficheId=${id} usedBy=${usedByEmail || "-"}`);
   return count;
 }
 
@@ -484,9 +492,12 @@ async function notifyManagers({ type, title, message }, transaction) {
 
 // ── Autorisations (responsables) ─────────────────────────────────────────
 
-async function assertManager(managerId, transaction) {
+// `permission` (optionnel) : utilisé UNIQUEMENT par approve/reject des
+// demandes (requests.service.js) — tous les autres appelants (autorisation
+// directe, révocation) restent réservés aux responsables historiques.
+async function assertManager(managerId, transaction, permission) {
   const manager = await User.findByPk(managerId, { attributes: ["id", "email", "role", "isActive"], transaction });
-  if (!manager || manager.isActive === false || !isComplianceManagerUser(manager)) {
+  if (!manager || manager.isActive === false || !hasProductionPermission(manager, permission)) {
     throw new ComplianceError(403, "NOT_A_MANAGER", "Only a production compliance manager can do this.", "Action réservée aux responsables.");
   }
   return manager;
@@ -518,8 +529,8 @@ async function notifyAuthorized(auth, user, now, transaction) {
   }
 }
 
-async function createAuthorization({ managerId, productionKey, date, type, reason, now = clock(), transaction, notify = true }) {
-  const manager = await assertManager(managerId, transaction);
+async function createAuthorization({ managerId, productionKey, date, type, reason, now = clock(), transaction, notify = true, permission }) {
+  const manager = await assertManager(managerId, transaction, permission);
   if (![BACKFILL, BYPASS].includes(type)) {
     throw new ComplianceError(400, "INVALID_TYPE", `type must be ${BACKFILL} or ${BYPASS}`, "Type d'autorisation invalide.");
   }
@@ -737,7 +748,10 @@ async function getMyStatus({ email, userId }, { now = clock(), transaction } = {
     missingDate: blocking?.date || null,
     missingDates: blockingRows.map((r) => r.date),
     lastKnownDate,
-    backfillDates: auths.filter((a) => !a.expiresAt || new Date(a.expiresAt) > now).map((a) => ({ date: a.productionDate, expiresAt: a.expiresAt })),
+    // authorizedByEmail/authorizedAt : "Authorization granted by … at …" côté bandeau PROD.
+    backfillDates: auths
+      .filter((a) => !a.expiresAt || new Date(a.expiresAt) > now)
+      .map((a) => ({ date: a.productionDate, expiresAt: a.expiresAt, authorizedByEmail: a.authorizedByEmail, authorizedAt: a.authorizedAt })),
     message: blocking
       ? blockingRows.length > 1
         ? "Des fiches de production précédentes sont manquantes."
@@ -767,6 +781,7 @@ module.exports = {
   isManagerEmail,
   isSuperAdminRole,
   isComplianceManagerUser,
+  hasProductionPermission,
   findUserByEmail,
   sheetsInRange,
   computeDays,

@@ -16,7 +16,8 @@
     "db:migrate:undo": "npx sequelize-cli db:migrate:undo",
     "db:seed:pipeline": "npx sequelize-cli db:seed --seed src/seeders/pipeline-stages.seeder.js",
     "db:seed:superadmin-cbi": "npx sequelize-cli db:seed --seed src/seeders/superadmin-cbi.seeder.js",
-    "db:seed:finance-probar": "npx sequelize-cli db:seed --seed src/seeders/finance-probar.seeder.js"
+    "db:seed:finance-probar": "npx sequelize-cli db:seed --seed src/seeders/finance-probar.seeder.js",
+    "db:seed:controle-qualite": "npx sequelize-cli db:seed --seed src/seeders/controle-qualite.seeder.js"
   },
   "keywords": [],
   "author": "",

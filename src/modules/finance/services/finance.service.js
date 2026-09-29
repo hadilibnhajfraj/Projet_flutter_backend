@@ -244,10 +244,76 @@ function computePurchaseOrderConfidence(extraction) {
 // generateInvoiceNumber ci-dessous) : un seul compteur global, toujours
 // croissant. Généré UNE SEULE FOIS par Purchase Order (jamais par ligne
 // produit) — voir l'unique appel dans processRawMaterialUpload.
+// §CORRECTION — HTTP 500 "Échec du traitement du Bon de Commande" en
+// production (2026-09-29) : l'ancien calcul COUNT(PO-%) + 1 redescendait
+// sous le plus grand numéro existant dès qu'un bon était supprimé (DELETE
+// /finance/raw-materials/:id est physique) → numéro déjà pris → violation de
+// finance_purchase_orders_poNumber_key (23505) à CHAQUE upload suivant.
+// Désormais : plus grand suffixe numérique existant + 1, sous un verrou
+// consultatif Postgres limité à la transaction (deux uploads simultanés ne
+// peuvent plus lire le même maximum). Format "PO-00001" inchangé.
 async function generatePoNumber(transaction) {
   const prefix = "PO-";
-  const count = await repo.countPurchaseOrders({ poNumber: { [Op.like]: `${prefix}%` } }, { transaction });
-  return `${prefix}${String(count + 1).padStart(5, "0")}`;
+  await sequelize.query("SELECT pg_advisory_xact_lock(hashtext('finance_purchase_orders.poNumber'))", { transaction });
+  const [row] = await sequelize.query(
+    `SELECT COALESCE(MAX(CAST(SUBSTRING("poNumber" FROM 4) AS INTEGER)), 0) AS max
+       FROM finance_purchase_orders
+      WHERE "poNumber" ~ '^PO-[0-9]+$'`,
+    { type: sequelize.QueryTypes.SELECT, transaction }
+  );
+  return `${prefix}${String(Number(row.max) + 1).padStart(5, "0")}`;
+}
+
+// ── Diagnostic de l'upload Bon de Commande ──────────────────────────────
+// Logs structurés "[FINANCE UPLOAD]" étape par étape + erreur RÉELLE
+// (jamais JWT/mot de passe/credentials : seuls nom de fichier, type, taille,
+// chemin serveur et userId sont journalisés). Le code d'erreur (UPLOAD_FAILED,
+// OCR_FAILED, EXTRACTION_FAILED, DATABASE_FAILED, FILESYSTEM_FAILED) et la
+// cause technique sont aussi renvoyés au client — plus jamais un message
+// générique qui masque l'exception réelle.
+const FS_ERROR_CODES = new Set(["ENOENT", "EACCES", "EPERM", "ENOSPC", "EROFS", "EMFILE", "EISDIR"]);
+
+function uploadLog(message) {
+  logger.info(`[FINANCE UPLOAD] ${message}`);
+}
+
+function describeUploadError(err) {
+  const parent = err?.parent || err?.original || {};
+  return {
+    name: err?.name || null,
+    message: err?.message || String(err),
+    pgCode: parent.code || null,
+    constraint: parent.constraint || err?.index || null,
+    detail: parent.detail || null,
+    fields: err?.fields ? Object.keys(err.fields) : [],
+    errno: err?.code && FS_ERROR_CODES.has(err.code) ? err.code : null,
+  };
+}
+
+function uploadFailure(err, { step, file, actor }) {
+  const info = describeUploadError(err);
+  const code = info.errno ? "FILESYSTEM_FAILED" : step.startsWith("DATABASE") ? "DATABASE_FAILED" : step.startsWith("EXTRACTION") ? "EXTRACTION_FAILED" : step.startsWith("OCR") ? "OCR_FAILED" : "UPLOAD_FAILED";
+  logger.error("[FINANCE UPLOAD] FAILED", {
+    step,
+    code,
+    error: info.message,
+    name: info.name,
+    pgCode: info.pgCode,
+    constraint: info.constraint,
+    detail: info.detail,
+    fields: info.fields,
+    stack: err?.stack,
+    filename: file?.originalname,
+    userId: actor?.id,
+  });
+  uploadLog("step=FAILED");
+  return {
+    status: 500,
+    code,
+    step,
+    message: `Échec du traitement du Bon de Commande — ${code} (étape ${step}) : ${info.detail || info.message}`,
+    error: { name: info.name, pgCode: info.pgCode, constraint: info.constraint, detail: info.detail, fields: info.fields },
+  };
 }
 
 // "Upload" (page Inflow of raw materials) — LIT réellement le document
@@ -258,9 +324,19 @@ async function generatePoNumber(transaction) {
 async function processRawMaterialUpload(file, actor) {
   if (!file) throw { status: 400, message: "Fichier requis" };
 
+  uploadLog("START");
+  uploadLog(`filename=${file.originalname}`);
+  uploadLog(`mimetype=${file.mimetype}`);
+  uploadLog(`size=${file.size}`);
+  uploadLog(`path=${file.path}`);
+  uploadLog(`user=${actor?.id}`);
+  uploadLog("step=FILE_RECEIVED");
+
   logger.info(`[PURCHASE ORDER] File uploaded (${file.originalname})`);
   logger.info("[PURCHASE ORDER OCR] Text extraction started");
 
+  let step = "OCR_START";
+  uploadLog("step=OCR_START");
   let doc;
   try {
     doc = await invoiceOcr.extractDocumentText({
@@ -270,19 +346,30 @@ async function processRawMaterialUpload(file, actor) {
     });
   } catch (err) {
     logger.error("[PURCHASE ORDER OCR] Extraction failed:", err.message);
+    logger.error("[FINANCE UPLOAD] OCR error (non bloquant — enregistré en OCR_FAILED)", { error: err.message, stack: err.stack, filename: file.originalname, userId: actor?.id });
     doc = { pages: [], fullText: "", engine: "none" };
   }
 
   logger.info("[PURCHASE ORDER OCR] Text extraction completed");
 
   const ocrFailed = doc.engine === "none" || !doc.fullText || !doc.fullText.trim();
+  uploadLog(`step=${ocrFailed ? "OCR_FAILED" : "OCR_SUCCESS"} engine=${doc.engine} chars=${(doc.fullText || "").length}`);
 
-  const extraction = await purchaseOrderFieldExtraction.extractPurchaseOrderFields({
-    fullText: doc.fullText,
-    filePath: file.path,
-    engine: doc.engine,
-    pages: doc.pages,
-  });
+  step = "EXTRACTION_START";
+  uploadLog("step=EXTRACTION_START");
+  let extraction;
+  try {
+    extraction = await purchaseOrderFieldExtraction.extractPurchaseOrderFields({
+      fullText: doc.fullText,
+      filePath: file.path,
+      engine: doc.engine,
+      pages: doc.pages,
+    });
+  } catch (err) {
+    await fs.promises.unlink(file.path).catch(() => {});
+    throw uploadFailure(err, { step, file, actor });
+  }
+  uploadLog(`step=EXTRACTION_SUCCESS orderNumber=${extraction.orderNumber.value ?? "null"} items=${extraction.items.length}`);
 
   logger.info(`[PURCHASE ORDER OCR] Order number detected: ${extraction.orderNumber.value ?? "null"}`);
   logger.info(`[PURCHASE ORDER OCR] Customer detected: ${extraction.customer.name.value ?? "null"}`);
@@ -297,10 +384,13 @@ async function processRawMaterialUpload(file, actor) {
   const overallConfidence = computePurchaseOrderConfidence(extraction);
   const status = ocrFailed ? "OCR_FAILED" : needsReview || !hasReliableOrderNumber ? "NEEDS_REVIEW" : "EXTRACTED";
 
+  step = "DATABASE_START";
+  uploadLog("step=DATABASE_START");
   try {
     let orderId;
     await sequelize.transaction(async (t) => {
       const poNumber = await generatePoNumber(t);
+      uploadLog(`poNumber=${poNumber}`);
       const order = await repo.createPurchaseOrder(
         {
           poNumber,
@@ -376,10 +466,12 @@ async function processRawMaterialUpload(file, actor) {
 
     logger.info("[PURCHASE ORDER OCR] Data saved");
     logger.info(`[PURCHASE ORDER OCR] Purchase order saved (id=${orderId}, status=${status})`);
-    return getRawMaterial(orderId);
+    uploadLog(`step=DATABASE_SUCCESS id=${orderId} status=${status}`);
+    step = "DATABASE_RELOAD";
+    return await getRawMaterial(orderId);
   } catch (err) {
     await fs.promises.unlink(file.path).catch(() => {});
-    throw err.status ? err : { status: 500, message: "Échec du traitement du Bon de Commande" };
+    throw err.status ? err : uploadFailure(err, { step, file, actor });
   }
 }
 

@@ -21,6 +21,10 @@ const EmailQueue = sequelize.define(
     context: { type: DataTypes.STRING(50), allowNull: true },
     meta: { type: DataTypes.JSON, allowNull: true },
 
+    // Clé d'idempotence (UNIQUE, nullable) — voir enqueueEmailOnce(). NULL
+    // pour tous les emails qui ne l'utilisent pas (comportement inchangé).
+    dedupeKey: { type: DataTypes.STRING(200), allowNull: true, unique: true },
+
     // Colonne dédiée (en plus de meta.userId) — nécessaire pour une requête
     // fiable/indexée "job actif pour cet utilisateur" (voir
     // services/emailQueue.service.js `findActiveJob`, utilisé par le MFA

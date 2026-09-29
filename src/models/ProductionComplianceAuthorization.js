@@ -23,6 +23,9 @@ const ProductionComplianceAuthorization = sequelize.define(
     usedAt: { type: DataTypes.DATE, allowNull: true },
     usedFicheType: { type: DataTypes.STRING(20), allowNull: true },
     usedFicheId: { type: DataTypes.UUID, allowNull: true },
+    // Traçabilité "Used by" — voir migration 20260925150000.
+    usedBy: { type: DataTypes.UUID, allowNull: true },
+    usedByEmail: { type: DataTypes.STRING(255), allowNull: true },
   },
   { tableName: "production_compliance_authorizations", timestamps: true }
 );

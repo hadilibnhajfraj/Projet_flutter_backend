@@ -69,6 +69,11 @@ const Notification = sequelize.define(
       allowNull: true,
     },
 
+    qualityControlId: {
+      type: DataTypes.UUID,
+      allowNull: true,
+    },
+
     // =========================
     // 🔥 STATUS
     // =========================
@@ -90,6 +95,7 @@ const Notification = sequelize.define(
       { fields: ["maintenanceRequestId"] },
       { fields: ["hrRequestId"] },
       { fields: ["actionId"] },
+      { fields: ["qualityControlId"] },
     ],
   }
 );

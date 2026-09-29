@@ -101,7 +101,7 @@ function complianceGuard({ source, mode }) {
           // L'autorisation (et sa demande) passent à USED AVANT que le client reçoive le succès :
           // pas de fenêtre où la même autorisation pourrait encore servir une 2e fois.
           svc
-            .consumeAuthorization(check.authorization.id, { type: ficheType, id })
+            .consumeAuthorization(check.authorization.id, { type: ficheType, id, usedBy: req.user.sub, usedByEmail: req.user.email })
             .catch((e) => logger.error(`[COMPLIANCE] consume failed: ${e.message}`))
             .finally(() => originalJson(payload));
           return res;

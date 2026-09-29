@@ -11,6 +11,10 @@ const ALLOWED_PREFIXES_BY_ROLE = {
     "/production-records",
     "/production-compliance",
     "/production-draft-archive",
+    // Statistiques/historique des demandes Production — la permission
+    // nominative (responsable logistique uniquement) est revérifiée par la
+    // route elle-même : production_1..5 reçoivent 403 malgré ce préfixe.
+    "/production-requests",
     "/hr-requests",
     "/recuperables",
     "/maintenance-requests",
@@ -43,6 +47,11 @@ const ALLOWED_PREFIXES_BY_ROLE = {
     "/uploads",
     "/me",
   ],
+  // Module CONTRÔLE QUALITÉ : ses contrôles (/quality-control) + consultation
+  // en LECTURE SEULE des fiches à contrôler (/production-records, aucun
+  // endpoint d'écriture) — jamais /por-promesh ni /industrial-records
+  // (modification/suppression des fiches), ni users/rôles/admin.
+  controle_qualite: ["/quality-control", "/production-records", "/auth", "/users/me", "/me"],
 };
 
 function moduleAccessGuard(req, res, next) {
