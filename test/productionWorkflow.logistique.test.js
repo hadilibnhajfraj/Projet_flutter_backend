@@ -45,6 +45,39 @@ const today = () => compliance.todayStr(new Date());
 
 const created = { authRequestIds: [], authorizationIds: [], unarchiveIds: [], ficheIds: [], archiveLogIds: [], fakeRequestIds: [] };
 
+// ── Garde-fous "base utilisée en direct" ─────────────────────────────────
+// Ces tests utilisent les VRAIS comptes production_1/production_2. Si la base
+// est utilisée en même temps (application ouverte), ils ne doivent jamais
+// interférer avec une vraie demande ni effacer de vraies notifications.
+async function assertNoLiveProductionRequests(testDates) {
+  const [row] = await sequelize.query(
+    `SELECT
+       (SELECT count(*) FROM production_compliance_authorization_requests WHERE status = 'PENDING' AND "userEmail" IN (:emails))::int AS auth,
+       (SELECT count(*) FROM production_unarchive_requests WHERE status = 'PENDING' AND "userEmail" IN (:emails))::int AS unarch,
+       (SELECT count(*) FROM production_compliance_authorizations a JOIN users u ON u.id = a."userId"
+         WHERE u.email IN (:emails) AND a."productionDate" IN (:dates) AND a."usedAt" IS NULL AND a."revokedAt" IS NULL
+           AND (a."expiresAt" IS NULL OR a."expiresAt" > NOW()))::int AS active`,
+    { replacements: { emails: [PROD1, PROD2], dates: testDates }, type: QueryTypes.SELECT }
+  );
+  if (row.auth || row.unarch || row.active) {
+    throw new Error(
+      `Test annulé : état RÉEL en cours pour production_1/2 (${row.auth} demande(s) d'autorisation PENDING, ` +
+        `${row.unarch} demande(s) de désarchivage PENDING, ${row.active} autorisation(s) active(s) sur les dates du test ${testDates.join(", ")}) — ` +
+        "base utilisée en direct, le test n'y touche pas. Relancer une fois ces demandes traitées/expirées."
+    );
+  }
+}
+
+// true si une demande qui n'appartient PAS au test a été créée pendant son exécution.
+async function liveActivityDuringRun(ownIds) {
+  const rows = await sequelize.query(
+    `SELECT id FROM production_compliance_authorization_requests WHERE "requestedAt" >= :start
+     UNION ALL SELECT id FROM production_unarchive_requests WHERE "requestedAt" >= :start`,
+    { replacements: { start: START }, type: QueryTypes.SELECT }
+  );
+  return rows.some((r) => !ownIds.includes(r.id));
+}
+
 async function signIn(email) {
   const res = await request(app).post("/auth/signin").send({ email, password: PASSWORD });
   return res.body;
@@ -67,6 +100,7 @@ describe("Workflow Production — responsable logistique", () => {
   let ficheId;
 
   beforeAll(async () => {
+    await assertNoLiveProductionRequests([MISSING_DATE]);
     const s = await signIn(LOGISTIQUE);
     logToken = s.accessToken;
     logUser = s.user;
@@ -120,7 +154,9 @@ describe("Workflow Production — responsable logistique", () => {
     if (created.unarchiveIds.length) await UnarchiveRequest.destroy({ where: { id: created.unarchiveIds } });
     if (created.archiveLogIds.length) await ArchiveLog.destroy({ where: { id: created.archiveLogIds } });
     if (created.ficheIds.length) await sequelize.query(`DELETE FROM por_promesh WHERE id IN (:ids)`, { replacements: { ids: created.ficheIds } });
-    await Notification.destroy({
+    const live = await liveActivityDuringRun([...created.authRequestIds, ...created.unarchiveIds]);
+    if (live) console.warn("[test] Activité réelle détectée pendant le test : notifications NON nettoyées (aucune donnée réelle supprimée).");
+    if (!live) await Notification.destroy({
       where: {
         createdAt: { [Op.gte]: START },
         type: ["production_compliance_request", "production_compliance_authorization", "production_unarchive_request", "production_unarchive_rejected"],

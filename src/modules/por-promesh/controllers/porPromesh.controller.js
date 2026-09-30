@@ -112,6 +112,9 @@ async function updatePorPromesh(req, res) {
     const data = await svc.updatePorPromesh(req.params.id, req.body, actorFrom(req));
     res.json({ success: true, data: toPorPromeshResponse(data) });
   } catch (err) {
+    logger.error(
+      `[PROMESH UPDATE] id=${req.params.id} user=${req.user?.email || req.user?.sub} fields=${JSON.stringify(Object.keys(req.body || {}))} status=error http=${err.status || 500} code=${err.code || "-"} message=${err.message}`
+    );
     handle(res, err);
   }
 }

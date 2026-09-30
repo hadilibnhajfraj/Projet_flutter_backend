@@ -2,6 +2,13 @@ const Joi = require("joi");
 
 const TIME_PATTERN = /^([01]\d|2[0-3]):([0-5]\d)(:[0-5]\d)?$/;
 
+// Date calendaire "AAAA-MM-JJ" conservée TELLE QUELLE (chaîne) jusqu'à la
+// colonne DATEONLY. Avant : Joi.date() la convertissait en Date (minuit UTC),
+// que Sequelize reformatait dans le fuseau du serveur → "2026-09-30" stocké
+// "2026-09-29" sur un serveur UTC−x (vérifié). Un datetime ISO complet reste
+// accepté (anciens clients) via Joi.date().iso().
+const DATE_ONLY = Joi.alternatives().try(Joi.string().pattern(/^\d{4}-\d{2}-\d{2}$/), Joi.date().iso());
+
 // NOTE : pour un champ numérique/enum, `.allow(null, "")` ne fait que
 // *tolérer* la chaîne vide — elle ressort telle quelle ("") et provoque
 // ensuite une erreur Postgres ("invalid input syntax for type ...") à
@@ -64,7 +71,7 @@ const baseFields = {
   // pouvoir être créée avant que ces 3 champs soient renseignés ; ils ne
   // deviennent obligatoires qu'au moment du verrouillage définitif
   // (POST /:id/validate — cf. validatePorPromesh dans le service).
-  dateProduction: Joi.date().iso().allow(null).optional(),
+  dateProduction: DATE_ONLY.allow(null).optional(),
   heureDebut: Joi.string().pattern(TIME_PATTERN).allow("", null).optional(),
   heureFin: Joi.string().pattern(TIME_PATTERN).allow("", null).optional(),
   // Opérateur connecté (sélectionné manuellement) — même étape que les 3 champs ci-dessus.
@@ -126,7 +133,7 @@ const baseFields = {
   visaResponsableLogistiqueProcess: Joi.string().max(255).allow(null, "").optional(),
   visaControleQualiteProcess: Joi.string().max(255).allow(null, "").optional(),
   visaProductionProcess: Joi.string().max(255).allow(null, "").optional(),
-  dateValidationProcess: Joi.date().iso().allow(null, "").optional(),
+  dateValidationProcess: DATE_ONLY.allow(null, "").optional(),
 
   // ── Module N/C (parcours opérateur simplifié) — un seul statut par fiche.
   // Les 3 champs suivants ne sont pertinents que si conformite === "non_conforme"

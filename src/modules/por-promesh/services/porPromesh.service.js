@@ -82,41 +82,21 @@ function assertOwnership(report, actor) {
 // Process), donc un seul jeu de valeurs est généré, jamais 3.
 const DERIVED_PROCESS_BLOC = "controle_08h20";
 
-const DERIVED_PROCESS_PARAMS = [
-  {
-    // Même mesure, même unité (°C) que `temperatureEau` de Contrôle Machine.
-    parametre: "Température d'eau",
-    valeurP1: (r) => (r.temperatureEau == null ? null : String(r.temperatureEau)),
-    // Même plage de conformité que Contrôle Machine (40-60°C — voir
-    // PorPromeshController.machineTemperatureEauMin/Max côté Flutter).
-    corP1: (r) => {
-      if (r.temperatureEau == null) return false;
-      const n = Number(r.temperatureEau);
-      return !Number.isNaN(n) && n >= 40 && n <= 60;
-    },
-  },
-  {
-    // Correspondance exacte (OK/NOK) avec `etatDisqueCoupe`.
-    parametre: "Etat disque de coupe",
-    valeurP1: (r) => r.etatDisqueCoupe ?? null,
-    corP1: (r) => r.etatDisqueCoupe === "OK",
-  },
-  {
-    // Vocabulaire Contrôle Machine (Absence/Présence) → vocabulaire
-    // Contrôle Process (Non/Oui) — traduction directe, même contrôle visuel.
-    parametre: "Fuite d'eau",
-    valeurP1: (r) => (r.fluideVisuel === "Absence" ? "Non" : r.fluideVisuel === "Présence" ? "Oui" : null),
-    corP1: (r) => r.fluideVisuel === "Absence",
-  },
-  {
-    // Copie du texte choisi côté Contrôle Machine ("< 6 bars" / "> 6 bars")
-    // — `valeurP1` est une colonne texte (STRING(50)), aucune précision
-    // numérique n'est inventée.
-    parametre: "Pression d'air comprimé",
-    valeurP1: (r) => r.air ?? null,
-    corP1: (r) => r.air != null && r.air !== "< 6 bars",
-  },
-];
+// §MODIFICATION CONTRÔLE MACHINE PROMESH (2026-09-30) : "Température d'eau",
+// "Etat disque de coupe" et "Fuite d'eau" retirés de l'interface — plus
+// dérivés (ni recalculés, ni écrasés). Leurs lignes déjà en base sont
+// CONSERVÉES telles quelles (voir RETIRED_PROCESS_PARAMS ci-dessous) ; les
+// colonnes temperatureEau/etatDisqueCoupe restent en base, simplement plus
+// alimentées par l'application.
+const RETIRED_PROCESS_PARAMS = new Set(["Température d'eau", "Etat disque de coupe", "Fuite d'eau"]);
+
+// §MODIFICATION "PRESSION AIR COMPRIMÉ" (2026-09-30) : ce paramètre est
+// désormais SAISI par l'utilisateur (input texte : "5", "5.5", "> 6"...).
+// Il n'est plus recopié depuis `air` ("Pression d'air", Contrôle Machine) —
+// cette copie écrasait la saisie à chaque enregistrement. Plus aucun
+// paramètre dérivé : la valeur envoyée (ou déjà en base) est conservée
+// telle quelle (`valeurP1` = VARCHAR(50), aucune migration nécessaire).
+const DERIVED_PROCESS_PARAMS = [];
 
 function buildDerivedProcessControlRows(machineFields) {
   const rows = DERIVED_PROCESS_PARAMS.map(({ parametre, valeurP1, corP1 }) => ({
@@ -159,9 +139,18 @@ async function applyDerivedProcessControl(porPromeshId, machineFields, children,
   const derivedRows = buildDerivedProcessControlRows(machineFields);
   const derivedKeys = new Set(derivedRows.map((r) => `${r.bloc}|${r.parametre}`));
 
-  const baseRows = Array.isArray(children.processControl)
-    ? children.processControl
-    : await repo.findProcessControl(porPromeshId, transaction);
+  let baseRows;
+  if (Array.isArray(children.processControl)) {
+    // Le client n'envoie plus les paramètres retirés : leurs lignes
+    // historiques sont reprises de la base pour ne JAMAIS être perdues par
+    // le remplacement complet du tableau (replaceChildren).
+    const sent = new Set(children.processControl.map((r) => `${r.bloc}|${r.parametre}`));
+    const existing = await repo.findProcessControl(porPromeshId, transaction);
+    const retiredHistory = existing.filter((r) => RETIRED_PROCESS_PARAMS.has(r.parametre) && !sent.has(`${r.bloc}|${r.parametre}`));
+    baseRows = [...children.processControl, ...retiredHistory];
+  } else {
+    baseRows = await repo.findProcessControl(porPromeshId, transaction);
+  }
 
   const kept = baseRows
     .filter((r) => !derivedKeys.has(`${r.bloc}|${r.parametre}`))
@@ -394,9 +383,18 @@ async function updatePorPromesh(id, body, actor) {
       throw { status: 403, code: "SHEET_ARCHIVED", message: ARCHIVED_MESSAGE, ficheId: report.id, ficheType: "PROMESH" };
     }
 
+    // [PROMESH UPDATE] — avant/après des SEULS champs envoyés (jamais de
+    // JWT/mot de passe ; aucune donnée sensible dans une fiche PROMESH).
+    const before = Object.fromEntries(Object.keys(mainFields).map((k) => [k, report.get(k)]));
+    const childKeys = Object.keys(children).filter((k) => Array.isArray(children[k]));
+
     if (Object.keys(mainFields).length) {
       await repo.update(report, mainFields, t);
     }
+    logger.info(
+      `[PROMESH UPDATE] id=${id} user=${actor.email || actor.id} fields=${JSON.stringify(Object.keys(mainFields))} children=${JSON.stringify(childKeys)}` +
+        ` before=${JSON.stringify(before)} after=${JSON.stringify(Object.fromEntries(Object.keys(mainFields).map((k) => [k, report.get(k)])))} status=success`
+    );
 
     // 1. Contrôle Machine déjà sauvegardé (ci-dessus, `report` reflète les
     // valeurs à jour même si cette requête n'en a modifié qu'une partie —
