@@ -3,14 +3,18 @@
 const { DataTypes } = require("sequelize");
 const { sequelize } = require("../db");
 
-// Un paramètre de la checklist (voir config/qualityControl.js#PARAMETERS) —
-// les 15 lignes sont toujours créées ensemble avec le contrôle, jamais
-// ajoutées/supprimées individuellement.
+// Un paramètre d'une fiche de contrôle qualité — voir
+// config/qualityControl.js#PARAMETERS. Créé à la première saisie.
+// - readingId renseigné : contrôle TEMPOREL d'un relevé (unique par relevé
+//   et paramètre) ;
+// - readingId NULL : PARAMÈTRE PHYSIQUE de la FICHE, indépendant du temps
+//   (unique par fiche et paramètre).
 const QualityControlItem = sequelize.define(
   "QualityControlItem",
   {
     id: { type: DataTypes.UUID, defaultValue: DataTypes.UUIDV4, primaryKey: true },
     qualityControlId: { type: DataTypes.UUID, allowNull: false },
+    readingId: { type: DataTypes.UUID, allowNull: true },
     parameterKey: { type: DataTypes.STRING(50), allowNull: false },
     parameterName: { type: DataTypes.STRING(100), allowNull: false },
     position: { type: DataTypes.INTEGER, allowNull: false },

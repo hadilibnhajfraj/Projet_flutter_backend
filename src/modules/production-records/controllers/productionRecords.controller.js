@@ -1,6 +1,7 @@
 "use strict";
 
 const svc = require("../services/productionRecords.service");
+const dashboardSvc = require("../services/productionDashboard.service");
 const logger = require("../../../utils/logger");
 
 function handle(res, err) {
@@ -95,4 +96,16 @@ async function getById(req, res) {
   }
 }
 
-module.exports = { list, filters, summary, creators, getById };
+// Dashboard Production — tout l'écran en une réponse (période : today | week |
+// month | year | custom + startDate / endDate | all).
+async function dashboard(req, res) {
+  try {
+    const { period, startDate, endDate } = req.query;
+    const data = await dashboardSvc.getDashboard({ period, startDate, endDate }, actorFrom(req));
+    res.json({ success: true, data });
+  } catch (err) {
+    handle(res, err);
+  }
+}
+
+module.exports = { list, filters, summary, creators, dashboard, getById };

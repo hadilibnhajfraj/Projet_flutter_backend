@@ -23,6 +23,9 @@ router.use(authRequired);
 // id="filters"/"summary" (même piège que por-promesh, voir porPromesh.routes.js).
 router.get("/filters", requireRole(...FICHE_CONSULT_ROLES), ctrl.filters);
 router.get("/summary", requireRole(...READ_ROLES), ctrl.summary);
+// Dashboard Production : KPI, machines, graphiques et dernières productions
+// en UN seul appel (agrégations SQL — voir productionDashboard.service).
+router.get("/dashboard", requireRole(...READ_ROLES), ctrl.dashboard);
 // §MODIFICATION — ADMIN > PRODUCTION RECORDS — FILTRE PAR UTILISATEUR (§3) :
 // alimente le dropdown "All users" ; scope de rôle appliqué dans le service
 // (getCreators) — un compte owner-scoped (production_1..5, responsable_

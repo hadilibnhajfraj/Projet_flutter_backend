@@ -19,6 +19,11 @@ const IndustrialRecord = sequelize.define(
     dateFiche: { type: DataTypes.DATEONLY, allowNull: false },
     operateur: { type: DataTypes.STRING(255), allowNull: true },
 
+    // Lot et ordre de fabrication de la fiche — repris automatiquement par
+    // le Contrôle Qualité (fiche qualité de la même machine / date / poste).
+    lot: { type: DataTypes.STRING(100), allowNull: true },
+    ordreFabrication: { type: DataTypes.STRING(100), allowNull: true },
+
     quantiteProduite: { type: DataTypes.DECIMAL(10, 2), allowNull: true },
     statutQualite: { type: DataTypes.ENUM("ok", "nok"), allowNull: true },
 

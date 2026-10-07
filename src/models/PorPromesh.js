@@ -46,6 +46,11 @@ const PorPromesh = sequelize.define(
     machine: { type: DataTypes.STRING(10), allowNull: true },
     poste: { type: DataTypes.ENUM("matin", "nuit"), allowNull: true },
 
+    // Lot et ordre de fabrication de la fiche — repris automatiquement par
+    // le Contrôle Qualité (fiche qualité de la même machine / date / poste).
+    lot: { type: DataTypes.STRING(100), allowNull: true },
+    ordreFabrication: { type: DataTypes.STRING(100), allowNull: true },
+
     diametreMaille1: { type: DataTypes.STRING(50), allowNull: true },
     diametreMaille2: { type: DataTypes.STRING(50), allowNull: true },
     diametreMaille3: { type: DataTypes.STRING(50), allowNull: true },

@@ -59,6 +59,7 @@ const FinancePurchaseOrder = require("./FinancePurchaseOrder");
 const FinancePurchaseOrderItem = require("./FinancePurchaseOrderItem");
 const QualityControl = require("./QualityControl");
 const QualityControlItem = require("./QualityControlItem");
+const QualityControlReading = require("./QualityControlReading");
 const QualityControlHistory = require("./QualityControlHistory");
 
 // ── PIPELINE STAGE <-> PROJECT ────────────────────────────
@@ -525,6 +526,12 @@ console.log("FINANCE PROBAR ASSOCIATIONS LOADED");
 QualityControl.hasMany(QualityControlItem, { foreignKey: "qualityControlId", as: "items" });
 QualityControlItem.belongsTo(QualityControl, { foreignKey: "qualityControlId", as: "qualityControl" });
 
+// Une fiche porte plusieurs relevés ; chaque relevé porte ses paramètres.
+QualityControl.hasMany(QualityControlReading, { foreignKey: "qualityControlId", as: "readings" });
+QualityControlReading.belongsTo(QualityControl, { foreignKey: "qualityControlId", as: "qualityControl" });
+QualityControlReading.hasMany(QualityControlItem, { foreignKey: "readingId", as: "items" });
+QualityControlItem.belongsTo(QualityControlReading, { foreignKey: "readingId", as: "reading" });
+
 QualityControl.hasMany(QualityControlHistory, { foreignKey: "qualityControlId", as: "history" });
 QualityControlHistory.belongsTo(QualityControl, { foreignKey: "qualityControlId", as: "qualityControl" });
 
@@ -588,5 +595,6 @@ module.exports = {
   FinancePurchaseOrderItem,
   QualityControl,
   QualityControlItem,
+  QualityControlReading,
   QualityControlHistory,
 };

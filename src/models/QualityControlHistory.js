@@ -11,8 +11,11 @@ const QualityControlHistory = sequelize.define(
   {
     id: { type: DataTypes.UUID, defaultValue: DataTypes.UUIDV4, primaryKey: true },
     qualityControlId: { type: DataTypes.UUID, allowNull: false },
-    // CREATE | UPDATE | VALIDATE | STATUS_CHANGE | DELETE
+    // Fiche : CREATE | UPDATE | VALIDATE | STATUS_CHANGE | DELETE
+    // Relevé : READING_CREATE | READING_VALIDATE | READING_DELETE
     action: { type: DataTypes.STRING(30), allowNull: false },
+    // Heure (HH:mm) du relevé concerné — null pour une action sur la fiche.
+    readingTime: { type: DataTypes.STRING(5), allowNull: true },
     parameterKey: { type: DataTypes.STRING(50), allowNull: true },
     field: { type: DataTypes.STRING(30), allowNull: true },
     oldValue: { type: DataTypes.TEXT, allowNull: true },

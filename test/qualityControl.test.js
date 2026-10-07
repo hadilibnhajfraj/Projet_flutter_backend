@@ -34,23 +34,9 @@ const qcService = require("../src/modules/quality-control/services/qualityContro
 const QC_EMAIL = "controle_qualite@cbi-tunisia.com";
 const QC_PASSWORD = process.env.QC_TEST_PASSWORD || "ChangeMe123!";
 const PASSWORD = "StrongPass123!";
-const EXPECTED_LABELS = [
-  "HEURE",
-  "NIVEAU BAIN DE GRAINES",
-  "DIAMÈTRE DE BAR",
-  "TEMPÉRATURE DE MACHINE",
-  "TEMPÉRATURE D'EAU",
-  "PRESSION D'AIR COMPRIMÉ",
-  "ÉTAT D'IMPRESSION",
-  "NOMBRE DE BAR EN LONGUEUR",
-  "DIMENSIONS DE MAILLE",
-  "DIMENSIONS COTE 1 LONG",
-  "DIMENSIONS COTE 2 LONG",
-  "FUITE D'EAU",
-  "FUITE D'AIR COMPRIMÉ",
-  "ÉTAT DISQUE DE COUPE",
-  "NOMBRE DE BAR EN LARGEUR",
-];
+// Paramètres d'un prélèvement : ceux de la configuration (catégories du formulaire).
+// Paramètres affichables : ceux d'au moins une ligne (DIAMÈTRE DE LA BARRE est retiré).
+const EXPECTED_LABELS = require("../src/config/qualityControl").parameters.filter((p) => p.lines.length > 0).map((p) => p.label);
 
 const createdUserIds = [];
 const createdControlIds = [];
@@ -88,12 +74,16 @@ describe("Contrôle qualité — checklist de production", () => {
     otherQcToken = (await signIn(otherQc.email)).accessToken;
     adminToken = (await signIn(admin.email)).accessToken;
 
-    const promesh = await PorPromesh.findOne({ order: [["createdAt", "DESC"]] });
+    // Fiche sans contrôle qualité actif (un seul contrôle par fiche).
+    const free = `NOT EXISTS (SELECT 1 FROM quality_controls q WHERE q."productionRecordId" = p.id AND q."deletedAt" IS NULL)`;
+    const [row] = await sequelize.query(`SELECT p.id FROM por_promesh p WHERE ${free} ORDER BY p."createdAt" DESC LIMIT 1`, { type: "SELECT" });
+    const promesh = row && (await PorPromesh.findByPk(row.id));
     if (promesh) {
       fiche = { type: "PROMESH", id: promesh.id };
       promeshFicheBefore = promesh.toJSON();
     } else {
-      const probar = await IndustrialRecord.findOne({ where: { module: "probar" }, order: [["createdAt", "DESC"]] });
+      const [pb] = await sequelize.query(`SELECT p.id FROM industrial_records p WHERE p.module = 'probar' AND ${free} ORDER BY p."createdAt" DESC LIMIT 1`, { type: "SELECT" });
+      const probar = await IndustrialRecord.findByPk(pb.id);
       fiche = { type: "PROBAR", id: probar.id };
     }
   }, 30000);
@@ -119,10 +109,15 @@ describe("Contrôle qualité — checklist de production", () => {
     expect(qcUser.role).toBe("controle_qualite");
   });
 
-  test("accès au module : les 15 paramètres avec les intitulés exacts", async () => {
+  test("accès au module : les paramètres d'un prélèvement avec les intitulés exacts (l'heure appartient au prélèvement)", async () => {
     const res = await request(app).get("/quality-control/parameters").set(auth(qcToken));
     expect(res.status).toBe(200);
     expect(res.body.data.map((p) => p.label)).toEqual(EXPECTED_LABELS);
+    expect(EXPECTED_LABELS).toHaveLength(41);
+    expect(EXPECTED_LABELS).not.toContain("DIAMÈTRE DE BAR");
+    expect(EXPECTED_LABELS).toEqual(expect.arrayContaining(["NIVEAU BAIN DE GRAINES", "QUALITÉ DE COUPE", "ÉTAT DU DISQUE DE COUPE"]));
+    expect(EXPECTED_LABELS).not.toContain("OVALISATION");
+    expect(EXPECTED_LABELS).not.toContain("HEURE");
   });
 
   test("consultation des fiches de production (lecture seule)", async () => {
@@ -160,16 +155,24 @@ describe("Contrôle qualité — checklist de production", () => {
 
   let controlId;
 
-  test("création liée à la fiche réelle — date/utilisateur/fiche posés par le serveur", async () => {
+  test("création d'une fiche qualité de MACHINE — date/utilisateur posés par le serveur, production jamais enregistrée", async () => {
+    // Machine inconnue : refusée (jamais ignorée).
+    const unknown = await request(app).post("/quality-control").set(auth(qcToken)).send({ productionType: fiche.type, machine: "99" });
+    expect(unknown.status).toBe(400);
+    expect(unknown.body.code).toBe("INVALID_MACHINE");
+
     const res = await request(app)
       .post("/quality-control")
       .set(auth(qcToken))
       .send({
-        productionRecordId: `${fiche.type.toLowerCase()}:${fiche.id}`,
+        productionType: fiche.type,
+        machine: "1",
         // Tentatives de falsification — doivent être ignorées.
+        productionRecordId: `${fiche.type.toLowerCase()}:${fiche.id}`,
         controllerEmail: "pirate@example.com",
+        controllerUserId: "00000000-0000-0000-0000-000000000000",
+        createdBy: "production_1@cbi-tunisia.com",
         checkedAt: "2000-01-01T00:00:00Z",
-        machine: "99",
         items: [{ parameterKey: "temperature_machine", value: "185 °C", status: "CONFORME" }],
       });
     expect(res.status).toBe(201);
@@ -180,13 +183,16 @@ describe("Contrôle qualité — checklist de production", () => {
     expect(c.controllerEmail).toBe(QC_EMAIL);
     expect(c.controllerUserId).toBe(qcUser.id);
     expect(c.productionType).toBe(fiche.type);
-    expect(c.productionRecordId).toBe(fiche.id);
-    expect(c.machine).not.toBe("99");
+    expect(c.productionRecordId).toBeNull(); // indépendante de la production
+    expect(c.machine).toBe("1");
+    expect(c.reference).toMatch(/^QC-(PROMESH|PROBAR)-\d{6}$/);
     expect(c.checkedAt).toBeNull();
     expect(c.status).toBe("EN_COURS");
-    expect(c.items).toHaveLength(15);
-    expect(c.items.map((i) => i.parameterName)).toEqual(EXPECTED_LABELS);
-    if (fiche.type === "PROMESH") expect(c.ficheNumero).toMatch(/^PROMESH-\d{4}-\d{6}$/);
+    expect(c.items).toHaveLength(require("../src/config/qualityControl").readingParametersFor(fiche.type).length);
+    // Un prélèvement porte les contrôles temporels ; les paramètres physiques sont au niveau de la fiche.
+    expect(c.items.map((i) => i.parameterName)).toEqual(require("../src/config/qualityControl").readingParametersFor(fiche.type).map((p) => p.label));
+    expect(c.physicalParameters.map((i) => i.parameterName)).toEqual(require("../src/config/qualityControl").physicalParameters(fiche.type).map((p) => p.label));
+    expect(c.ficheNumero).toBeNull();
   });
 
   test("la fiche de production n'est jamais modifiée par le contrôle", async () => {
@@ -195,20 +201,32 @@ describe("Contrôle qualité — checklist de production", () => {
     expect(after.updatedAt).toEqual(promeshFicheBefore.updatedAt);
   });
 
-  test("validation refusée si un paramètre non conforme n'a pas de remarque", async () => {
+  // Seules les DONNÉES obligatoires refusent une validation (jamais le
+  // résultat Non conforme — voir qualityControl.module.test.js, TEST 2).
+  test("validation refusée si un paramètre contrôlé n'a pas de valeur — transaction annulée", async () => {
     const res = await request(app)
       .post(`/quality-control/${controlId}/validate`)
       .set(auth(qcToken))
-      .send({ items: [{ parameterKey: "temperature_eau", value: "28.5 °C", status: "NON_CONFORME" }] });
+      .send({
+        status: "NON_CONFORME",
+        remark: "remarque qui ne doit pas être enregistrée",
+        items: [
+          { parameterKey: "temperature_eau", status: "CONFORME" },
+          { parameterKey: "pression_air_comprime", value: "6", status: "CONFORME" },
+        ],
+      });
     expect(res.status).toBe(422);
     expect(res.body.code).toBe("VALIDATION_FAILED");
     expect(res.body.errors.some((e) => e.parameterKey === "temperature_eau")).toBe(true);
-    // Transaction annulée : rien n'a été enregistré.
-    const detail = await request(app).get(`/quality-control/${controlId}`).set(auth(qcToken));
-    expect(detail.body.data.items.find((i) => i.parameterKey === "temperature_eau").value).toBeNull();
+    // ROLLBACK : ni paramètres, ni remarque, ni statut enregistrés.
+    const detail = (await request(app).get(`/quality-control/${controlId}`).set(auth(qcToken))).body.data;
+    expect(detail.items.find((i) => i.parameterKey === "pression_air_comprime").value).toBeNull();
+    expect(detail.remark).not.toBe("remarque qui ne doit pas être enregistrée");
+    expect(detail.isValidated).toBe(false);
   });
 
-  test("validation CONFORME — date/heure automatiques en heure de Tunisie", async () => {
+  test("validation CONFORME — horodatage serveur en heure de Tunisie, date/heure d'ouverture conservées", async () => {
+    const before = (await request(app).get(`/quality-control/${controlId}`).set(auth(qcToken))).body.data;
     // 13:36:27 UTC = 14:36:27 à Tunis (UTC+1, pas d'heure d'été).
     qcService.setClock(() => new Date("2026-09-25T13:36:27Z"));
     const res = await request(app)
@@ -220,64 +238,55 @@ describe("Contrôle qualité — checklist de production", () => {
     expect(res.status).toBe(200);
     const c = res.body.data;
     expect(c.status).toBe("CONFORME");
-    expect(c.controlDate).toBe("25/09/2026");
-    expect(c.controlTime).toBe("14:36:27");
+    // Date/heure d'OUVERTURE (modifiables par le contrôleur) : jamais
+    // écrasées par la validation.
+    expect(c.controlDate).toBe(before.controlDate);
+    expect(c.controlTime).toBe(before.controlTime);
+    // Horodatage de la validation (audit), posé par le serveur.
+    expect(c.validatedDate).toBe("25/09/2026");
+    expect(c.validatedTime).toBe("14:36:27");
     expect(new Date(c.checkedAt).toISOString()).toBe("2026-09-25T13:36:27.000Z");
-    // HEURE pré-remplie automatiquement.
-    expect(c.items.find((i) => i.parameterKey === "heure").value).toBe("14:36");
-    expect(c.counts).toMatchObject({ total: 15, controlled: 2, nonConformes: 0 });
+    // L'heure du contrôle appartient au PRÉLÈVEMENT, validé avec la fiche.
+    expect(c.readingsCount).toBe(1);
+    expect(c.readings[0]).toMatchObject({ isValidated: true, status: "CONFORME" });
+    expect(c.readings[0].readingTime).toMatch(/^\d{2}:\d{2}$/);
+    expect(c.counts).toMatchObject({ total: require("../src/config/qualityControl").readingParametersFor(fiche.type).length, nonConformes: 0 });
     expect(res.body.data.notificationsSent).toBeUndefined();
   });
 
-  test("un contrôle validé ne peut pas être revalidé", async () => {
+  // Contrôle VALIDÉ = lecture seule pour tous, appliqué par l'API.
+  test("un contrôle validé ne peut pas être revalidé (403 lecture seule)", async () => {
     const res = await request(app).post(`/quality-control/${controlId}/validate`).set(auth(qcToken)).send({});
-    expect(res.status).toBe(409);
-    expect(res.body.code).toBe("ALREADY_VALIDATED");
+    expect(res.status).toBe(403);
+    expect(res.body).toMatchObject({ code: "CONTROL_LOCKED", message: "Un contrôle validé est en lecture seule et ne peut plus être modifié." });
   });
 
-  test("modification d'un contrôle validé sans motif : refusée (jamais d'écrasement silencieux)", async () => {
-    const res = await request(app)
-      .put(`/quality-control/${controlId}`)
-      .set(auth(qcToken))
-      .send({ items: [{ parameterKey: "temperature_machine", value: "190 °C" }] });
-    expect(res.status).toBe(409);
-    expect(res.body.code).toBe("CHANGE_REASON_REQUIRED");
-  });
-
-  test("modification avec motif → NON CONFORME + traçabilité + notification", async () => {
-    const res = await request(app)
-      .put(`/quality-control/${controlId}`)
-      .set(auth(qcToken))
-      .send({
-        changeReason: "Nouvelle mesure après réglage",
-        items: [{ parameterKey: "temperature_machine", value: "210 °C", status: "NON_CONFORME", remark: "Surchauffe" }],
-      });
-    expect(res.status).toBe(200);
-    const c = res.body.data;
-    expect(c.status).toBe("NON_CONFORME");
-    expect(c.nonConformParameters).toEqual(["TEMPÉRATURE DE MACHINE"]);
-    expect(c.notificationsSent).toBe(1);
-
-    const valueChange = c.history.find((h) => h.parameterKey === "temperature_machine" && h.field === "value" && h.newValue === "210 °C");
-    expect(valueChange).toMatchObject({ oldValue: "185 °C", reason: "Nouvelle mesure après réglage", userEmail: QC_EMAIL });
-    expect(valueChange.changedDate).toMatch(/^\d{2}\/\d{2}\/\d{4}$/);
-    expect(valueChange.changedTime).toMatch(/^\d{2}:\d{2}:\d{2}$/);
-    // L'ancienne valeur saisie à la création reste dans l'historique.
-    expect(c.history.some((h) => h.action === "CREATE")).toBe(true);
-    expect(c.history.some((h) => h.field === "status" && h.oldValue === "CONFORME" && h.newValue === "NON_CONFORME")).toBe(true);
-
-    const notif = await Notification.findOne({ where: { userId: manager.id, qualityControlId: controlId } });
-    expect(notif.title).toBe("Contrôle qualité non conforme");
-    expect(notif.message).toContain(`Production : ${fiche.type}`);
-    expect(notif.message).toContain("TEMPÉRATURE DE MACHINE");
-    expect(notif.message).toContain(QC_EMAIL);
+  test("modification d'un contrôle validé : 403, même avec un motif — rien n'est modifié", async () => {
+    for (const body of [
+      { items: [{ parameterKey: "temperature_machine", value: "190 °C" }] },
+      { changeReason: "Nouvelle mesure", items: [{ parameterKey: "temperature_machine", value: "210 °C", status: "NON_CONFORME" }] },
+      { poste: "soir" },
+      { status: "NON_CONFORME", changeReason: "x" },
+    ]) {
+      const res = await request(app).put(`/quality-control/${controlId}`).set(auth(qcToken)).send(body);
+      expect(res.status).toBe(403);
+      expect(res.body.code).toBe("CONTROL_LOCKED");
+    }
+    const c = (await request(app).get(`/quality-control/${controlId}`).set(auth(qcToken))).body.data;
+    expect(c.status).toBe("CONFORME");
+    expect(c.items.find((i) => i.parameterKey === "temperature_machine").value).toBe("185 °C");
   });
 
   test("un paramètre NON CONFORME force NON CONFORME même si CONFORME est demandé", async () => {
+    // Fiche distincte : un seul contrôle actif par fiche de production.
+    const [free] = await sequelize.query(
+      `SELECT p.id FROM por_promesh p WHERE NOT EXISTS (SELECT 1 FROM quality_controls q WHERE q."productionRecordId" = p.id AND q."deletedAt" IS NULL) ORDER BY p."createdAt" DESC LIMIT 1`,
+      { type: "SELECT" }
+    );
     const created = await request(app)
       .post("/quality-control")
       .set(auth(qcToken))
-      .send({ productionRecordId: fiche.id, productionType: fiche.type });
+      .send({ productionType: "PROMESH", machine: "1" });
     createdControlIds.push(created.body.data.id);
     expect(created.body.data.status).toBe("EN_ATTENTE");
 
@@ -295,19 +304,25 @@ describe("Contrôle qualité — checklist de production", () => {
     expect(res.body.data.status).toBe("NON_CONFORME");
     expect(res.body.data.counts).toMatchObject({ controlled: 2, nonConformes: 1 });
     expect(res.body.data.notificationsSent).toBe(1);
+    // Notification interne (jamais d'email client) aux responsables Production.
+    const notif = await Notification.findOne({ where: { userId: manager.id, qualityControlId: created.body.data.id } });
+    expect(notif.title).toBe("Contrôle qualité non conforme");
+    expect(notif.message).toContain("Production : PROMESH");
+    expect(notif.message).toContain("TEMPÉRATURE D'EAU");
+    expect(notif.message).toContain(QC_EMAIL);
   });
 
-  test("historique : liste avec compteurs + recherche par fiche", async () => {
+  test("historique : liste avec compteurs + recherche par référence de fiche qualité", async () => {
     const list = await request(app).get("/quality-control").set(auth(qcToken));
     expect(list.status).toBe(200);
     const row = list.body.data.find((c) => c.id === controlId);
-    expect(row).toMatchObject({ productionType: fiche.type, controllerEmail: QC_EMAIL, status: "NON_CONFORME" });
+    expect(row).toMatchObject({ productionType: fiche.type, controllerEmail: QC_EMAIL, status: "CONFORME", isValidated: true });
     expect(row.counts.controlled).toBeGreaterThan(0);
     expect(row.items).toBeUndefined();
 
-    const byFiche = await request(app).get(`/quality-control/production/${fiche.type.toLowerCase()}:${fiche.id}`).set(auth(qcToken));
-    expect(byFiche.status).toBe(200);
-    expect(byFiche.body.data.map((c) => c.id)).toEqual(expect.arrayContaining(createdControlIds));
+    const byRef = await request(app).get(`/quality-control?search=${row.reference}`).set(auth(qcToken));
+    expect(byRef.status).toBe(200);
+    expect(byRef.body.data.map((c) => c.id)).toEqual([controlId]);
   });
 
   test("un contrôleur ne voit pas les contrôles d'un autre", async () => {
@@ -317,24 +332,41 @@ describe("Contrôle qualité — checklist de production", () => {
     expect(list.body.data.some((c) => c.id === controlId)).toBe(false);
   });
 
-  test("suppression interdite au contrôleur ; suppression logique par admin, historique conservé", async () => {
-    expect((await request(app).delete(`/quality-control/${controlId}`).set(auth(qcToken))).status).toBe(403);
+  test("suppression : contrôle VALIDÉ refusé pour tous (403) ; BROUILLON supprimé (logique) par son contrôleur, historique conservé", async () => {
+    for (const token of [qcToken, adminToken]) {
+      const res = await request(app).delete(`/quality-control/${controlId}`).set(auth(token));
+      expect(res.status).toBe(403);
+      expect(res.body).toMatchObject({ code: "CONTROL_LOCKED", message: "Un contrôle validé ne peut pas être supprimé." });
+    }
+    expect((await request(app).get(`/quality-control/${controlId}`).set(auth(qcToken))).status).toBe(200);
 
-    const del = await request(app).delete(`/quality-control/${controlId}`).set(auth(adminToken));
+    const [free] = await sequelize.query(
+      `SELECT p.id FROM por_promesh p WHERE NOT EXISTS (SELECT 1 FROM quality_controls q WHERE q."productionRecordId" = p.id AND q."deletedAt" IS NULL) ORDER BY p."createdAt" DESC LIMIT 1`,
+      { type: "SELECT" }
+    );
+    const draft = (await request(app).post("/quality-control").set(auth(qcToken)).send({ productionType: "PROMESH", machine: "1" })).body.data;
+    createdControlIds.push(draft.id);
+    // Un autre contrôleur ne peut pas supprimer ce brouillon.
+    expect((await request(app).delete(`/quality-control/${draft.id}`).set(auth(otherQcToken))).status).toBe(403);
+    const del = await request(app).delete(`/quality-control/${draft.id}`).set(auth(qcToken));
     expect(del.status).toBe(200);
-    expect((await request(app).get(`/quality-control/${controlId}`).set(auth(adminToken))).status).toBe(404);
+    expect((await request(app).get(`/quality-control/${draft.id}`).set(auth(qcToken))).status).toBe(404);
 
-    const [[row]] = await sequelize.query(`SELECT "deletedAt" FROM quality_controls WHERE id = :id`, { replacements: { id: controlId } });
+    const [[row]] = await sequelize.query(`SELECT "deletedAt" FROM quality_controls WHERE id = :id`, { replacements: { id: draft.id } });
     expect(row.deletedAt).not.toBeNull();
-    const [history] = await sequelize.query(`SELECT action FROM quality_control_history WHERE "qualityControlId" = :id`, { replacements: { id: controlId } });
-    expect(history.map((h) => h.action)).toEqual(expect.arrayContaining(["CREATE", "VALIDATE", "DELETE"]));
+    const [history] = await sequelize.query(`SELECT action FROM quality_control_history WHERE "qualityControlId" = :id`, { replacements: { id: draft.id } });
+    expect(history.map((h) => h.action)).toEqual(expect.arrayContaining(["CREATE", "DELETE"]));
+    // La fiche de production reste disponible pour un nouveau contrôle.
+    const again = await request(app).post("/quality-control").set(auth(qcToken)).send({ productionType: "PROMESH", machine: "1" });
+    expect(again.status).toBe(201);
+    createdControlIds.push(again.body.data.id);
   });
 
   test("paramètre inconnu refusé", async () => {
     const res = await request(app)
       .post("/quality-control")
       .set(auth(qcToken))
-      .send({ productionRecordId: fiche.id, productionType: fiche.type, items: [{ parameterKey: "hauteur", value: "1" }] });
+      .send({ productionType: fiche.type, machine: "1", items: [{ parameterKey: "hauteur", value: "1" }] });
     expect(res.status).toBe(400);
   });
 });
