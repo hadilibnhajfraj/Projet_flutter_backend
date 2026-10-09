@@ -507,6 +507,18 @@ async function attachWaste(rows, module, actor, { ignoreOwnerScope = false } = {
 // (Production Records + cartes KPI, qui restent owner-scoped pour ce
 // compte, inchangés) ni aux modules por-promesh/industrial-records
 // (isOwnerScoped y reste défini séparément, jamais modifié par ce ticket).
+// Le récapitulatif renvoie TOUTES les fiches de la période (les totaux, le
+// récapitulatif par machine et les exports sont calculés sur l'ensemble —
+// la pagination 15 / 50 / 100 lignes est faite à l'affichage). Seul garde-fou :
+// HARD_FETCH_CAP. `totalMatching` = nombre réel de fiches correspondant aux
+// filtres ; `truncated` = true si ce plafond a été atteint (jamais silencieux).
+// Le COUNT n'est exécuté que lorsque le plafond est atteint.
+async function summaryCoverage(Model, where, returned) {
+  if (returned < HARD_FETCH_CAP) return { totalMatching: returned, truncated: false };
+  const totalMatching = await Model.count({ where });
+  return { totalMatching, truncated: totalMatching > returned };
+}
+
 async function buildPromeshSummary(filters, actor) {
   const ignoreOwnerScope = hasFullProductionSummaryVisibility(actor);
   const where = applyPromeshSummaryFilters(buildPromeshWhere(filters, actor, { ignoreOwnerScope }), filters);
@@ -522,7 +534,7 @@ async function buildPromeshSummary(filters, actor) {
   const grandTotal = rows.reduce((sum, r) => sum + (r.quantite || 0), 0);
   const grandTotalWaste = await attachWaste(rows, "PROMESH", actor, { ignoreOwnerScope });
 
-  return { rows, grandTotal, unit: "m²", totalRecords: rows.length, grandTotalWaste, wasteUnit: "kg" };
+  return { rows, grandTotal, unit: "m²", totalRecords: rows.length, grandTotalWaste, wasteUnit: "kg", ...(await summaryCoverage(PorPromesh, where, rows.length)) };
 }
 
 async function buildProbarSummary(filters, actor) {
@@ -540,7 +552,7 @@ async function buildProbarSummary(filters, actor) {
   const grandTotal = rows.reduce((sum, r) => sum + (r.quantite || 0), 0);
   const grandTotalWaste = await attachWaste(rows, "PROBAR", actor, { ignoreOwnerScope });
 
-  return { rows, grandTotal, unit: "m", totalRecords: rows.length, grandTotalWaste, wasteUnit: "kg" };
+  return { rows, grandTotal, unit: "m", totalRecords: rows.length, grandTotalWaste, wasteUnit: "kg", ...(await summaryCoverage(IndustrialRecord, where, rows.length)) };
 }
 
 async function getProductionSummary(filters, actor) {
