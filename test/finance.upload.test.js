@@ -147,15 +147,27 @@ describe("Finance — upload de documents (Inflow of raw materials)", () => {
     expect(res.body.success).toBe(false);
   });
 
-  test("fichier trop volumineux (> 10MB) → 400", async () => {
-    const bigBuffer = Buffer.alloc(11 * 1024 * 1024, 1);
+  test("bon de commande trop volumineux (> 25 Mo) → 413, message explicite, aucun bon créé ; 11 Mo (ancienne limite dépassée) → accepté", async () => {
+    const before = await FinancePurchaseOrder.count();
+    const bigBuffer = Buffer.alloc(26 * 1024 * 1024, 1);
     const res = await request(app)
       .post("/finance/raw-materials/upload")
       .set("Authorization", `Bearer ${token}`)
       .attach("file", bigBuffer, { filename: "big.pdf", contentType: "application/pdf" });
 
-    expect(res.status).toBe(400);
-  }, 20000);
+    expect(res.status).toBe(413);
+    expect(res.body).toMatchObject({ success: false, code: "FILE_TOO_LARGE", message: "Le fichier dépasse la taille maximale autorisée de 25 Mo.", maxFileMb: 25 });
+    expect(await FinancePurchaseOrder.count()).toBe(before);
+
+    // 11 Mo : refusé avec l'ancienne limite de 10 Mo, accepté désormais.
+    const ok = await request(app)
+      .post("/finance/raw-materials/upload")
+      .set("Authorization", `Bearer ${token}`)
+      .attach("file", Buffer.concat([Buffer.from("%PDF-1.4 "), Buffer.alloc(11 * 1024 * 1024, 32)]), { filename: "bon-11mo.pdf", contentType: "application/pdf" });
+    expect(ok.status).toBe(201);
+    createdPurchaseOrderIds.push(ok.body.data.id);
+    createdDocumentIds.push(ok.body.data.documents[0].id);
+  }, 180000);
 
   test("upload sans authentification → 401", async () => {
     const res = await request(app)

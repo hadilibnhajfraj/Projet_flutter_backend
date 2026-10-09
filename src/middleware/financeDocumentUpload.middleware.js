@@ -17,7 +17,12 @@ const crypto = require("crypto");
 //     middlewares in this codebase do this; new hardening specific to
 //     Finance, not a change to any existing module.
 const UPLOAD_DIR = path.join(process.cwd(), "uploads", "finance-documents");
-const MAX_FILE_MB = 10;
+// Taille maximale PAR FICHIER d'un document justificatif financier (bons de
+// livraison, bons de commande, factures, paiements, imports) : 25 Mo.
+// Surcharge possible par FINANCE_UPLOAD_MAX_FILE_MB. Le reverse proxy doit
+// accepter le corps multipart COMPLET (plusieurs fichiers + en-têtes) : voir
+// client_max_body_size côté Nginx.
+const MAX_FILE_MB = Math.max(1, Number(process.env.FINANCE_UPLOAD_MAX_FILE_MB) || 25);
 
 const ALLOWED_EXT = new Set([".pdf", ".doc", ".docx", ".xls", ".xlsx", ".csv", ".jpg", ".jpeg", ".png", ".webp", ".txt"]);
 
@@ -74,4 +79,43 @@ const financeDocumentUpload = multer({
   },
 });
 
-module.exports = { financeDocumentUpload, sanitizeOriginalName, UPLOAD_DIR, MAX_FILE_MB, ALLOWED_EXT };
+// Erreurs d'upload du module Finance (à placer juste après le middleware
+// multer). Un refus de multer n'atteint JAMAIS le contrôleur : aucune
+// expédition / aucun bon n'est créé, aucune seconde erreur n'est produite, et
+// multer a déjà retiré du disque les fichiers de la requête.
+//   - fichier trop volumineux → HTTP 413 + message explicite ;
+//   - trop de fichiers / champ inattendu / type refusé → HTTP 400.
+// Journalisé de façon structurée (jamais de jeton ni de contenu).
+function handleFinanceUploadError(err, req, res, next) {
+  if (!err) return next();
+  const logger = require("../utils/logger");
+  let status = 400;
+  let code = "FILE_UPLOAD_FAILED";
+  let message = err.message || "Échec de l'envoi du fichier";
+  if (err instanceof multer.MulterError) {
+    if (err.code === "LIMIT_FILE_SIZE") {
+      status = 413;
+      code = "FILE_TOO_LARGE";
+      message = `Le fichier dépasse la taille maximale autorisée de ${MAX_FILE_MB} Mo.`;
+    } else if (err.code === "LIMIT_FILE_COUNT" || err.code === "LIMIT_UNEXPECTED_FILE") {
+      message = "Trop de fichiers envoyés, ou champ de fichier inattendu.";
+    } else {
+      message = `Échec de l'envoi du fichier : ${err.message}`;
+    }
+  } else {
+    code = "FILE_TYPE_NOT_ALLOWED";
+  }
+  logger.warn("[FINANCE UPLOAD] REJECTED", {
+    step: "FILE_RECEIVED",
+    code,
+    httpStatus: status,
+    multerCode: err.code || null,
+    field: err.field || null,
+    error: err.message,
+    path: req.originalUrl ? req.originalUrl.split("?")[0] : null,
+    userId: req.user?.sub || null,
+  });
+  return res.status(status).json({ success: false, code, step: "FILE_RECEIVED", message, ...(code === "FILE_TOO_LARGE" ? { maxFileMb: MAX_FILE_MB } : {}) });
+}
+
+module.exports = { financeDocumentUpload, handleFinanceUploadError, sanitizeOriginalName, UPLOAD_DIR, MAX_FILE_MB, ALLOWED_EXT };

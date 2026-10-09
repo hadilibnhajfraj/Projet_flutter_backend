@@ -4,8 +4,9 @@ const router = require("express").Router();
 const ctrl = require("../controllers/finance.controller");
 const { authRequired } = require("../../../middleware/auth.middleware");
 const { requireRole } = require("../../../middleware/requireRole");
-const { financeDocumentUpload } = require("../../../middleware/financeDocumentUpload.middleware");
-const { handleUploadError } = require("../../../middleware/projectAction.validation");
+// Erreurs d'upload propres à Finance (413 explicite si le fichier est trop
+// volumineux) — le gestionnaire partagé des autres modules n'est pas modifié.
+const { financeDocumentUpload, handleFinanceUploadError: handleUploadError } = require("../../../middleware/financeDocumentUpload.middleware");
 const {
   validateCreateShipment,
   validateUpdateShipment,

@@ -808,11 +808,30 @@ const deleteOtherDocument = (id, actor) => deleteImportDocument(OTHER_MODULE, id
 
 // Référence unique auto-générée (aucun champ Reference dans le formulaire) —
 // format SHIP-{année}-{6 chiffres}, jamais dérivée du nom de fichier.
+// §CORRECTION — HTTP 500 « Échec du traitement du Bon de Livraison »
+// (2026-10-09) : ces numéros étaient calculés par COUNT(...) + 1 alors que les
+// colonnes sont UNIQUES. Dès qu'une ligne est supprimée (suppression
+// physique), le compteur redescend sous le plus grand numéro existant → le
+// numéro généré existe déjà → violation d'unicité à CHAQUE import suivant (les
+// nouvelles tentatives recomptent la même valeur). Même défaut que celui déjà
+// corrigé pour les bons de commande (generatePoNumber).
+// Désormais : plus grand suffixe numérique existant + 1, sous un verrou
+// consultatif Postgres limité à la transaction (deux imports simultanés ne
+// lisent jamais le même maximum). Formats inchangés. `table` / `column` sont
+// des constantes internes, jamais une valeur reçue du client.
+async function nextNumberedValue({ table, column, prefix, pad }, transaction) {
+  await sequelize.query("SELECT pg_advisory_xact_lock(hashtext(:key))", { replacements: { key: `${table}.${column}.${prefix}` }, transaction });
+  const [row] = await sequelize.query(
+    `SELECT COALESCE(MAX(CAST(SUBSTRING("${column}" FROM :start) AS BIGINT)), 0) AS max
+       FROM ${table}
+      WHERE "${column}" ~ :pattern`,
+    { replacements: { start: prefix.length + 1, pattern: `^${prefix}[0-9]{1,15}$` }, type: sequelize.QueryTypes.SELECT, transaction }
+  );
+  return `${prefix}${String(Number(row.max) + 1).padStart(pad, "0")}`;
+}
+
 async function generateShipmentReference(transaction) {
-  const year = new Date().getFullYear();
-  const prefix = `SHIP-${year}-`;
-  const count = await repo.countShipments({ reference: { [Op.like]: `${prefix}%` } }, { transaction });
-  return `${prefix}${String(count + 1).padStart(6, "0")}`;
+  return nextNumberedValue({ table: "finance_shipments", column: "reference", prefix: `SHIP-${new Date().getFullYear()}-`, pad: 6 }, transaction);
 }
 
 // Identifiant métier "Shipment #" (§MODIFICATION — CUSTOMER SHIPMENTS) —
@@ -822,9 +841,55 @@ async function generateShipmentReference(transaction) {
 // SEULE FOIS par Customer Shipment (jamais par ligne produit) — voir
 // l'unique appel dans processShipmentUpload.
 async function generateShipmentNumber(transaction) {
-  const prefix = "SH-";
-  const count = await repo.countShipments({ shipmentNumber: { [Op.like]: `${prefix}%` } }, { transaction });
-  return `${prefix}${String(count + 1).padStart(5, "0")}`;
+  return nextNumberedValue({ table: "finance_shipments", column: "shipmentNumber", prefix: "SH-", pad: 5 }, transaction);
+}
+
+// ── Diagnostic de l'import d'un Bon de Livraison ────────────────────────
+// Même principe que l'import Bon de Commande (uploadFailure) : l'étape en
+// échec, un code d'erreur stable, le statut HTTP et la cause technique sont
+// journalisés AVANT toute réponse — jamais remplacés par un message générique.
+// Jamais de JWT, mot de passe ni contenu du document dans les logs : seuls le
+// nom du fichier, son type, sa taille et l'identifiant de l'utilisateur.
+// Le client reçoit `code` + `step` + un message clair en français ; le détail
+// technique (code PostgreSQL, contrainte, chemin) reste dans les logs serveur.
+const DELIVERY_UPLOAD_MESSAGES = Object.freeze({
+  FILE_UPLOAD_FAILED: "Aucun fichier reçu. Sélectionnez au moins un document.",
+  PDF_EXTRACTION_FAILED: "Impossible de lire le PDF. Vérifiez que le fichier est valide.",
+  VALIDATION_FAILED: "Les données lues dans le document sont invalides. Vérifiez le fichier.",
+  DATABASE_FAILED: "Document reçu, mais l'enregistrement en base a échoué.",
+  FILESYSTEM_FAILED: "Une erreur de stockage empêche l'enregistrement du fichier.",
+  UNKNOWN_ERROR: "Une erreur inattendue a interrompu le traitement du Bon de Livraison.",
+});
+
+function deliveryUploadFailure(err, { step, files, actor }) {
+  const info = describeUploadError(err);
+  const name = info.name || "";
+  let code = "UNKNOWN_ERROR";
+  let status = 500;
+  if (info.errno) code = "FILESYSTEM_FAILED";
+  else if (step === "EXTRACTION") [code, status] = ["PDF_EXTRACTION_FAILED", 422];
+  else if (name === "SequelizeValidationError") [code, status] = ["VALIDATION_FAILED", 422];
+  else if (name.startsWith("Sequelize") || info.pgCode) code = "DATABASE_FAILED";
+  logger.error("[FINANCE UPLOAD] FAILED", {
+    flow: "DELIVERY_NOTE",
+    step,
+    code,
+    httpStatus: status,
+    error: info.message,
+    name: info.name,
+    pgCode: info.pgCode,
+    constraint: info.constraint,
+    detail: info.detail,
+    fields: info.fields,
+    errno: info.errno,
+    stack: err?.stack,
+    files: (files || []).map((f) => ({ filename: f.originalname, mimetype: f.mimetype, size: f.size })),
+    userId: actor?.id,
+  });
+  // Le client ne reçoit QUE le code, l'étape et un message clair : aucun détail
+  // SQL (contrainte, colonne, valeur) ni chemin interne — ils restent dans le
+  // log ci-dessus.
+  return { status, code, step, message: DELIVERY_UPLOAD_MESSAGES[code] };
 }
 
 function buildShipmentWhere(filters = {}) {
@@ -943,10 +1008,14 @@ function safeNumeric(value, maxAbs) {
 }
 
 async function processShipmentUpload(files, actor) {
-  if (!files.length) throw { status: 400, message: "Au moins un document est requis" };
+  if (!files.length) {
+    logger.warn("[FINANCE UPLOAD] REJECTED", { flow: "DELIVERY_NOTE", step: "FILE_RECEIVED", code: "FILE_UPLOAD_FAILED", httpStatus: 400, userId: actor?.id });
+    throw { status: 400, code: "FILE_UPLOAD_FAILED", step: "FILE_RECEIVED", message: "Au moins un document est requis" };
+  }
   const primaryFile = files[0];
+  const removeUploadedFiles = () => Promise.all(files.map((f) => fs.promises.unlink(f.path).catch(() => {})));
 
-  logger.info(`[DELIVERY] File uploaded (${primaryFile.originalname})`);
+  logger.info(`[DELIVERY] File uploaded (${primaryFile.originalname}, type=${primaryFile.mimetype}, size=${primaryFile.size})`);
   logger.info("[DELIVERY OCR] Text extraction started");
 
   let doc;
@@ -970,12 +1039,21 @@ async function processShipmentUpload(files, actor) {
   // si l'extraction a échoué".
   const ocrFailed = doc.engine === "none" || !doc.fullText || !doc.fullText.trim();
 
-  const extraction = await deliveryNoteFieldExtraction.extractDeliveryNoteFields({
-    fullText: doc.fullText,
-    filePath: primaryFile.path,
-    engine: doc.engine,
-    pages: doc.pages,
-  });
+  // Lecture des champs : une erreur ICI n'est plus une exception non
+  // rattrapée (500 sans cause) — étape et cause journalisées, fichiers
+  // reçus retirés du disque, message clair renvoyé.
+  let extraction;
+  try {
+    extraction = await deliveryNoteFieldExtraction.extractDeliveryNoteFields({
+      fullText: doc.fullText,
+      filePath: primaryFile.path,
+      engine: doc.engine,
+      pages: doc.pages,
+    });
+  } catch (err) {
+    await removeUploadedFiles();
+    throw deliveryUploadFailure(err, { step: "EXTRACTION", files, actor });
+  }
 
   logger.info(`[DELIVERY OCR] Delivery number: ${extraction.deliveryNumber.value ?? "null"}`);
   logger.info(`[DELIVERY OCR] Customer: ${extraction.customer.name.value ?? "null"}`);
@@ -1123,21 +1201,34 @@ async function processShipmentUpload(files, actor) {
         (!conflictFields.length || conflictFields.includes("reference"));
       if ((isShipmentNumberConflict || isAutoReferenceConflict) && attempt < MAX_ATTEMPTS) continue;
 
-      await Promise.all(files.map((f) => fs.promises.unlink(f.path).catch(() => {})));
+      // Rien de partiel : la transaction est annulée par Sequelize, et les
+      // fichiers déjà écrits par multer (hors transaction) sont retirés.
+      await removeUploadedFiles();
 
       if (hasReliableDeliveryNumber && err?.name === "SequelizeUniqueConstraintError" && !isShipmentNumberConflict) {
-        throw { status: 409, message: `Un shipment avec le numéro "${extraction.deliveryNumber.value}" existe déjà` };
+        // Vrai doublon métier : ce numéro de BL est déjà enregistré. Le
+        // document existant est conservé, aucun doublon n'est créé.
+        logger.warn("[FINANCE UPLOAD] REJECTED", {
+          flow: "DELIVERY_NOTE",
+          step: "DATABASE_TRANSACTION",
+          code: "DUPLICATE_DOCUMENT",
+          httpStatus: 409,
+          deliveryNumber: extraction.deliveryNumber.value,
+          filename: primaryFile.originalname,
+          userId: actor?.id,
+        });
+        throw {
+          status: 409,
+          code: "DUPLICATE_DOCUMENT",
+          step: "DATABASE_TRANSACTION",
+          message: `Le document a déjà été importé (Bon de Livraison n° ${extraction.deliveryNumber.value}).`,
+        };
       }
-      // §CORRECTION — WORKFLOW OCR CUSTOMER SHIPMENTS (2026-08-31) : la
-      // cause RÉELLE de l'erreur (message + stack) était jusqu'ici perdue —
-      // seul le message générique "Échec du traitement..." (déjà renvoyé au
-      // client) atteignait les logs. Cette ligne ne change AUCUN
-      // comportement HTTP (même throw ensuite) : elle rend seulement visible
-      // en logs ce qui a réellement échoué, pour distinguer une vraie
-      // erreur serveur (bug/DB) d'un cas métier normal (document illisible,
-      // déjà géré plus haut via status=OCR_FAILED — voir ocrFailed).
-      logger.error("[DELIVERY] Échec réel du traitement (avant enveloppe générique) :", err?.stack || err?.message || err);
-      throw err.status ? err : { status: 500, message: "Échec du traitement du Bon de Livraison" };
+      if (err?.status) throw err;
+      // Cause RÉELLE journalisée (étape, code, statut HTTP, erreur SQL ou
+      // système) et renvoyée au client — plus jamais le message générique
+      // « Échec du traitement du Bon de Livraison ».
+      throw deliveryUploadFailure(err, { step: "DATABASE_TRANSACTION", files, actor });
     }
   }
 }
