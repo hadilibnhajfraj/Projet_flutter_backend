@@ -78,7 +78,7 @@ describe("Dashboard Production — KPI calculés sur les données réelles", () 
       expect(all[type].fiches).toBe(all[type].validees + all[type].brouillons + all[type].archivees);
     }
     expect(all.promesh).toMatchObject({ unit: "m²", wasteUnit: "kg", tauxDechetsUnit: "kg / 100 m²" });
-    expect(all.probar).toMatchObject({ unit: "m", wasteUnit: "kg", tauxDechetsUnit: "kg / 100 m" });
+    expect(all.probar).toMatchObject({ unit: "ml", wasteUnit: "kg", tauxDechetsUnit: "kg / 100 ml" });
     expect(all.production.fiches).toBe(all.promesh.fiches + all.probar.fiches);
     expect(all.waste.total).toBeCloseTo(all.promesh.dechets + all.probar.dechets, 2);
     expect(all.period).toEqual({ key: "all", start: null, end: null });
@@ -144,7 +144,7 @@ describe("Dashboard Production — KPI calculés sur les données réelles", () 
     for (const r of all.recent) {
       expect(r.id).toMatch(/^(promesh|probar):[0-9a-f-]{36}$/);
       expect(["validee", "brouillon", "archivee"]).toContain(r.statut);
-      expect(r.quantiteUnite).toBe(r.type === "promesh" ? "m²" : "m");
+      expect(r.quantiteUnite).toBe(r.type === "promesh" ? "m²" : "ml");
       expect(r.numero).toMatch(r.type === "promesh" ? /^PROMESH-\d{4}-\d{6}$/ : /^PROBAR-\d{4}-[0-9A-F]{6}$/);
     }
   });

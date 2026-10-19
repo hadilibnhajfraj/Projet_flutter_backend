@@ -88,7 +88,7 @@ const DICT = {
     kActiveUsers: "Utilisateurs avec activité",
     kTotalFiches: "Fiches créées",
     kPromeshProduction: "Production PROMESH (m²)",
-    kProbarProduction: "Production PROBAR",
+    kProbarProduction: "Production PROBAR (ml)",
     // columns
     cCommercial: "Commercial",
     cProject: "Projet",
@@ -368,7 +368,7 @@ const DICT = {
     kActiveUsers: "Users with activity",
     kTotalFiches: "Sheets created",
     kPromeshProduction: "PROMESH production (m²)",
-    kProbarProduction: "PROBAR production",
+    kProbarProduction: "PROBAR production (ml)",
     cCommercial: "Sales rep",
     cProject: "Project",
     cClient: "Client",

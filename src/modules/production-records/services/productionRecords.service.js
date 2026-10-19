@@ -398,7 +398,7 @@ async function getProductionTotals(filters, actor) {
     probar: wantProbar
       ? {
           quantity: toNumberOrZero(probarAgg?.quantity),
-          quantityUnite: "m",
+          quantityUnite: "ml",
           diameter: toNumberOrZero(probarAgg?.diameter),
           diameterUnite: "mm",
         }
@@ -552,7 +552,7 @@ async function buildProbarSummary(filters, actor) {
   const grandTotal = rows.reduce((sum, r) => sum + (r.quantite || 0), 0);
   const grandTotalWaste = await attachWaste(rows, "PROBAR", actor, { ignoreOwnerScope });
 
-  return { rows, grandTotal, unit: "m", totalRecords: rows.length, grandTotalWaste, wasteUnit: "kg", ...(await summaryCoverage(IndustrialRecord, where, rows.length)) };
+  return { rows, grandTotal, unit: "ml", totalRecords: rows.length, grandTotalWaste, wasteUnit: "kg", ...(await summaryCoverage(IndustrialRecord, where, rows.length)) };
 }
 
 async function getProductionSummary(filters, actor) {

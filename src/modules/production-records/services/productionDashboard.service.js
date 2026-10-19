@@ -37,7 +37,7 @@ const PERIODS = ["today", "week", "month", "year", "custom", "all"];
 // Contrôle Qualité — Machine 1..4), jamais une machine inventée.
 const LINES = Object.freeze([
   { type: "promesh", label: "PROMESH", unit: "m²", module: "PROMESH" },
-  { type: "probar", label: "PROBAR", unit: "m", module: "PROBAR" },
+  { type: "probar", label: "PROBAR", unit: "ml", module: "PROBAR" },
 ]);
 const machinesOf = (label) => qcConfig.productionLines.find((l) => l.type === label)?.machines || [];
 
