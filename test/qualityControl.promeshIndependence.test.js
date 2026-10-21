@@ -35,6 +35,7 @@ const PRODUCTION_EMAIL = "responsable_logistique@cbi-tunisia.com";
 const PASSWORD = process.env.QC_TEST_PASSWORD || "ChangeMe123!";
 const DAY = "2036-03-14"; // aucune fiche de production à cette date
 const auth = (t) => ({ Authorization: `Bearer ${t}` });
+const { rootAdminToken } = require("./helpers/rootAdminToken");
 const created = [];
 
 const sql = (query, replacements) => sequelize.query(query, { replacements, type: QueryTypes.SELECT });
@@ -139,12 +140,13 @@ describe("Contrôle Qualité PROMESH — fiches indépendantes de la production"
     expect(c.specificParameters).toEqual([]);
   });
 
-  test("BROUILLON : modifiable et supprimable ; VALIDÉ : lecture seule, ni modification ni suppression", async () => {
-    // Brouillon supprimable.
+  test("BROUILLON : modifiable et supprimable (Super Admin) ; VALIDÉ : lecture seule, ni modification ni suppression", async () => {
+    // Brouillon supprimable — par le Super Admin uniquement.
     const draft = await post("/quality-control", { productionType: "PROMESH", machine: "2", productionDate: DAY, poste: "soir", reading: { readingTime: "08:00", items: [] } });
     expect(draft.status).toBe(201);
     created.push(draft.body.data.id);
-    expect((await del(`/quality-control/${draft.body.data.id}`)).status).toBe(200);
+    expect((await del(`/quality-control/${draft.body.data.id}`)).status).toBe(403);
+    expect((await request(app).delete(`/quality-control/${draft.body.data.id}`).set(auth(await rootAdminToken()))).status).toBe(200);
     expect(await ids("productionType=PROMESH&machine=2")).not.toContain(draft.body.data.id);
 
     // Validation, toujours sans production.

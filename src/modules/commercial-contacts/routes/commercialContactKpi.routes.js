@@ -3,15 +3,17 @@
 const router = require("express").Router();
 const ctrl = require("../controllers/commercialContactKpi.controller");
 const { authRequired } = require("../../../middleware/auth.middleware");
-const { requireRole }  = require("../../../middleware/requireRole");
+const { requireRoleOrProbarProjectManager } = require("../../../middleware/requireRole");
 
 // ── GET /commercial-contacts/kpi ─────────────────────────────────────────────
 // admin / superadmin → KPI globaux (tous contacts, tous commerciaux)
 // commercial        → KPI personnels (filtré WHERE createdBy = userId)
+// comptes @probardistribution.com éligibles (config/probarProjectAccess.js)
+//                   → mêmes KPI personnels que commercial
 router.get(
   "/kpi",
   authRequired,
-  requireRole("admin", "superadmin", "superadmin2", "commercial"),
+  requireRoleOrProbarProjectManager("admin", "superadmin", "superadmin2", "commercial"),
   ctrl.getKPI
 );
 
@@ -21,7 +23,7 @@ router.get(
 router.get(
   "/my-kpi",
   authRequired,
-  requireRole("admin", "superadmin", "superadmin2", "commercial"),
+  requireRoleOrProbarProjectManager("admin", "superadmin", "superadmin2", "commercial"),
   ctrl.getMyKpiEndpoint
 );
 
@@ -30,7 +32,7 @@ router.get(
 router.get(
   "/analytics",
   authRequired,
-  requireRole("admin", "superadmin", "superadmin2", "commercial"),
+  requireRoleOrProbarProjectManager("admin", "superadmin", "superadmin2", "commercial"),
   ctrl.getAnalytics
 );
 
@@ -38,7 +40,7 @@ router.get(
 router.get(
   "/kpi/me",
   authRequired,
-  requireRole("admin", "superadmin", "superadmin2", "commercial"),
+  requireRoleOrProbarProjectManager("admin", "superadmin", "superadmin2", "commercial"),
   ctrl.getKPIMe
 );
 

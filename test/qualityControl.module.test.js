@@ -33,6 +33,7 @@ const RUN_ID = Date.now();
 const createdControls = [];
 const createdUsers = [];
 const auth = (t) => ({ Authorization: `Bearer ${t}` });
+const { rootAdminToken } = require("./helpers/rootAdminToken");
 
 async function itemValue(controlId, key) {
   const [r] = await sequelize.query(`SELECT value, status FROM quality_control_items WHERE "qualityControlId" = :id AND "parameterKey" = :k`, {
@@ -621,7 +622,7 @@ describe("Contrôle Qualité — module PROMESH / PROBAR", () => {
 
   // ── Statut BROUILLON / VALIDÉ, suppression, machines, contrôleur ─────────
 
-  test("TEST A/B/C/D — brouillon modifiable et supprimable ; validé NON CONFORME = enregistré puis lecture seule", async () => {
+  test("TEST A/B/C/D — brouillon modifiable, supprimable par le Super Admin seul ; validé NON CONFORME = enregistré puis lecture seule", async () => {
     // A — brouillon : modifiable.
     const draft = (await request(app).post("/quality-control").set(auth(qc.token)).send({ productionType: "PROMESH", machine: "2" })).body.data;
     createdControls.push(draft.id);
@@ -636,16 +637,17 @@ describe("Contrôle Qualité — module PROMESH / PROBAR", () => {
     const locked = await request(app).put(`/quality-control/${draft.id}`).set(auth(qc.token)).send({ remark: "après coup" });
     expect(locked.status).toBe(403);
     expect(locked.body.message).toBe("Un contrôle validé est en lecture seule et ne peut plus être modifié.");
+    // Suppression : ni controle_qualite ni un superadmin autre que le compte racine.
     const noDel = await request(app).delete(`/quality-control/${draft.id}`).set(auth(qc.token));
     expect(noDel.status).toBe(403);
-    expect(noDel.body.message).toBe("Un contrôle validé ne peut pas être supprimé.");
+    expect(noDel.body.code).toBe("PERMISSION_DENIED");
     expect((await request(app).delete(`/quality-control/${draft.id}`).set(auth(adminToken))).status).toBe(403);
 
-    // D — suppression d'un brouillon : contrôle supprimé, fiche intacte, statistiques à jour.
+    // D — suppression d'un brouillon (Super Admin) : contrôle supprimé, fiche intacte, statistiques à jour.
     const d2 = (await request(app).post("/quality-control").set(auth(qc.token)).send({ productionType: "PROMESH", machine: "2" })).body.data;
     createdControls.push(d2.id);
     const before = await promeshStats();
-    const del = await request(app).delete(`/quality-control/${d2.id}`).set(auth(qc.token));
+    const del = await request(app).delete(`/quality-control/${d2.id}`).set(auth(await rootAdminToken()));
     expect(del.status).toBe(200);
     const after = await promeshStats();
     expect({ t: after.total, av: after.aVerifier }).toEqual({ t: before.total - 1, av: before.aVerifier - 1 });
@@ -742,8 +744,8 @@ describe("Contrôle Qualité — module PROMESH / PROBAR", () => {
     const ignored = await request(app).put(`/quality-control/${c.id}`).set(auth(qc.token)).send({ productionRecordId: "promesh:00000000-0000-0000-0000-000000000001" });
     expect(ignored.status).toBe(200);
     expect(ignored.body.data).toMatchObject({ productionRecordRef: null, ficheNumero: null });
-    // Suppression du brouillon.
-    expect((await request(app).delete(`/quality-control/${c.id}`).set(auth(qc.token))).status).toBe(200);
+    // Suppression du brouillon (Super Admin).
+    expect((await request(app).delete(`/quality-control/${c.id}`).set(auth(await rootAdminToken()))).status).toBe(200);
     expect((await machineList("PROMESH", "1")).map((x) => x.id)).not.toContain(c.id);
   });
 

@@ -47,6 +47,7 @@ const RUN_ID = Date.now();
 const created = [];
 const users = [];
 const auth = (t) => ({ Authorization: `Bearer ${t}` });
+const { rootAdminToken } = require("./helpers/rootAdminToken");
 
 const binary = (res, cb) => {
   res.setEncoding("binary");
@@ -444,10 +445,10 @@ describe("Contrôle Qualité — comparaison qualité dynamique", () => {
     expect((await request(app).post(`/quality-control/${fiche.id}/validate`).set(auth(qc)).send({ status: "NON_CONFORME" })).status).toBe(200);
     const validated = await data("&productionType=PROBAR");
     expect(validated.periodB).toMatchObject({ total: 3, nonConformes: 1, valides: 3, tauxConformite: 66.67 });
-    // Suppression logique d'un brouillon : il sort des statistiques.
+    // Suppression logique (Super Admin uniquement) : la fiche sort des statistiques.
     const tmp = await make("PROBAR", "3", "2034-03-31", "matin", { validate: false });
     expect((await data("&productionType=PROBAR")).periodB.total).toBe(4);
-    expect((await request(app).delete(`/quality-control/${tmp.id}`).set(auth(qc))).status).toBe(200);
+    expect((await request(app).delete(`/quality-control/${tmp.id}`).set(auth(await rootAdminToken()))).status).toBe(200);
     expect((await data("&productionType=PROBAR")).periodB.total).toBe(3);
   });
 });

@@ -46,6 +46,7 @@ const QualityControl = require("../../../models/QualityControl");
 const QualityControlReading = require("../../../models/QualityControlReading");
 const QualityControlItem = require("../../../models/QualityControlItem");
 const QualityControlHistory = require("../../../models/QualityControlHistory");
+const { ROOT_ADMIN_EMAIL } = require("../../../config/rootAdmin");
 const { emitToUser } = require("../../../socket");
 const logger = require("../../../utils/logger");
 const { findProductionForQualityControl, readProductionInfo } = require("./qualityControlProduction.service");
@@ -1436,11 +1437,34 @@ async function deleteReading(controlId, readingId, actor) {
 // fiche, ses prélèvements, leurs paramètres et l'historique restent en base
 // (audit) mais disparaissent de toutes les listes / statistiques. Action
 // journalisée.
+// Droit de suppression revérifié EN BASE (jamais seulement sur le JWT) :
+// compte actif, rôle "superadmin" et compte racine.
+async function assertCanDeleteControl(actor, transaction) {
+  const user = await User.findByPk(actor.id, { attributes: ["id", "email", "role", "isActive"], transaction });
+  const email = String(user?.email || "").toLowerCase().trim();
+  if (!user || !user.isActive || !cfg.deleteRoles.includes(user.role) || email !== ROOT_ADMIN_EMAIL) {
+    throw { status: 403, code: "PERMISSION_DENIED", message: "Seul le Super Admin peut supprimer une fiche de contrôle qualité." };
+  }
+}
+
+// Suppression LOGIQUE (paranoid) d'une fiche, brouillon ou validée — Super
+// Admin uniquement. Prélèvements, mesures, remarques et historique sont
+// conservés (traçabilité) ; la fiche de production n'est jamais touchée.
+// Audit : ligne DELETE dans quality_control_history (Super Admin, fiche,
+// date/heure) + deletedBy/deletedAt sur la fiche, dans la même transaction.
 async function deleteControl(id, actor) {
   await sequelize.transaction(async (transaction) => {
+    await assertCanDeleteControl(actor, transaction);
     const control = await loadControlForActor(id, actor, { transaction, lock: true });
-    assertDraft(control, "delete");
-    await QualityControlHistory.create(historyRow(control, actor, { action: "DELETE", field: "status", oldValue: control.status }), { transaction });
+    await QualityControlHistory.create(
+      historyRow(control, actor, {
+        action: "DELETE",
+        field: "status",
+        oldValue: control.validatedAt ? `${control.status} (validée)` : `${control.status} (brouillon)`,
+        newValue: `Fiche ${control.reference} supprimée`,
+      }),
+      { transaction }
+    );
     control.deletedBy = actor.id;
     await control.save({ transaction });
     await control.destroy({ transaction });

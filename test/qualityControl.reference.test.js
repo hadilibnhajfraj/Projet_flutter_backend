@@ -26,6 +26,7 @@ const { sequelize } = require("../src/db");
 const QC_EMAIL = "controle_qualite@cbi-tunisia.com";
 const QC_PASSWORD = process.env.QC_TEST_PASSWORD || "ChangeMe123!";
 const auth = (t) => ({ Authorization: `Bearer ${t}` });
+const { rootAdminToken } = require("./helpers/rootAdminToken");
 const created = [];
 
 const sql = (query, replacements) => sequelize.query(query, { replacements, type: QueryTypes.SELECT });
@@ -98,7 +99,7 @@ describe("Contrôle Qualité — référence QC-PROMESH / QC-PROBAR", () => {
   });
 
   test("TEST SUPPRESSION — un numéro supprimé n'est jamais réutilisé", async () => {
-    const del = await request(app).delete(`/quality-control/${refs.p2.id}`).set(auth(qc));
+    const del = await request(app).delete(`/quality-control/${refs.p2.id}`).set(auth(await rootAdminToken()));
     expect(del.status).toBe(200);
     const next = await create("PROMESH");
     expect(next.body.data.reference).toBe(ref("PROMESH", promesh0 + 4));

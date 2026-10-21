@@ -53,6 +53,7 @@ async function signIn(email, password = PASSWORD) {
 }
 
 const auth = (token) => ({ Authorization: `Bearer ${token}` });
+const { rootAdminToken } = require("./helpers/rootAdminToken");
 
 describe("Contrôle qualité — checklist de production", () => {
   let qcToken;
@@ -332,11 +333,10 @@ describe("Contrôle qualité — checklist de production", () => {
     expect(list.body.data.some((c) => c.id === controlId)).toBe(false);
   });
 
-  test("suppression : contrôle VALIDÉ refusé pour tous (403) ; BROUILLON supprimé (logique) par son contrôleur, historique conservé", async () => {
+  test("suppression : refusée (403) à controle_qualite et à un superadmin non racine ; BROUILLON supprimé (logique) par le Super Admin, historique conservé", async () => {
     for (const token of [qcToken, adminToken]) {
       const res = await request(app).delete(`/quality-control/${controlId}`).set(auth(token));
       expect(res.status).toBe(403);
-      expect(res.body).toMatchObject({ code: "CONTROL_LOCKED", message: "Un contrôle validé ne peut pas être supprimé." });
     }
     expect((await request(app).get(`/quality-control/${controlId}`).set(auth(qcToken))).status).toBe(200);
 
@@ -346,9 +346,10 @@ describe("Contrôle qualité — checklist de production", () => {
     );
     const draft = (await request(app).post("/quality-control").set(auth(qcToken)).send({ productionType: "PROMESH", machine: "1" })).body.data;
     createdControlIds.push(draft.id);
-    // Un autre contrôleur ne peut pas supprimer ce brouillon.
+    // Ni son contrôleur ni un autre ne peuvent supprimer ce brouillon : Super Admin uniquement.
     expect((await request(app).delete(`/quality-control/${draft.id}`).set(auth(otherQcToken))).status).toBe(403);
-    const del = await request(app).delete(`/quality-control/${draft.id}`).set(auth(qcToken));
+    expect((await request(app).delete(`/quality-control/${draft.id}`).set(auth(qcToken))).status).toBe(403);
+    const del = await request(app).delete(`/quality-control/${draft.id}`).set(auth(await rootAdminToken()));
     expect(del.status).toBe(200);
     expect((await request(app).get(`/quality-control/${draft.id}`).set(auth(qcToken))).status).toBe(404);
 

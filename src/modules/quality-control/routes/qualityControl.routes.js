@@ -5,14 +5,16 @@ const ctrl = require("../controllers/qualityControl.controller");
 const { validateCreate, validateUpdate, validateValidate, validateMatchQuery, validateReadingCreate, validateReadingSave } = require("../validators/qualityControl.validator");
 const { authRequired } = require("../../../middleware/auth.middleware");
 const { requireRole } = require("../../../middleware/requireRole");
+const { requireRootAdmin } = require("../../../middleware/requireRootAdmin");
 const cfg = require("../../../config/qualityControl");
 
 // RBAC existant (requireRole + moduleAccessGuard) — aucun système parallèle.
 // Saisie (créer/remplir/valider/modifier) : UNIQUEMENT controle_qualite
 // (ses propres contrôles, portée appliquée dans le service). Consultation :
-// controle_qualite + admins. Suppression (logique) : BROUILLONS uniquement
-// (controle_qualite : les siens ; admins : tous). Un contrôle VALIDÉ est en
-// lecture seule pour tous : PUT / validate / DELETE → 403 CONTROL_LOCKED.
+// controle_qualite + admins. Un contrôle VALIDÉ est en lecture seule : PUT /
+// validate → 403 CONTROL_LOCKED. Suppression (logique) d'une fiche, brouillon
+// ou validée : Super Admin UNIQUEMENT (rôle superadmin + compte racine,
+// revérifiés en base par le service) — tout autre compte → 403.
 const WRITE_ROLES = cfg.writeRoles;
 const READ_ROLES = cfg.readRoles;
 const DELETE_ROLES = cfg.deleteRoles;
@@ -41,7 +43,7 @@ router.post("/", requireRole(...WRITE_ROLES), validateCreate, ctrl.createControl
 router.get("/:id", requireRole(...READ_ROLES), ctrl.getControl);
 router.put("/:id", requireRole(...WRITE_ROLES), validateUpdate, ctrl.updateControl);
 router.post("/:id/validate", requireRole(...WRITE_ROLES), validateValidate, ctrl.validateControl);
-router.delete("/:id", requireRole(...DELETE_ROLES), ctrl.deleteControl);
+router.delete("/:id", requireRole(...DELETE_ROLES), requireRootAdmin, ctrl.deleteControl);
 
 // PRÉLÈVEMENTS d'une fiche (heure du contrôle + paramètres) : saisie réservée à
 // controle_qualite. Fiche validée → 403 CONTROL_LOCKED ; prélèvement validé →

@@ -464,10 +464,12 @@ module.exports = {
   role: "controle_qualite",
   writeRoles: ["controle_qualite"],
   readRoles: ["controle_qualite", "admin", "superadmin", "superadmin2"],
-  // Suppression : BROUILLONS uniquement (un contrôle validé est en lecture
-  // seule pour tous — voir service#assertDraft). controle_qualite supprime
-  // ses propres brouillons (owner-scoped), les admins tout brouillon.
-  deleteRoles: ["controle_qualite", "admin", "superadmin", "superadmin2"],
+  // Suppression (LOGIQUE — paranoid, prélèvements/mesures/historique
+  // conservés) d'une fiche, brouillon ou validée : réservée au Super Admin =
+  // rôle "superadmin" ET compte racine (config/rootAdmin.js), revérifiés en
+  // base par le service. controle_qualite, admin, superadmin2 et les rôles
+  // Production n'ont jamais ce droit.
+  deleteRoles: ["superadmin"],
 
   parameters: Object.freeze(PARAMETERS),
   readingParameters: READING_PARAMETERS,

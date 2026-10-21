@@ -25,6 +25,7 @@ const {
 const { getRequestContext } = require("../utils/requestContext");
 const { mfaChallengeRequired, requireMfaFeatureEnabled } = require("../middleware/mfaChallenge.middleware");
 const { logMfaAttempt } = require("../services/mfaAttemptLog.service");
+const { isProbarDomainEmail, isProbarProjectManager } = require("../config/probarProjectAccess");
 
 const router = express.Router();
 
@@ -376,7 +377,15 @@ async function issueSession(res, user) {
   res.cookie("refreshToken", refreshToken, cookieOptions());
 
   return {
-    user: { id: user.id, email: user.email, role: user.role, isActive: user.isActive },
+    user: {
+      id: user.id,
+      email: user.email,
+      role: user.role,
+      isActive: user.isActive,
+      // Calculées par le backend (seule autorité) — le frontend n'adapte que
+      // l'affichage ; chaque route revérifie elle-même ces droits.
+      permissions: { probarProjectManager: isProbarProjectManager(user) },
+    },
     accessToken,
     refreshToken,
   };
@@ -427,7 +436,7 @@ router.post("/signup", async (req, res) => {
 
     if (cleanEmail === "accueilcbif@gmail.com") {
       role = "accueil";
-    } else if (cleanEmail.endsWith("@probardistribution.com")) {
+    } else if (isProbarDomainEmail(cleanEmail)) {
       role = "commercial";
     }
 

@@ -33,6 +33,7 @@ const RUN_ID = Date.now();
 const DAY = "2032-05-10"; // fiches de production du test
 const EMPTY_DAY = "2032-05-11"; // aucune fiche de production
 const auth = (t) => ({ Authorization: `Bearer ${t}` });
+const { rootAdminToken } = require("./helpers/rootAdminToken");
 
 const createdControls = [];
 const promeshIds = [];
@@ -59,8 +60,8 @@ describe("Contrôle Qualité — lot, ordre de fabrication, association automati
   }
 
   // Une seule fiche OUVERTE par machine / date / poste : chaque test libère
-  // sa fiche (brouillon supprimé) pour le suivant.
-  const drop = (res) => request(app).delete(`/quality-control/${res.body.data.id}`).set(auth(qc));
+  // sa fiche (brouillon supprimé par le Super Admin, seul autorisé) pour le suivant.
+  const drop = async (res) => request(app).delete(`/quality-control/${res.body.data.id}`).set(auth(await rootAdminToken()));
 
   beforeAll(async () => {
     qc = (await request(app).post("/auth/signin").send({ email: QC_EMAIL, password: QC_PASSWORD })).body.accessToken;

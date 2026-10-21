@@ -11,10 +11,12 @@ const CommercialContactReminder = require("../models/CommercialContactReminder")
 const User = require("../models/User");
 const UserProfile = require("../models/UserProfile");
 const CommercialContactStatusHistory = require("../models/CommercialContactStatusHistory");
+const CommercialProfile = require("../models/CommercialProfile");
 const uploads = require("../middleware/uploads");
 const { runFollowupAutomation } = require("../services/followupAutomation.service");
 const { recordStatusChange } = require("../services/commercialContactHistory.service");
 const { isCommercialEligibleRole } = require("../constants/commercialRoles");
+const { isProbarProjectManager, isCommercialScoped } = require("../config/probarProjectAccess");
 const { resolveFullName } = require("../utils/userDisplay");
 function mapStageToAction(stage) {
   switch (stage) {
@@ -46,18 +48,18 @@ function mapStageToAction(stage) {
 
 // ═══════════════════════════════════════════════════════════════════════
 // AUTOMATISATION FOLLOW-UP — calendrier / notifications / email / WhatsApp
-// Déclenchée uniquement quand l'utilisateur connecté est
-// info@probardistribution.com ET que le Follow-up a date + heure.
+// Déclenchée uniquement quand l'utilisateur connecté est un compte PROBAR
+// éligible (info@probardistribution.com et les autres comptes
+// @probardistribution.com de rôle user/commercial — voir
+// config/probarProjectAccess.js) ET que le Follow-up a date + heure.
 // Ne modifie rien pour tous les autres comptes (comportement inchangé).
 // ═══════════════════════════════════════════════════════════════════════
-const FOLLOWUP_AUTOMATION_EMAIL = "info@probardistribution.com";
-
 function _isFollowupAutomationActor(req) {
-  return (req.user?.email || "").toLowerCase().trim() === FOLLOWUP_AUTOMATION_EMAIL;
+  return isProbarProjectManager(req.user);
 }
 
 // Retourne un message d'erreur si le champ "Commercial" est obligatoire et
-// manquant, sinon null. N'exige rien pour les comptes autres qu'info@.
+// manquant, sinon null. N'exige rien pour les comptes non PROBAR.
 function _validateCommercialField(req, body) {
   if (!_isFollowupAutomationActor(req)) return null;
   if (!(body.dateRelance && body.heureRelance)) return null;
@@ -98,10 +100,41 @@ async function _maybeRunFollowupAutomation(req, contact, relance) {
   }
 }
 
+// ═══════════════════════════════════════════════════════════════════════
+// PROFILS COMMERCIAUX ("Sélection du commercial")
+// Liste = profils prédéfinis + noms déjà présents sur les contacts (partagés,
+// comportement historique) + profils personnalisés enregistrés par le compte
+// connecté UNIQUEMENT (table commercial_profiles) — jamais ceux des autres.
+// ═══════════════════════════════════════════════════════════════════════
+const DEFAULT_COMMERCIAL_NAMES = ["najeh", "mooemen", "mayssa", "wajdi"];
+const COMMERCIAL_PROFILE_NAME_MAX = 120;
+
+const _profileNameKey = (name) => String(name).trim().toLowerCase();
+
+// Nom saisi → nom propre (espaces réduits), ou null si invalide.
+function _cleanProfileName(raw) {
+  if (typeof raw !== "string") return null;
+  const name = raw.replace(/\s+/g, " ").trim();
+  // eslint-disable-next-line no-control-regex
+  if (!name || name.length > COMMERCIAL_PROFILE_NAME_MAX || /[\x00-\x1f\x7f]/.test(name)) return null;
+  return name;
+}
+
+// Ajoute `extra` à `names` sans doublon (comparaison insensible à la casse).
+function _mergeNames(names, extra) {
+  const seen = new Set(names.map(_profileNameKey));
+  for (const n of extra) {
+    const key = _profileNameKey(n);
+    if (!seen.has(key)) {
+      seen.add(key);
+      names.push(n);
+    }
+  }
+  return names;
+}
+
 router.get("/user-names/list", authRequired, async (req, res) => {
   try {
-    const DEFAULT_USERS = ["najeh", "mooemen", "mayssa", "wajdi"];
-
     const rows = await CommercialContact.findAll({
       attributes: ["user_nom", "user_nom_custom"],
     });
@@ -112,12 +145,60 @@ router.get("/user-names/list", authRequired, async (req, res) => {
       if (r.user_nom_custom) dbUsers.push(r.user_nom_custom);
     });
 
-    const allNames = [...new Set([...DEFAULT_USERS, ...dbUsers])];
+    const allNames = [...new Set([...DEFAULT_COMMERCIAL_NAMES, ...dbUsers])];
+
+    const ownProfiles = await CommercialProfile.findAll({
+      where: { userId: req.user.sub },
+      attributes: ["name"],
+      order: [["createdAt", "ASC"]],
+    });
+    _mergeNames(allNames, ownProfiles.map((p) => p.name));
 
     return res.json(allNames);
   } catch (err) {
     console.error("❌ GET USER NAMES ERROR:", err);
     res.status(500).json({ message: err.message });
+  }
+});
+
+// POST /commercial-contacts/user-names — Body: { name }
+// Enregistre durablement un profil "Autre commercial" pour le compte connecté.
+// Idempotent : un nom déjà enregistré par ce compte (même casse ou non) n'est
+// jamais dupliqué (200), un nom prédéfini n'est jamais recréé (200), sinon
+// création (201). Réservé aux comptes qui utilisent la sélection commerciale
+// (rôle commercial + comptes PROBAR éligibles, voir probarProjectAccess.js).
+router.post("/user-names", authRequired, async (req, res) => {
+  try {
+    if (!isCommercialScoped(req.user)) {
+      return res.status(403).json({ success: false, code: "PERMISSION_DENIED", message: "Forbidden" });
+    }
+
+    const name = _cleanProfileName(req.body?.name);
+    if (!name) {
+      return res.status(400).json({
+        message: `Nom du commercial obligatoire (${COMMERCIAL_PROFILE_NAME_MAX} caractères maximum)`,
+      });
+    }
+
+    const nameKey = _profileNameKey(name);
+    const predefined = DEFAULT_COMMERCIAL_NAMES.find((n) => n === nameKey);
+    if (predefined) {
+      return res.json({ success: true, created: false, profile: { id: null, name: predefined } });
+    }
+
+    const [profile, created] = await CommercialProfile.findOrCreate({
+      where: { userId: req.user.sub, nameKey },
+      defaults: { userId: req.user.sub, name, nameKey },
+    });
+
+    return res.status(created ? 201 : 200).json({
+      success: true,
+      created,
+      profile: { id: profile.id, name: profile.name },
+    });
+  } catch (err) {
+    console.error("❌ CREATE COMMERCIAL PROFILE ERROR:", err);
+    res.status(500).json({ message: "Erreur lors de l'enregistrement du profil commercial" });
   }
 });
 
@@ -137,9 +218,16 @@ router.post("/select-commercial", authRequired, async (req, res) => {
     }
 
     const name = String(commercialName).trim();
-    const DEFAULT_USERS = ["najeh", "mooemen", "mayssa", "wajdi"];
 
-    let exists = DEFAULT_USERS.includes(name);
+    let exists = DEFAULT_COMMERCIAL_NAMES.includes(name);
+
+    // Profil personnalisé enregistré par le compte connecté.
+    if (!exists) {
+      exists = !!(await CommercialProfile.findOne({
+        where: { userId: req.user.sub, nameKey: _profileNameKey(name) },
+        attributes: ["id"],
+      }));
+    }
 
     if (!exists) {
       const ENUM_USERS = ["najeh", "mooemen", "mayssa"];
@@ -256,12 +344,16 @@ router.get("/", authRequired, async (req, res) => {
     //   where={} reste interdit pour ce rôle (toujours au moins le OR
     //   ci-dessus), mais l'absence de résultat n'est plus jamais décidée
     //   en dehors de la base — c'est Postgres qui tranche.
+    //   Même périmètre pour les comptes @probardistribution.com de rôle
+    //   "user" (config/probarProjectAccess.js) : jamais une vue plus large
+    //   que celle d'info@probardistribution.com.
     // - tout autre rôle (user, accueil, ...) : vue complète, comportement
     //   historique inchangé (aucune restriction définie pour eux ici).
     // =============================
     let assignedContactIds = null; // null = non applicable à ce rôle
+    const commercialScoped = isCommercialScoped(req.user);
 
-    if (req.user.role === "commercial") {
+    if (commercialScoped) {
       const relanceRows = await CommercialContactRelance.findAll({
         where: { commercialId: req.user.sub },
         attributes: ["commercialContactId"],
@@ -290,7 +382,7 @@ router.get("/", authRequired, async (req, res) => {
     console.log(
       "WHERE AFTER =",
       JSON.stringify(where, null, 2),
-      req.user.role === "commercial"
+      commercialScoped
         ? `+ OR[createdBy=${req.user.sub}, commercialId=${req.user.sub}${assignedContactIds.length ? `, id IN (${assignedContactIds.length} ids)` : ""}]`
         : ""
     );
