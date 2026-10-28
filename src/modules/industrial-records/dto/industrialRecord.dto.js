@@ -1,5 +1,7 @@
 "use strict";
 
+const { toApprovalBlock } = require("../../production-fiche-approvals/services/approvalBlock");
+
 const MELANGE_RAP_KG_GROUPS = ["a", "b", "c", "gc", "pc"];
 const MELANGE_LINES = ["L1", "L2", "L3", "L4"];
 
@@ -101,6 +103,8 @@ function toIndustrialRecordResponse(record, { light = false } = {}) {
     melangeSummary: light ? toMelangeSummary(r.melangeData) : null,
 
     statut: r.statut,
+    // Validation par le responsable logistique (null : fiche hors circuit).
+    approval: toApprovalBlock(r),
 
     createdBy: r.createdBy,
     creator: toCreatorRef(r.creator),

@@ -43,14 +43,15 @@ function isOwnerScoped(role) {
 // les comptes production_1..5@cbi-tunisia.com (voir production-accounts.
 // seeder.js), qui doivent RESTER owner-scoped partout, y compris sur
 // Production Summary (verrouillé par productionRecords.createdByFilter.
-// test.js). Seul le compte responsable_logistique@cbi-tunisia.com obtient la
+// test.js). Seuls les responsables logistique et production obtiennent la
 // même vue Production Summary qu'un superadmin — son rôle n'est PAS changé
 // (§9/§16 du ticket) et il reste owner-scoped sur tous les autres écrans/
 // endpoints (Production Records list, KPI cards, filtres hors Summary...).
-const PRODUCTION_SUMMARY_FULL_VISIBILITY_EMAILS = new Set(["responsable_logistique@cbi-tunisia.com"]);
+// Responsables logistique et production (config/logisticsManagers.js).
+const logisticsManagers = require("../../../config/logisticsManagers");
 
 function hasFullProductionSummaryVisibility(actor) {
-  return !isOwnerScoped(actor.role) || PRODUCTION_SUMMARY_FULL_VISIBILITY_EMAILS.has(actor.email);
+  return !isOwnerScoped(actor.role) || logisticsManagers.isLogisticsManager(actor.email);
 }
 
 const HARD_FETCH_CAP = 1000;

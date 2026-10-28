@@ -6,6 +6,7 @@ const { validateCreate, validateUpdate } = require("../validators/industrialReco
 const { authRequired } = require("../../../middleware/auth.middleware");
 const { requireRole } = require("../../../middleware/requireRole");
 const { complianceGuard } = require("../../production-compliance/middleware/productionComplianceGuard");
+const { rawMaterialRequestGuard } = require("../../raw-material-requests/middleware/rawMaterialRequestGuard");
 
 // Mêmes rôles que POR PROMESH — ce module générique sert PROBAR, MÉLANGE
 // et MAINTENANCE, qui partagent l'espace dédié industriel. finance_production
@@ -16,7 +17,7 @@ const DELETE_ROLES = ["admin", "superadmin", "superadmin2"];
 
 router.use(authRequired);
 
-router.post("/", requireRole(...READ_WRITE_ROLES), validateCreate, complianceGuard({ source: "probar", mode: "create" }), ctrl.createRecord);
+router.post("/", requireRole(...READ_WRITE_ROLES), validateCreate, complianceGuard({ source: "probar", mode: "create" }), rawMaterialRequestGuard({ source: "probar" }), ctrl.createRecord);
 router.get("/", requireRole(...READ_WRITE_ROLES), ctrl.listRecords);
 router.get("/:id", requireRole(...READ_WRITE_ROLES), ctrl.getRecord);
 router.put("/:id", requireRole(...READ_WRITE_ROLES), validateUpdate, complianceGuard({ source: "probar", mode: "update" }), ctrl.updateRecord);

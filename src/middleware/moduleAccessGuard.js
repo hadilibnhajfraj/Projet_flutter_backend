@@ -15,6 +15,13 @@ const ALLOWED_PREFIXES_BY_ROLE = {
     // nominative (responsable logistique uniquement) est revérifiée par la
     // route elle-même : production_1..5 reçoivent 403 malgré ce préfixe.
     "/production-requests",
+    // Demande de matières premières avant création de fiche (production_1, poste Matin).
+    "/raw-material-requests",
+    // Validation des fiches de production (responsable logistique ; créateurs : leurs fiches).
+    "/production-fiche-approvals",
+    // Cloche de notifications : chaque route ne lit / modifie que les
+    // notifications de l'utilisateur connecté (where userId = req.user.sub).
+    "/notifications",
     "/hr-requests",
     "/recuperables",
     "/maintenance-requests",

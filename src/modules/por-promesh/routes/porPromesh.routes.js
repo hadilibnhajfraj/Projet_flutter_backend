@@ -8,6 +8,7 @@ const { requireRole } = require("../../../middleware/requireRole");
 const { attachmentUpload } = require("../../../middleware/porPromeshAttachment.middleware");
 const { handleUploadError } = require("../../../middleware/projectAction.validation");
 const { complianceGuard } = require("../../production-compliance/middleware/productionComplianceGuard");
+const { rawMaterialRequestGuard } = require("../../raw-material-requests/middleware/rawMaterialRequestGuard");
 
 // Create/read/update: admin, superadmin, and the logistics/purchasing role
 // (the latter scoped to its own fiches — enforced in the service layer).
@@ -21,11 +22,11 @@ const DELETE_ROLES = ["admin", "superadmin", "superadmin2"];
 
 router.use(authRequired);
 
-router.post("/", requireRole(...READ_WRITE_ROLES), validateCreate, complianceGuard({ source: "promesh", mode: "create" }), ctrl.createPorPromesh);
+router.post("/", requireRole(...READ_WRITE_ROLES), validateCreate, complianceGuard({ source: "promesh", mode: "create" }), rawMaterialRequestGuard({ source: "promesh" }), ctrl.createPorPromesh);
 router.get("/", requireRole(...READ_WRITE_ROLES), ctrl.listPorPromesh);
 
 // Bouton "Nouvelle fiche" — rouvre le brouillon en cours ou en crée un.
-router.post("/new", requireRole(...READ_WRITE_ROLES), validateCreateOrOpenDraft, complianceGuard({ source: "promesh", mode: "createDraft" }), ctrl.createOrOpenDraft);
+router.post("/new", requireRole(...READ_WRITE_ROLES), validateCreateOrOpenDraft, complianceGuard({ source: "promesh", mode: "createDraft" }), rawMaterialRequestGuard({ source: "promesh" }), ctrl.createOrOpenDraft);
 
 // Liste déroulante "Opérateur" — ouvert aux mêmes rôles que la création/
 // modification de fiches (pas réservé admin/superadmin comme GET /users).

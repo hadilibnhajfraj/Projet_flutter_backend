@@ -21,15 +21,43 @@ const app = require("../src/app");
 const { sequelize } = require("../src/db");
 const dashboard = require("../src/modules/production-records/services/productionDashboard.service");
 const records = require("../src/modules/production-records/services/productionRecords.service");
+const { signAccessToken } = require("../src/utils/tokens");
 
 const PASSWORD = "ChangeMe123!";
 const LOGISTIQUE_EMAIL = "responsable_logistique@cbi-tunisia.com";
+const PRODUCTION_EMAIL = "responsable_production@cbi-tunisia.com";
+const PROD1_EMAIL = "production_1@cbi-tunisia.com";
 const QC_EMAIL = "controle_qualite@cbi-tunisia.com";
 const ADMIN = { id: "00000000-0000-0000-0000-000000000000", role: "superadmin" };
 const auth = (t) => ({ Authorization: `Bearer ${t}` });
 
 const sql = (query, replacements = {}) => sequelize.query(query, { replacements, type: sequelize.QueryTypes.SELECT });
 const signIn = async (email) => (await request(app).post("/auth/signin").send({ email, password: PASSWORD })).body.accessToken;
+// Jeton signé pour les comptes dont le mot de passe n'est pas celui du seed.
+const tokenFor = async (email) => {
+  const [u] = await sql(`SELECT id, email, role FROM users WHERE email = :email`, { email });
+  return { user: u, token: signAccessToken({ sub: u.id, email: u.email, role: u.role }) };
+};
+
+// Statuts de validation (fiches non archivées), indépendamment du service.
+async function expectedApproval(type, { from = null, to = null, createdBy = null, ignorePeriod = false } = {}) {
+  const promesh = type === "promesh";
+  const table = promesh ? "por_promesh" : "industrial_records";
+  const date = promesh ? `"dateProduction"` : `"dateFiche"`;
+  const where = [promesh ? "status::text <> 'ARCHIVED'" : "module = 'probar' AND statut::text <> 'archivee'"];
+  if (from && !ignorePeriod) where.push(`${date} >= :from AND ${date} <= :to`);
+  if (createdBy) where.push(`"createdBy" = :createdBy`);
+  const [row] = await sql(
+    `SELECT COUNT(*)::int AS actives,
+            COUNT(*) FILTER (WHERE "approvalStatus" = 'APPROVED')::int AS acceptees,
+            COUNT(*) FILTER (WHERE "approvalStatus" = 'PENDING')::int AS "enAttente",
+            COUNT(*) FILTER (WHERE "approvalStatus" = 'REJECTED')::int AS refusees,
+            COUNT(*) FILTER (WHERE "approvalStatus" IS NULL)::int AS "horsCircuit"
+       FROM ${table} WHERE ${where.join(" AND ")}`,
+    { from, to, createdBy }
+  );
+  return row;
+}
 
 // Comptages indépendants du service (une requête par table).
 async function expected(type, { from = null, to = null, createdBy = null } = {}) {
@@ -182,20 +210,92 @@ describe("Dashboard Production — KPI calculés sur les données réelles", () 
     await expect(dashboard.getDashboard({ period: "custom", startDate: "2026-09-01", endDate: "2026-08-01" }, ADMIN)).rejects.toMatchObject({ status: 400 });
   });
 
-  test("HTTP : un seul appel renvoie tout l'écran ; compte owner-scoped = ses propres fiches ; contrôle qualité et anonyme refusés", async () => {
-    const token = await signIn(LOGISTIQUE_EMAIL);
-    const res = await request(app).get("/production-records/dashboard?period=all").set(auth(token));
-    expect(res.status).toBe(200);
-    expect(Object.keys(res.body.data)).toEqual(expect.arrayContaining(["promesh", "probar", "machines", "production", "waste", "charts", "recent", "period"]));
-    expect(res.body.data.scope).toBe("own");
-    const [user] = await sql(`SELECT id FROM users WHERE email = :email`, { email: LOGISTIQUE_EMAIL });
+  test("validation : acceptées / en attente / refusées / hors circuit = base (fiches non archivées), toutes périodes et période choisie", async () => {
+    const from = "2026-08-01";
+    const to = "2026-10-31";
+    const d = await dashboard.getDashboard({ period: "custom", startDate: from, endDate: to }, ADMIN);
+    for (const [data, range] of [[all, {}], [d, { from, to }]]) {
+      for (const type of ["promesh", "probar"]) {
+        const e = await expectedApproval(type, range);
+        expect(data[type]).toMatchObject(e);
+        // Aucune fiche comptée deux fois, aucune oubliée.
+        expect(e.acceptees + e.enAttente + e.refusees + e.horsCircuit).toBe(e.actives);
+        expect(data[type].actives).toBe(data[type].fiches - data[type].archivees);
+        const byMachine = (k) => data[type].machines.reduce((s, m) => s + m[k], 0);
+        for (const k of ["actives", "acceptees", "enAttente", "refusees", "horsCircuit"]) expect(byMachine(k)).toBe(data[type][k]);
+      }
+      for (const k of ["actives", "acceptees", "enAttente", "refusees", "horsCircuit"]) expect(data.production[k]).toBe(data.promesh[k] + data.probar[k]);
+    }
+    // Dernières fiches : statut de validation et motif tels qu'enregistrés.
+    for (const r of all.recent) {
+      const [type, id] = r.id.split(":");
+      const [row] = await sql(`SELECT "approvalStatus" s, "approvalRejectionComment" c, "approvalDecidedByEmail" b FROM ${type === "promesh" ? "por_promesh" : "industrial_records"} WHERE id = :id`, { id });
+      if (row.s == null) expect(r.approval).toBeNull();
+      else expect(r.approval).toMatchObject({ status: row.s, comment: row.c, decidedByEmail: row.b });
+    }
+  });
+
+  test("alertes : fiches en attente et refusées TOUTES DATES (indépendantes de la période), refus avec motif", async () => {
+    const today = await dashboard.getDashboard({ period: "today" }, ADMIN);
+    for (const data of [all, today]) {
+      for (const type of ["promesh", "probar"]) {
+        const e = await expectedApproval(type, { ignorePeriod: true });
+        expect(data.alerts[type]).toEqual({ enAttente: e.enAttente, refusees: e.refusees });
+      }
+      expect(data.alerts.fichesEnAttente).toBe(data.alerts.promesh.enAttente + data.alerts.probar.enAttente);
+      expect(data.alerts.fichesRefusees).toBe(data.alerts.promesh.refusees + data.alerts.probar.refusees);
+    }
+    expect(all.alerts.rejected.length).toBe(Math.min(5, all.alerts.fichesRefusees));
+    for (const r of all.alerts.rejected) {
+      const [type, id] = r.id.split(":");
+      const [row] = await sql(`SELECT "approvalStatus" s, "approvalRejectionComment" c FROM ${type === "promesh" ? "por_promesh" : "industrial_records"} WHERE id = :id`, { id });
+      expect(row).toEqual({ s: "REJECTED", c: r.comment });
+    }
+  });
+
+  test("période précédente : même durée, juste avant ; aucune pour « toutes périodes »", async () => {
+    expect(all.previous).toBeNull();
+    const d = await dashboard.getDashboard({ period: "custom", startDate: "2026-09-01", endDate: "2026-09-30" }, ADMIN);
+    expect(d.previous).toMatchObject({ start: "2026-08-02", end: "2026-08-31" });
     for (const type of ["promesh", "probar"]) {
-      const e = await expected(type, { createdBy: user.id });
+      const e = await expectedApproval(type, { from: "2026-08-02", to: "2026-08-31" });
+      expect(d.previous[type]).toBe(e.actives);
+    }
+    expect(d.previous.actives).toBe(d.previous.promesh + d.previous.probar);
+  });
+
+  test("périmètre : responsables logistique et production = toutes les fiches (comme le Super Admin) ; même rôle, producteur limité", async () => {
+    for (const email of [LOGISTIQUE_EMAIL, PRODUCTION_EMAIL]) {
+      const { token } = await tokenFor(email);
+      const res = await request(app).get("/production-records/dashboard?period=all").set(auth(token));
+      expect(res.status).toBe(200);
+      expect(res.body.data.scope).toBe("all");
+      for (const type of ["promesh", "probar"]) expect(res.body.data[type]).toMatchObject({ fiches: all[type].fiches, actives: all[type].actives, refusees: all[type].refusees });
+      expect(res.body.data.alerts).toEqual(JSON.parse(JSON.stringify(all.alerts)));
+    }
+    const { user, token } = await tokenFor("production_2@cbi-tunisia.com");
+    expect(user.role).toBe("responsable_logistique_achat");
+    const res = await request(app).get("/production-records/dashboard?period=all").set(auth(token));
+    expect(res.body.data.scope).toBe("own");
+    for (const type of ["promesh", "probar"]) expect(res.body.data[type].actives).toBe((await expectedApproval(type, { createdBy: user.id })).actives);
+  });
+
+  test("HTTP : un seul appel renvoie tout l'écran ; producteur = ses propres fiches ; contrôle qualité et anonyme refusés", async () => {
+    const token = await signIn(LOGISTIQUE_EMAIL);
+    const { user: prod1, token: prod1Token } = await tokenFor(PROD1_EMAIL);
+    const res = await request(app).get("/production-records/dashboard?period=all").set(auth(prod1Token));
+    expect(res.status).toBe(200);
+    expect(Object.keys(res.body.data)).toEqual(expect.arrayContaining(["promesh", "probar", "machines", "production", "waste", "charts", "recent", "period", "alerts", "previous"]));
+    expect(res.body.data.scope).toBe("own");
+    for (const type of ["promesh", "probar"]) {
+      const e = await expected(type, { createdBy: prod1.id });
       expect(res.body.data[type]).toMatchObject({ fiches: e.fiches, validees: e.validees });
       expect(res.body.data[type].quantite).toBeCloseTo(e.quantite, 2);
       expect(res.body.data[type].fiches).toBeLessThanOrEqual(all[type].fiches);
+      expect(res.body.data[type]).toMatchObject(await expectedApproval(type, { createdBy: prod1.id }));
     }
-    expect(res.body.data.recent.every((r) => r.userEmail === LOGISTIQUE_EMAIL)).toBe(true);
+    expect(res.body.data.recent.every((r) => r.userEmail === PROD1_EMAIL)).toBe(true);
+    expect(res.body.data.alerts.rejected.every((r) => r.userEmail === PROD1_EMAIL)).toBe(true);
 
     const bad = await request(app).get("/production-records/dashboard?period=custom&startDate=abc&endDate=2026-08-01").set(auth(token));
     expect(bad.status).toBe(400);

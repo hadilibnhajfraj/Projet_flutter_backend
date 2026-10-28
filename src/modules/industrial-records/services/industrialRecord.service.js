@@ -8,7 +8,9 @@ const UserProfile = require("../../../models/UserProfile");
 const Notification = require("../../../models/Notification");
 const MaintenanceActivity = require("../../../models/MaintenanceActivity");
 const { sendEmail } = require("../../../services/email.service");
-const { MAINTENANCE_REQUESTER_EMAIL, MAINTENANCE_NOTIFY_EMAIL } = require("../../../config/maintenanceRequester");
+const { MAINTENANCE_NOTIFY_EMAIL, isMaintenanceRequester } = require("../../../config/maintenanceRequester");
+const ficheApproval = require("../../production-fiche-approvals/services/ficheApproval.service");
+const logisticsManagers = require("../../../config/logisticsManagers");
 
 // responsable_logistique_achat ne voit/édite que ses propres fiches —
 // admin/superadmin voient tout (même règle que POR PROMESH). finance_production
@@ -17,6 +19,16 @@ const { MAINTENANCE_REQUESTER_EMAIL, MAINTENANCE_NOTIFY_EMAIL } = require("../..
 // mais reste soumis à DELETE_ROLES.
 function isOwnerScoped(role) {
   return role === "responsable_logistique_achat";
+}
+
+// LECTURE : les responsables (logistique et production — config/
+// logisticsManagers.js) partagent ce rôle mais valident les fiches de tous les
+// producteurs ; ils CONSULTENT donc toutes les fiches (liste, tableau de bord,
+// statistiques, détail, PDF). Les ÉCRITURES (modification, suppression,
+// verrouillage, pièces jointes) restent limitées aux fiches de leur créateur
+// (assertOwnership ci-dessous) ; production_1..5 ne voient que leurs fiches.
+function isReadScoped(actor) {
+  return isOwnerScoped(actor.role) && !logisticsManagers.isLogisticsManager(actor.email);
 }
 
 // §MODIFICATION — FICHE MÉLANGE : "Opérateur" ne doit JAMAIS être pris tel
@@ -74,6 +86,12 @@ function assertProbarCanValidate(record, body) {
 
 function assertOwnership(record, actor) {
   if (isOwnerScoped(actor.role) && record.createdBy !== actor.id) {
+    throw { status: 403, code: "NOT_OWNER", message: "Vous ne pouvez accéder qu'à vos propres fiches" };
+  }
+}
+
+function assertReadAccess(record, actor) {
+  if (isReadScoped(actor) && record.createdBy !== actor.id) {
     throw { status: 403, code: "NOT_OWNER", message: "Vous ne pouvez accéder qu'à vos propres fiches" };
   }
 }
@@ -172,7 +190,7 @@ async function createRecord(body, actor) {
   // email envoyé si l'utilisateur n'est pas autorisé.
   if (isMaintenance) {
     const actorEmail = (actor.email || "").toLowerCase().trim();
-    if (actorEmail !== MAINTENANCE_REQUESTER_EMAIL.toLowerCase()) {
+    if (!isMaintenanceRequester(actorEmail)) {
       throw { status: 403, message: "Vous n'êtes pas autorisé à créer une demande de maintenance." };
     }
   }
@@ -190,7 +208,19 @@ async function createRecord(body, actor) {
     payload.heureFin = nullifyEmpty(body.heureFin);
   }
 
+  // PROBAR des comptes de production : « En attente de validation » dès la
+  // création (responsable logistique — voir modules/production-fiche-approvals).
+  if (body.module === "probar") Object.assign(payload, ficheApproval.initialFields(actor));
+
   const created = await repo.create(payload);
+  if (created.approvalStatus) {
+    try {
+      await ficheApproval.recordCreation("probar", created, actor);
+    } catch (e) {
+      logger.error(`[FICHE-APPROVAL] historique de création PROBAR ${created.id}: ${e.message}`);
+    }
+    await ficheApproval.notifyCreated("probar", created);
+  }
   const record = await repo.findById(created.id);
 
   if (isMaintenance) {
@@ -254,7 +284,7 @@ async function createRecord(body, actor) {
 }
 
 async function listRecords(filters, actor) {
-  const where = isOwnerScoped(actor.role) ? { createdBy: actor.id } : {};
+  const where = isReadScoped(actor) ? { createdBy: actor.id } : {};
   if (filters.module) where.module = filters.module;
   if (filters.machine) where.machine = filters.machine;
   if (filters.poste) where.poste = filters.poste;
@@ -288,7 +318,7 @@ async function listRecords(filters, actor) {
 async function getRecordById(id, actor) {
   const record = await repo.findById(id);
   if (!record) throw { status: 404, message: "Fiche introuvable" };
-  assertOwnership(record, actor);
+  assertReadAccess(record, actor);
   // Filet de sécurité (voir "Verrouillage automatique des fiches", point 6) :
   // si le cron (toutes les 5 min) n'est pas encore passé, une fiche PROBAR
   // restée en brouillon plus de 24h est déverrouillée ici même, avant

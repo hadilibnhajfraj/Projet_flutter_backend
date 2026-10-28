@@ -150,6 +150,8 @@ describe("Autorisation Production — responsable logistique OU superadmin (une 
     if (created.unarchiveIds.length) await UnarchiveRequest.destroy({ where: { id: created.unarchiveIds } });
     if (created.ficheIds.length) {
       await sequelize.query(`DELETE FROM production_draft_archive_log WHERE "ficheId" IN (:ids)`, { replacements: { ids: created.ficheIds } });
+      // Fiches de production_1/2 : historique de validation (responsable logistique).
+      await sequelize.query(`DELETE FROM production_fiche_approval_histories WHERE "ficheId" IN (:ids)`, { replacements: { ids: created.ficheIds } });
       await sequelize.query(`DELETE FROM por_promesh WHERE id IN (:ids)`, { replacements: { ids: created.ficheIds } });
     }
     if (await liveActivityDuringRun([...created.requestIds, ...created.unarchiveIds])) {

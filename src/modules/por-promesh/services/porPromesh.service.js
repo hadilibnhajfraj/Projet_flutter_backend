@@ -7,6 +7,8 @@ const repo = require("../repositories/porPromesh.repository");
 const User = require("../../../models/User");
 const UserProfile = require("../../../models/UserProfile");
 const logger = require("../../../utils/logger");
+const logisticsManagers = require("../../../config/logisticsManagers");
+const ficheApproval = require("../../production-fiche-approvals/services/ficheApproval.service");
 require("../../../models/associations");
 
 // Mêmes rôles que READ_WRITE_ROLES (routes) — qui peut opérer ce module peut
@@ -22,6 +24,16 @@ const OPERATOR_ROLES = ["admin", "superadmin", "superadmin2", "responsable_logis
 // droit admin (users, settings, etc.).
 function isOwnerScoped(role) {
   return role === "responsable_logistique_achat";
+}
+
+// LECTURE : les responsables (logistique et production — config/
+// logisticsManagers.js) partagent ce rôle mais valident les fiches de tous les
+// producteurs ; ils CONSULTENT donc toutes les fiches (liste, tableau de bord,
+// statistiques, détail, PDF). Les ÉCRITURES (modification, suppression,
+// verrouillage, pièces jointes) restent limitées aux fiches de leur créateur
+// (assertOwnership ci-dessous) ; production_1..5 ne voient que leurs fiches.
+function isReadScoped(actor) {
+  return isOwnerScoped(actor.role) && !logisticsManagers.isLogisticsManager(actor.email);
 }
 
 function splitFields(body) {
@@ -60,6 +72,12 @@ function sanitizePayload(body) {
 
 function assertOwnership(report, actor) {
   if (isOwnerScoped(actor.role) && report.createdBy !== actor.id) {
+    throw { status: 403, code: "NOT_OWNER", message: "Vous ne pouvez accéder qu'à vos propres fiches PorPromesh" };
+  }
+}
+
+function assertReadAccess(report, actor) {
+  if (isReadScoped(actor) && report.createdBy !== actor.id) {
     throw { status: 403, code: "NOT_OWNER", message: "Vous ne pouvez accéder qu'à vos propres fiches PorPromesh" };
   }
 }
@@ -179,10 +197,13 @@ const ARCHIVED_MESSAGE = "Cette fiche POR PROMESH est archivée. Une demande de 
 async function createPorPromesh(body, actor) {
   const { mainFields, children } = splitFields(sanitizePayload(body));
 
-  return sequelize.transaction(async (t) => {
+  const created = await sequelize.transaction(async (t) => {
     // status/isLocked/validatedAt ne sont jamais pilotés par le client —
     // ils prennent leurs valeurs par défaut en base (BROUILLON / false / null).
-    const report = await repo.create({ ...mainFields, createdBy: actor.id }, t);
+    // Comptes de production : « En attente de validation » dès la création
+    // (responsable logistique — voir modules/production-fiche-approvals).
+    const report = await repo.create({ ...mainFields, ...ficheApproval.initialFields(actor), createdBy: actor.id }, t);
+    await ficheApproval.recordCreation("promesh", report, actor, { transaction: t });
     // 1. Contrôle Machine déjà sauvegardé (ci-dessus) — 2/3. Paramètres du
     // Poste générés et fusionnés automatiquement à partir de ces mêmes
     // valeurs, puis persistés par `replaceChildren` juste en dessous.
@@ -192,6 +213,9 @@ async function createPorPromesh(body, actor) {
     // Contrôle Machine (plats) et `processControl` (Paramètres du Poste).
     return repo.findById(report.id, t);
   });
+  // Après validation de la transaction : responsable logistique notifié.
+  await ficheApproval.notifyCreated("promesh", created);
+  return created;
 }
 
 // Filtres communs à listPorPromesh / getDashboard / getStats — le Dashboard
@@ -199,7 +223,7 @@ async function createPorPromesh(body, actor) {
 // l'identique pour rester cohérent (mêmes fiches comptées, listées et
 // agrégées).
 function buildWhere(actor, filters = {}) {
-  const where = isOwnerScoped(actor.role) ? { createdBy: actor.id } : {};
+  const where = isReadScoped(actor) ? { createdBy: actor.id } : {};
   if (filters.machine) where.machine = filters.machine;
   if (filters.poste) where.poste = filters.poste;
   if (filters.date) {
@@ -271,9 +295,22 @@ async function createOrOpenDraft(actor, { machine, poste, operateurName, datePro
     heureDebut,
     heureFin: heureDebut,
     operateur,
+    ...ficheApproval.initialFields(actor),
     createdBy: actor.id,
   });
+  await recordApprovalCreation(created, actor);
+  await ficheApproval.notifyCreated("promesh", created);
   return repo.findById(created.id);
+}
+
+// Historique de la soumission n° 1 (le statut est déjà posé dans l'INSERT de
+// la fiche) — un échec est journalisé sans annuler la création.
+async function recordApprovalCreation(fiche, actor) {
+  try {
+    await ficheApproval.recordCreation("promesh", fiche, actor);
+  } catch (e) {
+    logger.error(`[FICHE-APPROVAL] historique de création PROMESH ${fiche.id}: ${e.message}`);
+  }
 }
 
 // ── Liste déroulante "Opérateur" — utilisateurs autorisés à opérer ce
@@ -359,7 +396,7 @@ async function getStats(actor, filters = {}) {
 async function getPorPromeshById(id, actor) {
   const report = await repo.findById(id);
   if (!report) throw { status: 404, message: "PorPromesh introuvable" };
-  assertOwnership(report, actor);
+  assertReadAccess(report, actor);
   // Filet de sécurité (voir "Verrouillage automatique des fiches", point 6) :
   // si le cron (toutes les 5 min) n'est pas encore passé, une fiche restée
   // en BROUILLON plus de 24h est déverrouillée ici même, avant réponse —
@@ -376,7 +413,9 @@ async function updatePorPromesh(id, body, actor) {
     if (!report) throw { status: 404, message: "PorPromesh introuvable" };
     assertOwnership(report, actor);
 
-    if (report.isLocked) {
+    // Exception : une fiche refusée par le responsable logistique reste
+    // modifiable par son créateur pour correction (puis nouvelle soumission).
+    if (report.isLocked && !ficheApproval.canCorrect(report, actor)) {
       throw { status: 403, code: "SHEET_LOCKED", message: LOCKED_MESSAGE };
     }
     if (report.status === "ARCHIVED") {

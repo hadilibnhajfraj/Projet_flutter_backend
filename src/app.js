@@ -47,6 +47,8 @@ require("./cron/productionCompliance.job");
 // (23:00 heure de Tunis), complémentaire à Production Compliance ci-dessus —
 // actif par défaut (PRODUCTION_FOLLOW_UP_ENABLED=false pour désactiver).
 require("./cron/productionFollowUp.job");
+// Alerte de retard des demandes de matières premières du vendredi (échéance 14 h).
+require("./cron/rawMaterialRequestLate.job");
 
 // ── CRM Pipeline Modules ──────────────────────────────────
 const pipelineStageRoutes = require("./modules/pipeline/routes/pipelineStage.routes");
@@ -72,6 +74,8 @@ const adminDashboardRoutes = require("./modules/admin-dashboard/routes/adminDash
 const financeRoutes = require("./modules/finance/routes/finance.routes");
 const qualityControlRoutes = require("./modules/quality-control/routes/qualityControl.routes");
 const productionRequestsRoutes = require("./modules/production-requests/routes/productionRequests.routes");
+const rawMaterialRequestRoutes = require("./modules/raw-material-requests/routes/rawMaterialRequest.routes");
+const productionFicheApprovalRoutes = require("./modules/production-fiche-approvals/routes/ficheApproval.routes");
 
 const app = express();
 
@@ -133,6 +137,8 @@ app.use("/admin-dashboard", adminDashboardRoutes);
 app.use("/finance", financeRoutes);
 app.use("/quality-control", qualityControlRoutes);
 app.use("/production-requests", productionRequestsRoutes);
+app.use("/raw-material-requests", rawMaterialRequestRoutes);
+app.use("/production-fiche-approvals", productionFicheApprovalRoutes);
 
 // ── Existing routes (unchanged) ──────────────────────────
 app.use("/projects", projectRoutes);

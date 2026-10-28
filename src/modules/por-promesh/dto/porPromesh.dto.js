@@ -1,5 +1,7 @@
 "use strict";
 
+const { toApprovalBlock } = require("../../production-fiche-approvals/services/approvalBlock");
+
 /**
  * Strips internal Sequelize fields and normalises a PorPromesh fiche for API responses.
  */
@@ -92,6 +94,8 @@ function toPorPromeshResponse(report) {
     status: r.status,
     isLocked: r.isLocked,
     validatedAt: r.validatedAt,
+    // Validation par le responsable logistique (null : fiche hors circuit).
+    approval: toApprovalBlock(r),
 
     dateProduction: r.dateProduction,
     heureDebut: r.heureDebut,

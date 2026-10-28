@@ -2,6 +2,7 @@
 
 const svc = require("../services/productionRecords.service");
 const dashboardSvc = require("../services/productionDashboard.service");
+const fichesSvc = require("../services/productionFiches.service");
 const logger = require("../../../utils/logger");
 
 function handle(res, err) {
@@ -108,4 +109,16 @@ async function dashboard(req, res) {
   }
 }
 
-module.exports = { list, filters, summary, creators, dashboard, getById };
+// Liste d'une ligne (PROMESH ou PROBAR) : filtres, pagination, compteurs de
+// validation — voir productionFiches.service (lecture seule).
+async function fiches(req, res) {
+  try {
+    const { type, period, startDate, endDate, machine, poste, approval, search, sort, page, limit } = req.query;
+    const data = await fichesSvc.listFiches({ type, period, startDate, endDate, machine, poste, approval, search, sort, page, limit }, actorFrom(req));
+    res.json({ success: true, ...data });
+  } catch (err) {
+    handle(res, err);
+  }
+}
+
+module.exports = { list, filters, summary, creators, dashboard, fiches, getById };

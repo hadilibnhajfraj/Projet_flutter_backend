@@ -27,13 +27,15 @@ const PERMISSIONS = Object.freeze({
 
 const ALL_PERMISSIONS = Object.freeze(Object.values(PERMISSIONS));
 
+const logisticsManagers = require("./logisticsManagers");
 const list = (v, fallback) => (v ? String(v).split(",").map((s) => s.trim().toLowerCase()).filter(Boolean) : fallback);
 
 // Comptes recevant les 7 permissions ci-dessus (et UNIQUEMENT celles-ci —
 // jamais admin/RH/maintenance/finance, ni les autres écrans Production
 // Compliance : contrôle journalier, autorisations directes, run-check...).
 function permissionGrantsByEmail() {
-  const emails = list(process.env.PRODUCTION_WORKFLOW_MANAGERS, ["responsable_logistique@cbi-tunisia.com"]);
+  // Responsables logistique et production (config/logisticsManagers.js).
+  const emails = list(process.env.PRODUCTION_WORKFLOW_MANAGERS, logisticsManagers.emails);
   return new Map(emails.map((e) => [e, ALL_PERMISSIONS]));
 }
 

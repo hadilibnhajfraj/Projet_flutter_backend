@@ -12,8 +12,14 @@
 //
 // Règles (identiques à « Production Summary », pour que les chiffres
 // concordent d'un écran à l'autre) :
-// - portée : responsable_logistique_achat ne voit que SES fiches ; les autres
-//   rôles autorisés voient tout (même règle que productionRecords.service) ;
+// - portée : responsable_logistique_achat ne voit que SES fiches, SAUF les
+//   responsables logistique et production (config/logisticsManagers.js), qui
+//   valident les fiches de tous les producteurs et les consultent donc toutes
+//   (même règle de lecture que les listes PROMESH / PROBAR) ; les autres
+//   rôles autorisés voient tout ;
+// - validation (circuit des fiches de production) : APPROVED / PENDING /
+//   REJECTED tels qu'enregistrés ; une fiche antérieure au circuit
+//   (approvalStatus NULL) est « hors circuit » — jamais comptée acceptée ;
 // - statut : archivée (status ARCHIVED / archivee), validée (VALIDE /
 //   validee), sinon brouillon ;
 // - quantité produite = somme des fiches VALIDÉES (un brouillon n'est pas une
@@ -28,9 +34,11 @@
 const { QueryTypes } = require("sequelize");
 const { sequelize } = require("../../../db");
 const qcConfig = require("../../../config/qualityControl");
+const logisticsManagers = require("../../../config/logisticsManagers");
 const { computeDateRange } = require("../utils/dateRange");
 
 const RECENT_LIMIT = 10;
+const REJECTED_LIMIT = 5;
 const PERIODS = ["today", "week", "month", "year", "custom", "all"];
 
 // Lignes et machines : celles du module Production (même source que le
@@ -45,18 +53,30 @@ const machinesOf = (label) => qcConfig.productionLines.find((l) => l.type === la
 const FICHES_SQL = `
   SELECT 'promesh' AS type, id, machine::text AS machine, poste::text AS poste, "dateProduction" AS date, "productionM2" AS quantite,
          CASE WHEN status::text = 'ARCHIVED' THEN 'archivee' WHEN status::text = 'VALIDE' THEN 'validee' ELSE 'brouillon' END AS statut,
-         "sequenceNumber" AS seq, "createdBy", "createdAt"
+         "sequenceNumber" AS seq, "createdBy", "createdAt",
+         "approvalStatus" AS approval, "approvalRejectionComment" AS "approvalComment",
+         "approvalDecidedByEmail" AS "approvalBy", "approvalDecidedAt" AS "approvalAt"
     FROM por_promesh
   UNION ALL
   SELECT 'probar', id, machine::text, poste::text, "dateFiche", "quantiteProduite",
          CASE WHEN statut::text = 'archivee' THEN 'archivee' WHEN statut::text = 'validee' THEN 'validee' ELSE 'brouillon' END,
-         NULL::int, "createdBy", "createdAt"
+         NULL::int, "createdBy", "createdAt",
+         "approvalStatus", "approvalRejectionComment", "approvalDecidedByEmail", "approvalDecidedAt"
     FROM industrial_records
    WHERE module = 'probar'`;
 
-function isOwnerScoped(role) {
-  return role === "responsable_logistique_achat";
+function isOwnerScoped(actor) {
+  return actor.role === "responsable_logistique_achat" && !logisticsManagers.isLogisticsManager(actor.email);
 }
+
+// Comptages de validation (fiches non archivées, comme les listes).
+const APPROVAL_COUNTS = `
+              COUNT(*) FILTER (WHERE f.statut <> 'archivee')::int AS actives,
+              COUNT(*) FILTER (WHERE f.statut <> 'archivee' AND f.approval = 'APPROVED')::int AS acceptees,
+              COUNT(*) FILTER (WHERE f.statut <> 'archivee' AND f.approval = 'PENDING')::int AS "enAttente",
+              COUNT(*) FILTER (WHERE f.statut <> 'archivee' AND f.approval = 'REJECTED')::int AS refusees,
+              COUNT(*) FILTER (WHERE f.statut <> 'archivee' AND f.approval IS NULL)::int AS "horsCircuit"`;
+const APPROVAL_KEYS = ["actives", "acceptees", "enAttente", "refusees", "horsCircuit"];
 
 const iso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 const num = (v) => {
@@ -78,11 +98,14 @@ function resolvePeriod(query) {
   const range = computeDateRange(period, query);
   if (!range) return { period, start: null, endExclusive: null, end: null };
   const last = new Date(range.end.getFullYear(), range.end.getMonth(), range.end.getDate() - 1);
-  return { period, start: iso(range.start), endExclusive: iso(range.end), end: iso(last) };
+  // Période précédente de même durée, juste avant (évolution du nombre de fiches).
+  const days = Math.round((range.end - range.start) / 86400000);
+  const prevStart = new Date(range.start.getFullYear(), range.start.getMonth(), range.start.getDate() - days);
+  return { period, start: iso(range.start), endExclusive: iso(range.end), end: iso(last), prevStart: iso(prevStart) };
 }
 
 function emptyLine(line) {
-  return { type: line.type, label: line.label, unit: line.unit, wasteUnit: "kg", fiches: 0, validees: 0, brouillons: 0, archivees: 0, quantite: 0, dechets: 0, tauxDechets: null, tauxDechetsUnit: `kg / 100 ${line.unit}` };
+  return { type: line.type, label: line.label, unit: line.unit, wasteUnit: "kg", fiches: 0, validees: 0, brouillons: 0, archivees: 0, ...Object.fromEntries(APPROVAL_KEYS.map((k) => [k, 0])), quantite: 0, dechets: 0, tauxDechets: null, tauxDechetsUnit: `kg / 100 ${line.unit}` };
 }
 
 // kg de déchets pour 100 unités produites — null sans production validée.
@@ -96,14 +119,14 @@ function ficheNumero(row) {
 
 async function getDashboard(query, actor) {
   const p = resolvePeriod(query);
-  const scoped = isOwnerScoped(actor.role);
-  const replacements = { start: p.start, end: p.endExclusive, uid: actor.id, today: iso(new Date()), limit: RECENT_LIMIT };
+  const scoped = isOwnerScoped(actor);
+  const replacements = { start: p.start, end: p.endExclusive, prevStart: p.prevStart, uid: actor.id, today: iso(new Date()), limit: RECENT_LIMIT, rejectedLimit: REJECTED_LIMIT };
   const select = { replacements, type: QueryTypes.SELECT };
   const scope = scoped ? `AND f."createdBy" = :uid` : "";
   const range = p.start ? `AND f.date >= CAST(:start AS date) AND f.date < CAST(:end AS date)` : "";
   const wasteWhere = `waste IS NOT NULL ${scoped ? `AND "createdBy" = :uid` : ""} ${p.start ? `AND date >= CAST(:start AS date) AND date < CAST(:end AS date)` : ""}`;
 
-  const [byMachine, daily, waste, recent, today] = await Promise.all([
+  const [byMachine, daily, waste, recent, today, previous, toProcess, rejected] = await Promise.all([
     // 1. Fiches par ligne et machine : volumes, statuts, dernière production.
     sequelize.query(
       `WITH f AS (${FICHES_SQL})
@@ -114,7 +137,8 @@ async function getDashboard(query, actor) {
               COUNT(*) FILTER (WHERE f.statut = 'archivee')::int AS archivees,
               COALESCE(SUM(f.quantite) FILTER (WHERE f.statut = 'validee'), 0)::float AS quantite,
               to_char(MAX(f.date), 'YYYY-MM-DD') AS "lastDate",
-              (ARRAY_AGG(f.statut ORDER BY f.date DESC NULLS LAST, f."createdAt" DESC))[1] AS "lastStatut"
+              (ARRAY_AGG(f.statut ORDER BY f.date DESC NULLS LAST, f."createdAt" DESC))[1] AS "lastStatut",
+              MAX(f."createdAt") AS "lastActivityAt",${APPROVAL_COUNTS}
          FROM f
         WHERE TRUE ${scope} ${range}
         GROUP BY 1, 2`,
@@ -145,6 +169,7 @@ async function getDashboard(query, actor) {
       `WITH f AS (${FICHES_SQL})
        SELECT f.type, f.id, f.machine, f.poste, to_char(f.date, 'YYYY-MM-DD') AS date, f.quantite::float AS quantite,
               f.statut, f.seq, f."createdAt", u.email AS "userEmail",
+              f.approval, f."approvalComment", f."approvalBy", f."approvalAt",
               (SELECT SUM(r.waste)::float FROM recuperable_fiches r
                 WHERE r.module::text = UPPER(f.type) AND r.machine::text = f.machine AND r.date = f.date) AS dechets
          FROM f
@@ -156,6 +181,40 @@ async function getDashboard(query, actor) {
     ),
     // Productions du jour : indépendant de la période choisie.
     sequelize.query(`WITH f AS (${FICHES_SQL}) SELECT COUNT(*)::int AS n FROM f WHERE f.date = CAST(:today AS date) ${scope}`, select),
+    // Période précédente de même durée (fiches non archivées, par ligne).
+    p.start
+      ? sequelize.query(
+          `WITH f AS (${FICHES_SQL})
+           SELECT f.type, COUNT(*)::int AS n FROM f
+            WHERE f.statut <> 'archivee' AND f.date >= CAST(:prevStart AS date) AND f.date < CAST(:start AS date) ${scope}
+            GROUP BY 1`,
+          select
+        )
+      : Promise.resolve(null),
+    // Alertes : fiches à traiter, TOUTES DATES (une fiche refusée ou en attente
+    // reste à traiter quelle que soit la période affichée).
+    sequelize.query(
+      `WITH f AS (${FICHES_SQL})
+       SELECT f.type,
+              COUNT(*) FILTER (WHERE f.approval = 'PENDING')::int AS "enAttente",
+              COUNT(*) FILTER (WHERE f.approval = 'REJECTED')::int AS refusees
+         FROM f
+        WHERE f.statut <> 'archivee' ${scope}
+        GROUP BY 1`,
+      select
+    ),
+    // Fiches refusées les plus récentes, avec le motif (accès direct).
+    sequelize.query(
+      `WITH f AS (${FICHES_SQL})
+       SELECT f.type, f.id, f.machine, f.poste, to_char(f.date, 'YYYY-MM-DD') AS date, f.seq, f."createdAt",
+              f."approvalComment", f."approvalBy", f."approvalAt", u.email AS "userEmail"
+         FROM f
+         LEFT JOIN users u ON u.id = f."createdBy"
+        WHERE f.statut <> 'archivee' AND f.approval = 'REJECTED' ${scope}
+        ORDER BY f."approvalAt" DESC NULLS LAST
+        LIMIT :rejectedLimit`,
+      select
+    ),
   ]);
 
   const wasteOf = (module, machine) => waste.filter((w) => w.module === module && (machine == null || String(w.machine) === String(machine))).reduce((s, w) => s + num(w.dechets), 0);
@@ -171,6 +230,7 @@ async function getDashboard(query, actor) {
       total.validees += r.validees;
       total.brouillons += r.brouillons;
       total.archivees += r.archivees;
+      for (const k of APPROVAL_KEYS) total[k] += r[k];
       total.quantite += num(r.quantite);
     }
     total.quantite = round2(total.quantite);
@@ -192,12 +252,15 @@ async function getDashboard(query, actor) {
         validees: r?.validees || 0,
         brouillons: r?.brouillons || 0,
         archivees: r?.archivees || 0,
+        ...Object.fromEntries(APPROVAL_KEYS.map((k) => [k, r?.[k] || 0])),
         quantite,
         dechets,
         tauxDechets: wasteRate(dechets, quantite),
         lastDate: r?.lastDate || null,
         lastStatut: r?.lastStatut || null,
-        // Active : au moins une fiche sur la période.
+        lastActivityAt: r?.lastActivityAt || null,
+        // Activité : au moins une fiche sur la période. Ce n'est PAS un état
+        // de la machine (aucun état de machine n'est enregistré en base).
         active: (r?.fiches || 0) > 0,
       };
     });
@@ -223,6 +286,10 @@ async function getDashboard(query, actor) {
     d[key] = round2(d[key] + num(w.dechets));
   }
 
+  const approvalOf = (row) => (row.approval ? { status: row.approval, comment: row.approvalComment || null, decidedByEmail: row.approvalBy || null, decidedAt: row.approvalAt || null } : null);
+  const sumOf = (rows, key) => rows.reduce((s, r) => s + (r[key] || 0), 0);
+  const byType = (rows, type, key) => rows.find((r) => r.type === type)?.[key] || 0;
+
   return {
     generatedAt: new Date().toISOString(),
     period: { key: p.period, start: p.start, end: p.end },
@@ -234,7 +301,36 @@ async function getDashboard(query, actor) {
       validees: lines.promesh.validees + lines.probar.validees,
       brouillons: lines.promesh.brouillons + lines.probar.brouillons,
       archivees: lines.promesh.archivees + lines.probar.archivees,
+      ...Object.fromEntries(APPROVAL_KEYS.map((k) => [k, lines.promesh[k] + lines.probar[k]])),
       today: today[0]?.n || 0,
+    },
+    // null pour « all » (aucune période précédente) — jamais une valeur inventée.
+    previous: previous
+      ? {
+          start: p.prevStart,
+          end: iso(new Date(new Date(`${p.start}T00:00:00`).getTime() - 86400000)),
+          promesh: byType(previous, "promesh", "n"),
+          probar: byType(previous, "probar", "n"),
+          actives: sumOf(previous, "n"),
+        }
+      : null,
+    alerts: {
+      fichesEnAttente: sumOf(toProcess, "enAttente"),
+      fichesRefusees: sumOf(toProcess, "refusees"),
+      promesh: { enAttente: byType(toProcess, "promesh", "enAttente"), refusees: byType(toProcess, "promesh", "refusees") },
+      probar: { enAttente: byType(toProcess, "probar", "enAttente"), refusees: byType(toProcess, "probar", "refusees") },
+      rejected: rejected.map((r) => ({
+        id: `${r.type}:${r.id}`,
+        type: r.type,
+        numero: ficheNumero(r),
+        machine: r.machine == null ? null : String(r.machine),
+        poste: r.poste,
+        date: r.date,
+        userEmail: r.userEmail || null,
+        comment: r.approvalComment || null,
+        decidedByEmail: r.approvalBy || null,
+        decidedAt: r.approvalAt || null,
+      })),
     },
     machines: { actives: machinesActives, total: machinesTotal },
     waste: { promesh: lines.promesh.dechets, probar: lines.probar.dechets, total: round2(lines.promesh.dechets + lines.probar.dechets), unit: "kg" },
@@ -255,6 +351,7 @@ async function getDashboard(query, actor) {
         dechets: r.dechets == null ? null : round2(num(r.dechets)),
         dechetsUnite: "kg",
         statut: r.statut,
+        approval: approvalOf(r),
       };
     }),
   };

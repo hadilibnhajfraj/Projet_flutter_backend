@@ -155,6 +155,17 @@ const PorPromesh = sequelize.define(
     unarchivedAt: { type: DataTypes.DATE, allowNull: true },
     unarchivedBy: { type: DataTypes.STRING(255), allowNull: true },
 
+    // Validation par le responsable logistique (config/productionFicheApproval.js) —
+    // NULL pour les fiches hors circuit (antérieures ou autres comptes).
+    approvalStatus: { type: DataTypes.STRING(20), allowNull: true },
+    approvalVersion: { type: DataTypes.INTEGER, allowNull: true },
+    approvalSubmittedAt: { type: DataTypes.DATE, allowNull: true },
+    approvalDecidedAt: { type: DataTypes.DATE, allowNull: true },
+    approvalDecidedBy: { type: DataTypes.UUID, allowNull: true },
+    approvalDecidedByEmail: { type: DataTypes.STRING(255), allowNull: true },
+    approvalRejectedAt: { type: DataTypes.DATE, allowNull: true },
+    approvalRejectionComment: { type: DataTypes.TEXT, allowNull: true },
+
     createdBy: { type: DataTypes.UUID, allowNull: false },
   },
   {
