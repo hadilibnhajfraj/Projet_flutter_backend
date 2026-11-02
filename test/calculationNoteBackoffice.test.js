@@ -254,9 +254,11 @@ describeIfPassword("Notes de calcul — compte back-office", () => {
       expect([res.status, res.body.code]).toEqual([403, "READ_ONLY_ACCOUNT"]);
     }
     expect(await sql(`SELECT COUNT(*)::int n FROM calculation_notes`)).toEqual(before);
-    // Lectures des autres modules : toujours celles du compte de référence.
-    const ref = await request(app).get("/commercial-contacts").set(R.auth);
-    const bo = await request(app).get("/commercial-contacts").set(BO);
+    // Lectures des autres modules : toujours celles du compte de référence
+    // (la liste des contacts commerciaux, globale pour le back-office, est
+    // couverte par test/commercialContactsVisibility.test.js).
+    const ref = await request(app).get("/projects/my-projects").set(R.auth);
+    const bo = await request(app).get("/projects/my-projects").set(BO);
     expect(bo.status).toBe(ref.status);
     expect(bo.body).toEqual(ref.body);
     // Un admin voit toujours toutes les notes (aucune régression).

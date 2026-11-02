@@ -18,6 +18,7 @@ const { recordStatusChange } = require("../services/commercialContactHistory.ser
 const { isCommercialEligibleRole } = require("../constants/commercialRoles");
 const { isProbarProjectManager, isCommercialScoped } = require("../config/probarProjectAccess");
 const { resolveFullName } = require("../utils/userDisplay");
+const { sequelize } = require("../db");
 function mapStageToAction(stage) {
   switch (stage) {
     case "Prospect":
@@ -256,13 +257,88 @@ router.post("/select-commercial", authRequired, async (req, res) => {
 // "superadmin1"/"superadmin2" côté métier — même enum, même traitement.
 const PRIVILEGED_ROLES = ["admin", "superadmin", "superadmin2"];
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// Périmètre de lecture des contacts (voir le détail dans GET / ci-dessous) :
+// null = vue complète (admins, back-office via `viewAs`, autres rôles) ;
+// sinon la condition OR du périmètre commercial. Partagé par la liste et par
+// la liste des créateurs pour que filtre, compteurs et liste coïncident.
+async function contactScope(req) {
+  const backofficeGlobalView = !!req.user.viewAs;
+  if (!isCommercialScoped(req.user) || backofficeGlobalView) {
+    return { condition: null, assignedContactIds: null, backofficeGlobalView };
+  }
+  const relanceRows = await CommercialContactRelance.findAll({
+    where: { commercialId: req.user.sub },
+    attributes: ["commercialContactId"],
+  });
+  const assignedContactIds = [...new Set(relanceRows.map((r) => r.commercialContactId).filter(Boolean))];
+  const orConditions = [{ createdBy: req.user.sub }, { commercialId: req.user.sub }];
+  if (assignedContactIds.length) orConditions.push({ id: { [Op.in]: assignedContactIds } });
+  return { condition: { [Op.or]: orConditions }, assignedContactIds, backofficeGlobalView };
+}
+
+// Nom d'affichage d'un créateur : profil, sinon dérivé de l'email
+// (aziz_nefzaoui@… → « Aziz Nefzaoui »), jamais inventé.
+function creatorDisplayName(user) {
+  const full = resolveFullName(user);
+  if (full && full !== user.email) return full;
+  const local = String(user.email || "").split("@")[0];
+  const words = local.split(/[._-]+/).filter(Boolean);
+  return words.length ? words.map((w) => w[0].toUpperCase() + w.slice(1).toLowerCase()).join(" ") : user.email;
+}
+
+// GET /commercial-contacts/creators/list — créateurs RÉELS (createdBy →
+// users.id) des contacts visibles par l'appelant, avec leur nombre de
+// contacts. Alimente « Filter by User » (filtre ?createdBy=<id>).
+router.get("/creators/list", authRequired, async (req, res) => {
+  try {
+    const { condition } = await contactScope(req);
+    const counts = await CommercialContact.findAll({
+      where: condition || {},
+      attributes: ["createdBy", [sequelize.fn("COUNT", sequelize.col("id")), "count"]],
+      group: ["createdBy"],
+      raw: true,
+    });
+    const users = await User.findAll({
+      where: { id: counts.map((c) => c.createdBy) },
+      attributes: ["id", "email"],
+      include: [{ model: UserProfile, as: "profile", attributes: ["name", "prenom", "nom"], required: false }],
+    });
+    const byId = new Map(users.map((u) => [u.id, u]));
+    const result = counts
+      .map((c) => {
+        const u = byId.get(c.createdBy);
+        return {
+          id: c.createdBy,
+          email: u?.email || null,
+          name: u ? creatorDisplayName(u) : null,
+          count: Number(c.count),
+        };
+      })
+      .sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")));
+    return res.json(result);
+  } catch (err) {
+    console.error("❌ GET CREATORS ERROR:", err);
+    res.status(500).json({ message: err.message });
+  }
+});
+
 // LIST
 router.get("/", authRequired, async (req, res) => {
   const reqId = Math.random().toString(36).slice(2, 8);
   try {
     const where = {};
 
-    const { q, statut, dateRelance, user_nom, typeClient } = req.query;
+    const { q, statut, dateRelance, user_nom, typeClient, createdBy } = req.query;
+
+    // Filtre par CRÉATEUR RÉEL (commercial_contacts."createdBy" = users.id),
+    // indépendant du nom de commercial saisi sur le contact.
+    if (createdBy !== undefined && String(createdBy).trim()) {
+      const id = String(createdBy).trim();
+      if (!UUID_RE.test(id)) return res.status(400).json({ message: "createdBy invalide" });
+      where.createdBy = id;
+    }
 
     // =============================
     // 🔥 USER FILTER PRIORITY
@@ -274,14 +350,22 @@ router.get("/", authRequired, async (req, res) => {
     console.log("ROLE =", req.user.role);
     console.log("USER =", req.user.sub);
 
+    // Filtre « Filter by User » : MÊME nom que celui affiché sur chaque ligne
+    // (user_nom en priorité, sinon user_nom_custom — voir la fusion plus
+    // bas). Auparavant, un nom hors d'une liste figée était cherché dans
+    // user_nom_custom seul : « wajdi » renvoyait aussi des contacts affichés
+    // comme ceux de najeh / mayssa (colonnes contradictoires en base).
     if (user_nom && user_nom.trim()) {
-      const cleanUser = user_nom.trim();
-      const allowedUsers = ["najeh", "mooemen", "mayssa"];
-      if (allowedUsers.includes(cleanUser)) {
-        where.user_nom = cleanUser;
-      } else {
-        where.user_nom_custom = cleanUser;
-      }
+      where[Op.and] = [
+        ...(where[Op.and] || []),
+        sequelize.where(
+          sequelize.fn(
+            "lower",
+            sequelize.fn("COALESCE", sequelize.cast(sequelize.col("CommercialContact.user_nom"), "text"), sequelize.col("CommercialContact.user_nom_custom"))
+          ),
+          user_nom.trim().toLowerCase()
+        ),
+      ];
     }
 
     // =============================
@@ -350,31 +434,23 @@ router.get("/", authRequired, async (req, res) => {
     // - tout autre rôle (user, accueil, ...) : vue complète, comportement
     //   historique inchangé (aucune restriction définie pour eux ici).
     // =============================
-    let assignedContactIds = null; // null = non applicable à ce rôle
-    const commercialScoped = isCommercialScoped(req.user);
+    // - compte BACK-OFFICE (backoffice_readonly) : vue complète, comme un
+    //   admin. Ses lectures arrivent avec l'identité de son compte de
+    //   référence (commercial) et `viewAs` — posé uniquement par
+    //   middleware/readOnlyRoleGuard dans un jeton signé par le serveur. Sans
+    //   cette règle, il héritait du périmètre commercial de ce compte et ne
+    //   voyait pas, par exemple, les contacts d'Aziz. Lecture seule inchangée :
+    //   toute écriture reste refusée par le garde (403).
+    const { condition: scopeCondition, assignedContactIds, backofficeGlobalView } = await contactScope(req);
+    const commercialScoped = !!scopeCondition;
 
     if (commercialScoped) {
-      const relanceRows = await CommercialContactRelance.findAll({
-        where: { commercialId: req.user.sub },
-        attributes: ["commercialContactId"],
-      });
-      assignedContactIds = [
-        ...new Set(relanceRows.map((r) => r.commercialContactId).filter(Boolean)),
-      ];
-
       console.log("assignedContactIds =", assignedContactIds);
-
-      const orConditions = [
-        { createdBy: req.user.sub },
-        { commercialId: req.user.sub },
-      ];
-      if (assignedContactIds.length) {
-        orConditions.push({ id: { [Op.in]: assignedContactIds } });
-      }
-
-      where[Op.and] = [...(where[Op.and] || []), { [Op.or]: orConditions }];
+      where[Op.and] = [...(where[Op.and] || []), scopeCondition];
     } else if (PRIVILEGED_ROLES.includes(req.user.role)) {
       console.log("assignedContactIds = N/A (rôle privilégié — vue complète)");
+    } else if (backofficeGlobalView) {
+      console.log("assignedContactIds = N/A (back-office — vue complète en lecture seule)");
     } else {
       console.log(`assignedContactIds = N/A (rôle "${req.user.role}" non restreint ici — vue complète, comportement historique)`);
     }
@@ -396,7 +472,12 @@ router.get("/", authRequired, async (req, res) => {
       include: [
         { model: CommercialContactProduct, as: "produits" },
         { model: CommercialProject, as: "projects" },
-        { model: User, as: "creator", attributes: ["id", "email"] },
+        {
+          model: User,
+          as: "creator",
+          attributes: ["id", "email"],
+          include: [{ model: UserProfile, as: "profile", attributes: ["name", "prenom", "nom"], required: false }],
+        },
         {
           model: CommercialContactRelance,
           as: "relances",
@@ -414,6 +495,14 @@ router.get("/", authRequired, async (req, res) => {
 
   // 🔥 FUSION USER
   r.user_nom = r.user_nom || r.user_nom_custom;
+
+  // Créateur RÉEL (relation createdBy → users) : nom du profil, sinon email.
+  // `commercialName` = commercial choisi sur un compte partagé (ex.
+  // info@probardistribution.com utilisé par plusieurs commerciaux).
+  r.createdByName = row.creator ? resolveFullName(row.creator) : null;
+  r.createdByEmail = row.creator?.email || null;
+  r.commercialName = r.user_nom || null;
+  if (r.creator) delete r.creator.profile;
 
   return r;
 });

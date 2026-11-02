@@ -39,9 +39,11 @@ async function signed(email) {
 }
 
 // Lectures du compte de référence (commercial) — mêmes écrans que Flutter.
+// Lectures strictement identiques à celles d'info@. Exception voulue : la
+// LISTE des contacts commerciaux (GET /commercial-contacts) est globale pour
+// le back-office (voir test/commercialContactsVisibility.test.js et le test
+// « liste des contacts » ci-dessous).
 const READS = [
-  "/commercial-contacts",
-  "/commercial-contacts?page=1&limit=10",
   "/commercial-contacts/user-names/list",
   "/commercial-contacts/calendar/relances",
   "/commercial-contacts/kpi/me",
@@ -122,6 +124,18 @@ describeIfPassword("Compte back-office en consultation seule", () => {
       const detail = (await request(app).get(`/commercial-contacts/${id}`).set(bearer(token))).body;
       const contact = detail.data || detail;
       for (const field of ["nom", "telephone", "statut"]) expect(contact).toHaveProperty(field);
+    }
+  });
+
+  test("liste des contacts commerciaux : vue globale (comme un admin), qui inclut tout ce que voit info@", async () => {
+    for (const path of ["/commercial-contacts", "/commercial-contacts?page=1&limit=10"]) {
+      const mine = await request(app).get(path).set(bearer(token));
+      const theirs = await request(app).get(path).set(bearer(ref.token));
+      expect([path, mine.status]).toEqual([path, 200]);
+      const all = (await sequelize.query(`SELECT id FROM commercial_contacts`, { type: sequelize.QueryTypes.SELECT })).map((r) => r.id).sort();
+      expect(mine.body.map((c) => c.id).sort()).toEqual(all);
+      const seen = new Set(mine.body.map((c) => c.id));
+      expect(theirs.body.filter((c) => !seen.has(c.id))).toEqual([]);
     }
   });
 
