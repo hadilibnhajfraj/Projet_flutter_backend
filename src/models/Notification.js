@@ -94,6 +94,16 @@ const Notification = sequelize.define(
       type: DataTypes.UUID,
       allowNull: true,
     },
+    // Note de calcul concernée (+ n° de soumission) — une seule notification
+    // par destinataire, type, note et soumission (migration 20261105090000).
+    calculationNoteId: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+    },
+    calculationNoteVersion: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+    },
 
     // =========================
     // 🔥 STATUS

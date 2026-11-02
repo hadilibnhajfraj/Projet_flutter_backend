@@ -11,6 +11,7 @@ require("./services/scheduler");
 const authRoutes = require("./routes/auth.routes");
 const { authRequired } = require("./middleware/auth.middleware");
 const { moduleAccessGuard } = require("./middleware/moduleAccessGuard");
+const { readOnlyRoleGuard } = require("./middleware/readOnlyRoleGuard");
 const projectRoutes = require("./routes/projects.routes");
 const adminRoutes = require("./routes/admin");
 const taskRoutes = require("./routes/tasks.routes");
@@ -76,6 +77,7 @@ const qualityControlRoutes = require("./modules/quality-control/routes/qualityCo
 const productionRequestsRoutes = require("./modules/production-requests/routes/productionRequests.routes");
 const rawMaterialRequestRoutes = require("./modules/raw-material-requests/routes/rawMaterialRequest.routes");
 const productionFicheApprovalRoutes = require("./modules/production-fiche-approvals/routes/ficheApproval.routes");
+const calculationNoteRoutes = require("./modules/calculation-notes/routes/calculationNote.routes");
 
 const app = express();
 
@@ -111,6 +113,10 @@ app.use(
 );
 
 
+// Compte back-office en consultation seule : AVANT tout contrôle de module
+// et tout routeur (aucune écriture possible, lectures avec la visibilité du
+// compte de référence) — voir config/backofficeReadOnly.js.
+app.use(readOnlyRoleGuard);
 app.use(moduleAccessGuard);
 
 app.get("/", (req, res) => res.json({ ok: true }));
@@ -139,6 +145,9 @@ app.use("/quality-control", qualityControlRoutes);
 app.use("/production-requests", productionRequestsRoutes);
 app.use("/raw-material-requests", rawMaterialRequestRoutes);
 app.use("/production-fiche-approvals", productionFicheApprovalRoutes);
+// Notes de calcul (documents techniques des projets CRM) — fichiers servis
+// uniquement par la route de téléchargement, jamais par /uploads.
+app.use("/calculation-notes", calculationNoteRoutes);
 
 // ── Existing routes (unchanged) ──────────────────────────
 app.use("/projects", projectRoutes);

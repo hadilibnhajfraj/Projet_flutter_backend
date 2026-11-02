@@ -45,6 +45,16 @@ function isRetryableSmtpError(err) {
   return code === 451 || code === 429;
 }
 
+// Pannes de connexion / indisponibilité TEMPORAIRE du serveur SMTP (serveur
+// injoignable, délai dépassé, 421/450/452). Retentées UNIQUEMENT pour les
+// emails qui le demandent (meta.retryOnConnectionError === true) : le
+// comportement des emails existants est inchangé.
+const TRANSIENT_CONNECTION_CODES = new Set(["ECONNREFUSED", "ECONNECTION", "ECONNRESET", "ETIMEDOUT", "ESOCKET", "EDNS", "ENOTFOUND", "EAI_AGAIN"]);
+function isTransientDeliveryError(err) {
+  if (TRANSIENT_CONNECTION_CODES.has(String(err?.code || ""))) return true;
+  return [421, 450, 452].includes(Number(err?.responseCode));
+}
+
 function describeError(err) {
   return {
     responseCode: Number.isFinite(Number(err?.responseCode)) ? Number(err.responseCode) : null,
@@ -148,7 +158,7 @@ async function processJob(job) {
     await markSent(job, { attemptNumber, now, info });
   } catch (err) {
     const errInfo = describeError(err);
-    const retryable = isRetryableSmtpError(err);
+    const retryable = isRetryableSmtpError(err) || (job.meta?.retryOnConnectionError === true && isTransientDeliveryError(err));
 
     // Journalisation précise demandée : email, responseCode, response, date,
     // nombre de tentatives — jamais masquée, même si la réponse HTTP de
@@ -353,9 +363,35 @@ async function resumePendingEmailQueue() {
   }
 }
 
+/**
+ * Relance MANUELLE d'un email en échec définitif (FAILED) : nouvelle série de
+ * tentatives (compteur remis à zéro), même destinataire, même contenu, même
+ * dedupeKey — jamais de doublon. Ne fait rien pour un email déjà envoyé, en
+ * cours de nouvelle tentative ou annulé. Ne rejette jamais.
+ * @returns {Promise<{jobId: string, status: string, retried: boolean}>}
+ */
+async function retryFailedJob(jobId) {
+  let job;
+  try {
+    job = await EmailQueue.findByPk(jobId);
+  } catch (err) {
+    logger.error("EMAIL_QUEUE: relance impossible (lecture DB)", { jobId, error: err.message });
+    return { jobId, status: "UNKNOWN", retried: false };
+  }
+  if (!job) return { jobId, status: "NOT_FOUND", retried: false };
+  if (job.status !== "FAILED") return { jobId, status: job.status, retried: false };
+  job.set({ status: "PENDING", attempts: 0, nextAttemptAt: null });
+  await job.save();
+  logger.info("EMAIL_QUEUE: relance manuelle", { jobId: job.id, email: job.to });
+  await processJob(job);
+  return { jobId: job.id, status: job.status, retried: true };
+}
+
 module.exports = {
   enqueueEmail,
   enqueueEmailOnce,
+  retryFailedJob,
+  isTransientDeliveryError,
   resumePendingEmailQueue,
   findActiveJob,
   cancelJob,

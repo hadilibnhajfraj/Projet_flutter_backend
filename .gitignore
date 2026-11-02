@@ -5,3 +5,5 @@ node_modules/
 # Uploaded files - NEVER commit
 uploads/
 uploads/**
+# Notes de calcul : stockage privé des documents - NEVER commit
+storage/

@@ -26,6 +26,7 @@ const { getRequestContext } = require("../utils/requestContext");
 const { mfaChallengeRequired, requireMfaFeatureEnabled } = require("../middleware/mfaChallenge.middleware");
 const { logMfaAttempt } = require("../services/mfaAttemptLog.service");
 const { isProbarDomainEmail, isProbarProjectManager } = require("../config/probarProjectAccess");
+const backofficeReadOnly = require("../config/backofficeReadOnly");
 
 const router = express.Router();
 
@@ -384,7 +385,13 @@ async function issueSession(res, user) {
       isActive: user.isActive,
       // Calculées par le backend (seule autorité) — le frontend n'adapte que
       // l'affichage ; chaque route revérifie elle-même ces droits.
-      permissions: { probarProjectManager: isProbarProjectManager(user) },
+      permissions: {
+        probarProjectManager: isProbarProjectManager(user),
+        // Compte back-office en consultation seule (le backend refuse de toute
+        // façon toute écriture — middleware/readOnlyRoleGuard.js).
+        readOnly: backofficeReadOnly.isReadOnlyRole(user.role),
+        ...(backofficeReadOnly.isReadOnlyRole(user.role) ? { referenceEmail: backofficeReadOnly.referenceEmail() } : {}),
+      },
     },
     accessToken,
     refreshToken,

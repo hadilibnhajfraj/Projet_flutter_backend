@@ -61,6 +61,9 @@ const QualityControl = require("./QualityControl");
 const QualityControlItem = require("./QualityControlItem");
 const QualityControlReading = require("./QualityControlReading");
 const QualityControlHistory = require("./QualityControlHistory");
+const CalculationNote = require("./CalculationNote");
+const CalculationNoteDocument = require("./CalculationNoteDocument");
+const CalculationNoteHistory = require("./CalculationNoteHistory");
 
 // ── PIPELINE STAGE <-> PROJECT ────────────────────────────
 
@@ -538,6 +541,25 @@ QualityControlHistory.belongsTo(QualityControl, { foreignKey: "qualityControlId"
 QualityControl.belongsTo(User, { foreignKey: "controllerUserId", as: "controller" });
 User.hasMany(QualityControl, { foreignKey: "controllerUserId", as: "qualityControls" });
 
+// ── NOTES DE CALCUL (documents techniques des projets) ────
+// Pas d'onDelete CASCADE : notes, documents et historique ne sont jamais
+// supprimés par effet de bord.
+CalculationNote.belongsTo(Project, { foreignKey: "projectId", as: "project" });
+Project.hasMany(CalculationNote, { foreignKey: "projectId", as: "calculationNotes" });
+CalculationNote.belongsTo(User, { foreignKey: "requesterId", as: "requester" });
+CalculationNote.belongsTo(User, { foreignKey: "createdBy", as: "creator" });
+CalculationNote.belongsTo(User, { foreignKey: "validatorId", as: "validator" });
+CalculationNote.belongsTo(User, { foreignKey: "decidedBy", as: "decider" });
+CalculationNote.belongsTo(User, { foreignKey: "cancelledBy", as: "canceller" });
+CalculationNote.belongsTo(User, { foreignKey: "assignedToUserId", as: "assignee" });
+CalculationNote.belongsTo(User, { foreignKey: "assignedByUserId", as: "assigner" });
+CalculationNote.hasMany(CalculationNoteDocument, { foreignKey: "noteId", as: "documents" });
+CalculationNoteDocument.belongsTo(CalculationNote, { foreignKey: "noteId", as: "note" });
+CalculationNoteDocument.belongsTo(User, { foreignKey: "uploadedBy", as: "uploader" });
+CalculationNote.hasMany(CalculationNoteHistory, { foreignKey: "noteId", as: "history" });
+CalculationNoteHistory.belongsTo(CalculationNote, { foreignKey: "noteId", as: "note" });
+CalculationNoteHistory.belongsTo(User, { foreignKey: "userId", as: "user" });
+
 // ── EXPORTS ───────────────────────────────────────────────
 
 module.exports = {
@@ -597,4 +619,7 @@ module.exports = {
   QualityControlItem,
   QualityControlReading,
   QualityControlHistory,
+  CalculationNote,
+  CalculationNoteDocument,
+  CalculationNoteHistory,
 };
