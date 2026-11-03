@@ -4,10 +4,15 @@ const svc = require("../services/productionRecords.service");
 const dashboardSvc = require("../services/productionDashboard.service");
 const fichesSvc = require("../services/productionFiches.service");
 const logger = require("../../../utils/logger");
+const { traceAccess } = require("../../../utils/permissionDiagnostics");
 
 function handle(res, err) {
   const status = err.status || 500;
   if (status >= 500) logger.error("ProductionRecords error:", err);
+  // Refus venant d'un service (contrôle d'accès aux données), jamais d'un middleware.
+  if (status === 403 && res.req) {
+    traceAccess({ middleware: "productionRecords.service", decision: "DENY", method: res.req.method, url: res.req.originalUrl, user: res.req.user, reason: err.code ? `${err.code} : ${err.message}` : err.message });
+  }
   res.status(status).json({ success: false, message: err.message || "Internal server error" });
 }
 

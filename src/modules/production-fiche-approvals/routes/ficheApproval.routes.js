@@ -9,18 +9,24 @@ const router = require("express").Router();
 const ctrl = require("../controllers/ficheApproval.controller");
 const { validateListQuery, validateDecision, validateResubmit } = require("../validators/ficheApproval.validator");
 const { authRequired } = require("../../../middleware/auth.middleware");
-const { requireRole } = require("../../../middleware/requireRole");
+const { requireRole, requireRoleOrPermission } = require("../../../middleware/requireRole");
+const { PERMISSIONS } = require("../../../config/rolePermissions");
 
 const READ_WRITE_ROLES = ["admin", "superadmin", "superadmin2", "responsable_logistique_achat", "finance_production"];
 
-router.use(authRequired, requireRole(...READ_WRITE_ROLES));
+// Back-office (consultation) : uniquement le DÉTAIL d'une fiche (historique
+// de validation affiché dans la fiche) — ni la file de validation, ni les
+// décisions (approve / reject / resubmit), réservées aux rôles ci-dessus.
+const writers = requireRole(...READ_WRITE_ROLES);
 
-router.get("/permissions", ctrl.permissions);
-router.get("/summary", validateListQuery, ctrl.summary);
-router.get("/", validateListQuery, ctrl.list);
-router.get("/:type/:id", ctrl.getOne);
-router.post("/:type/:id/approve", validateDecision, ctrl.approve);
-router.post("/:type/:id/reject", validateDecision, ctrl.reject);
-router.post("/:type/:id/resubmit", validateResubmit, ctrl.resubmit);
+router.use(authRequired);
+
+router.get("/permissions", writers, ctrl.permissions);
+router.get("/summary", writers, validateListQuery, ctrl.summary);
+router.get("/", writers, validateListQuery, ctrl.list);
+router.get("/:type/:id", requireRoleOrPermission(PERMISSIONS.PRODUCTION_READ_ALL, ...READ_WRITE_ROLES), ctrl.getOne);
+router.post("/:type/:id/approve", writers, validateDecision, ctrl.approve);
+router.post("/:type/:id/reject", writers, validateDecision, ctrl.reject);
+router.post("/:type/:id/resubmit", writers, validateResubmit, ctrl.resubmit);
 
 module.exports = router;

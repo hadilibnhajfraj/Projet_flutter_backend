@@ -93,7 +93,8 @@ describeIfPassword("Compte back-office en consultation seule", () => {
     const payload = verifyAccessToken(token);
     expect(payload).toMatchObject({ email: EMAIL, role: "backoffice_readonly" });
     expect(res.body.user).toMatchObject({ email: EMAIL, role: "backoffice_readonly", isActive: true });
-    expect(res.body.user.permissions).toEqual({ probarProjectManager: false, readOnly: true, referenceEmail: REFERENCE });
+    // granted : permissions nommées du rôle, lues en base (role_permissions).
+    expect(res.body.user.permissions).toEqual({ probarProjectManager: false, readOnly: true, referenceEmail: REFERENCE, granted: ["production.read_all"] });
     expect(["admin", "superadmin", "superadmin2"]).not.toContain(payload.role);
     const [row] = await sql(`SELECT "passwordHash" h FROM users WHERE email = :e`, { e: EMAIL });
     expect(row.h).toMatch(/^\$2[aby]\$12\$/); // bcrypt, jamais le mot de passe en clair
@@ -140,11 +141,20 @@ describeIfPassword("Compte back-office en consultation seule", () => {
   });
 
   test("jamais plus que la référence : routes administrateur et autres modules refusés comme pour info@", async () => {
-    for (const path of ["/admin/users", "/crm/kpi/global", "/users", "/por-promesh", "/production-records/fiches?type=promesh", "/finance/invoices", "/quality-control"]) {
+    for (const path of ["/admin/users", "/crm/kpi/global", "/users", "/finance/invoices", "/quality-control"]) {
       const mine = await request(app).get(path).set(bearer(token));
       const theirs = await request(app).get(path).set(bearer(ref.token));
       expect([path, mine.status]).toEqual([path, theirs.status]);
       expect([path, mine.status >= 400]).toEqual([path, true]);
+    }
+  });
+
+  test("seule exception voulue : consultation du module Production (test/backofficeProduction.test.js)", async () => {
+    for (const path of ["/por-promesh", "/production-records/fiches?type=promesh"]) {
+      const mine = await request(app).get(path).set(bearer(token));
+      const theirs = await request(app).get(path).set(bearer(ref.token));
+      expect([path, mine.status]).toEqual([path, 200]);
+      expect([path, theirs.status]).toEqual([path, 403]);
     }
   });
 

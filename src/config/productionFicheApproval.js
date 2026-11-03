@@ -16,6 +16,7 @@
 // (approvalStatus NULL) ne sont pas concernées.
 
 const logisticsManagers = require("./logisticsManagers");
+const { PERMISSIONS, roleHasPermission } = require("./rolePermissions");
 const list = (v, fallback) => (v ? String(v).split(",").map((s) => s.trim().toLowerCase()).filter(Boolean) : fallback);
 
 const STATUSES = Object.freeze({
@@ -58,6 +59,8 @@ module.exports = {
     return this.validators.includes(norm(email));
   },
   canViewAll(actor) {
-    return this.isValidator(actor.email) || VIEWER_ROLES.includes(actor.role);
+    // + permission production.read_all (back-office) : consultation seule —
+    // aucune décision (canDecide dépend uniquement des validateurs nominatifs).
+    return this.isValidator(actor.email) || VIEWER_ROLES.includes(actor.role) || roleHasPermission(actor.role, PERMISSIONS.PRODUCTION_READ_ALL);
   },
 };

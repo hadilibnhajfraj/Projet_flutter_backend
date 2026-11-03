@@ -14,6 +14,8 @@
 //     le seul module Notes de calcul, Valider / Refuser une note ;
 //   - Notes de calcul : VUE GLOBALE (toutes les notes), décidée par le module
 //     lui-même (calculationNote.service.js), sans élargir aucun autre module ;
+//   - Production (fiches PROMESH / PROBAR) : CONSULTATION GLOBALE, lectures
+//     seules avec l'identité réelle du compte (PRODUCTION_READ_PREFIXES) ;
 //   - les quelques lectures qui écrivent en base (connexion d'un agenda
 //     Google) sont refusées aussi.
 // Le frontend ne fait que masquer les actions ; le backend reste l'autorité.
@@ -47,6 +49,18 @@ const ALLOWED_WRITE_PATTERNS = [/^POST \/calculation-notes\/\d+\/(validate|rejec
 // propre profil, sa session, ses notifications) — jamais celle de référence.
 const OWN_IDENTITY_PREFIXES = ["/auth", "/users/me", "/me", "/notifications"];
 
+// MODULE PRODUCTION — CONSULTATION GLOBALE (permission production.read_all,
+// config/rolePermissions.js) : lectures des fiches PROMESH / PROBAR (listes,
+// détails, récapitulatifs, statistiques, historique de validation) exécutées
+// avec l'identité RÉELLE du compte back-office (jamais celle de référence,
+// qui est commerciale et n'a pas accès à la Production — c'était la cause du
+// 403 PERMISSION_DENIED sur les récapitulatifs). Chaque route n'accepte la
+// permission que sur ses GET (requireRoleOrPermission) ; les services ne
+// restreignent aux fiches de leur auteur que responsable_logistique_achat,
+// le back-office voit donc toutes les fiches. Les écritures restent refusées
+// par le garde.
+const PRODUCTION_READ_PREFIXES = ["/production-records", "/por-promesh", "/industrial-records", "/production-fiche-approvals"];
+
 // Lectures qui modifient des données (connexion d'un agenda Google au compte
 // de référence) : refusées.
 const BLOCKED_READ_PREFIXES = ["/google-calendar/auth-url", "/google-calendar/callback"];
@@ -76,6 +90,7 @@ module.exports = {
   ALLOWED_WRITES,
   ALLOWED_WRITE_PATTERNS,
   OWN_IDENTITY_PREFIXES,
+  PRODUCTION_READ_PREFIXES,
   BLOCKED_READ_PREFIXES,
   READ_METHODS,
   referenceEmail,
@@ -86,5 +101,6 @@ module.exports = {
     return ALLOWED_WRITES.has(key) || ALLOWED_WRITE_PATTERNS.some((re) => re.test(key));
   },
   usesOwnIdentity: (path) => startsWithAny(path, OWN_IDENTITY_PREFIXES),
+  isProductionRead: (path) => startsWithAny(path, PRODUCTION_READ_PREFIXES),
   isBlockedRead: (path) => startsWithAny(path, BLOCKED_READ_PREFIXES),
 };

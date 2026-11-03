@@ -27,6 +27,7 @@ const { mfaChallengeRequired, requireMfaFeatureEnabled } = require("../middlewar
 const { logMfaAttempt } = require("../services/mfaAttemptLog.service");
 const { isProbarDomainEmail, isProbarProjectManager } = require("../config/probarProjectAccess");
 const backofficeReadOnly = require("../config/backofficeReadOnly");
+const { rolePermissions } = require("../config/rolePermissions");
 
 const router = express.Router();
 
@@ -391,6 +392,10 @@ async function issueSession(res, user) {
         // façon toute écriture — middleware/readOnlyRoleGuard.js).
         readOnly: backofficeReadOnly.isReadOnlyRole(user.role),
         ...(backofficeReadOnly.isReadOnlyRole(user.role) ? { referenceEmail: backofficeReadOnly.referenceEmail() } : {}),
+        // Permissions nommées du rôle, lues en base (table role_permissions —
+        // ex. production.read_all pour le back-office). Les routes les
+        // revérifient elles-mêmes.
+        granted: await rolePermissions(user.role),
       },
     },
     accessToken,

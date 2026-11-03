@@ -3,7 +3,8 @@
 const router = require("express").Router();
 const ctrl = require("../controllers/productionRecords.controller");
 const { authRequired } = require("../../../middleware/auth.middleware");
-const { requireRole } = require("../../../middleware/requireRole");
+const { requireRoleOrPermission } = require("../../../middleware/requireRole");
+const { PERMISSIONS } = require("../../../config/rolePermissions");
 
 // Lecture seule (aucun create/update/delete — la saisie reste sur les
 // écrans-module PROMESH/PROBAR existants) — mêmes rôles que por-promesh et
@@ -18,25 +19,29 @@ const FICHE_CONSULT_ROLES = [...READ_ROLES, "controle_qualite"];
 
 router.use(authRequired);
 
+// + permission production.read_all (config/rolePermissions.js — compte
+// back-office) : consultation globale ; ce routeur est en lecture seule.
+const P = PERMISSIONS.PRODUCTION_READ_ALL;
+
 // IMPORTANT : "/filters" et "/summary" déclarés avant "/:id" — sinon Express
 // route GET /production-records/filters (ou /summary) vers getById avec
 // id="filters"/"summary" (même piège que por-promesh, voir porPromesh.routes.js).
-router.get("/filters", requireRole(...FICHE_CONSULT_ROLES), ctrl.filters);
-router.get("/summary", requireRole(...READ_ROLES), ctrl.summary);
+router.get("/filters", requireRoleOrPermission(P, ...FICHE_CONSULT_ROLES), ctrl.filters);
+router.get("/summary", requireRoleOrPermission(P, ...READ_ROLES), ctrl.summary);
 // Dashboard Production : KPI, machines, graphiques et dernières productions
 // en UN seul appel (agrégations SQL — voir productionDashboard.service).
-router.get("/dashboard", requireRole(...READ_ROLES), ctrl.dashboard);
+router.get("/dashboard", requireRoleOrPermission(P, ...READ_ROLES), ctrl.dashboard);
 // Fiches de production d'UNE ligne (pages « Fiches de production PROMESH /
 // PROBAR ») : même portée de lecture que GET /por-promesh et
 // GET /industrial-records (jamais plus large).
-router.get("/fiches", requireRole(...READ_ROLES), ctrl.fiches);
+router.get("/fiches", requireRoleOrPermission(P, ...READ_ROLES), ctrl.fiches);
 // §MODIFICATION — ADMIN > PRODUCTION RECORDS — FILTRE PAR UTILISATEUR (§3) :
 // alimente le dropdown "All users" ; scope de rôle appliqué dans le service
 // (getCreators) — un compte owner-scoped (production_1..5, responsable_
 // logistique) ne reçoit jamais que lui-même, jamais la liste des autres.
-router.get("/creators", requireRole(...READ_ROLES), ctrl.creators);
+router.get("/creators", requireRoleOrPermission(P, ...READ_ROLES), ctrl.creators);
 
-router.get("/", requireRole(...FICHE_CONSULT_ROLES), ctrl.list);
-router.get("/:id", requireRole(...FICHE_CONSULT_ROLES), ctrl.getById);
+router.get("/", requireRoleOrPermission(P, ...FICHE_CONSULT_ROLES), ctrl.list);
+router.get("/:id", requireRoleOrPermission(P, ...FICHE_CONSULT_ROLES), ctrl.getById);
 
 module.exports = router;

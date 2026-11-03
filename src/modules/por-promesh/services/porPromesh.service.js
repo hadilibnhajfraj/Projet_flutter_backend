@@ -549,6 +549,11 @@ function autoValidationCutoffAt() {
 function isEligibleForAutoValidation(report, now = new Date()) {
   if (!isAutoValidationEnabled()) return false;
   if (report.isLocked || report.status === "VALIDE") return false;
+  // ARCHIVED (brouillon archivé automatiquement, voir production-draft-
+  // archive) n'est jamais éligible — même règle que PROBAR ("archivee") et
+  // que le cron (BROUILLON uniquement) : seule une demande de désarchivage
+  // la remet en circulation, jamais une simple lecture de la fiche.
+  if (report.status === "ARCHIVED") return false;
   if (!report.createdAt) return false;
   const createdAt = new Date(report.createdAt);
   if (createdAt < autoValidationCutoffAt()) return false; // ancienne fiche — jamais touchée
