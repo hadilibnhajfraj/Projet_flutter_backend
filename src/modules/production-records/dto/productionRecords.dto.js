@@ -74,6 +74,8 @@ function normalizePromesh(record) {
     diametreUnite: "mm",
     statut: r.status === "VALIDE" ? "validee" : "brouillon",
     isLocked: Boolean(r.isLocked),
+    // Fiche archivée : jamais modifiable ni supprimable (demande de désarchivage).
+    archived: r.status === "ARCHIVED",
     createdBy: r.createdBy,
     creator: toCreatorRef(r.creator),
     createdAt: r.createdAt,
@@ -100,6 +102,7 @@ function normalizeProbar(record) {
     diametreUnite: "mm",
     statut: r.statut === "validee" ? "validee" : "brouillon",
     isLocked: r.statut === "validee",
+    archived: r.statut === "archivee",
     createdBy: r.createdBy,
     creator: toCreatorRef(r.creator),
     createdAt: r.createdAt,
@@ -309,4 +312,6 @@ module.exports = {
   normalizeProbar,
   buildPromeshDetail,
   buildProbarDetail,
+  formatPromeshNumero,
+  formatProbarNumero,
 };

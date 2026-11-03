@@ -9,6 +9,8 @@ const UserProfile = require("../../../models/UserProfile");
 const logger = require("../../../utils/logger");
 const logisticsManagers = require("../../../config/logisticsManagers");
 const ficheApproval = require("../../production-fiche-approvals/services/ficheApproval.service");
+const { loadRootAdmin } = require("../../../config/rootAdmin");
+const ficheAudit = require("../../../services/productionFicheAudit.service");
 require("../../../models/associations");
 
 // Mêmes rôles que READ_WRITE_ROLES (routes) — qui peut opérer ce module peut
@@ -413,14 +415,21 @@ async function updatePorPromesh(id, body, actor) {
     if (!report) throw { status: 404, message: "PorPromesh introuvable" };
     assertOwnership(report, actor);
 
+    // Root admin (cbitunisia@cbi-tunisia.com, relu en base) : seul compte
+    // autorisé à modifier une fiche VALIDÉE (verrouillée) ; jamais une fiche
+    // archivée. Le verrouillage et le statut de validation restent inchangés.
+    const rootAdmin = await loadRootAdmin(actor, t);
     // Exception : une fiche refusée par le responsable logistique reste
     // modifiable par son créateur pour correction (puis nouvelle soumission).
-    if (report.isLocked && !ficheApproval.canCorrect(report, actor)) {
+    const lockOverride = report.isLocked && !ficheApproval.canCorrect(report, actor);
+    if (lockOverride && !rootAdmin) {
       throw { status: 403, code: "SHEET_LOCKED", message: LOCKED_MESSAGE };
     }
     if (report.status === "ARCHIVED") {
       throw { status: 403, code: "SHEET_ARCHIVED", message: ARCHIVED_MESSAGE, ficheId: report.id, ficheType: "PROMESH" };
     }
+    // Audit des modifications du root admin : état complet AVANT (enfants inclus).
+    const beforeFull = rootAdmin ? (await repo.findById(id, t)).toJSON() : null;
 
     // [PROMESH UPDATE] — avant/après des SEULS champs envoyés (jamais de
     // JWT/mot de passe ; aucune donnée sensible dans une fiche PROMESH).
@@ -446,24 +455,46 @@ async function updatePorPromesh(id, body, actor) {
 
     // 4. Un seul objet retourné, contenant Contrôle Machine (champs plats)
     // et Paramètres du Poste (`processControl`) à jour.
-    return repo.findById(id, t);
+    const updated = await repo.findById(id, t);
+    if (rootAdmin) {
+      await ficheAudit.recordUpdate({
+        ficheType: "PROMESH",
+        fiche: report,
+        before: beforeFull,
+        after: updated,
+        keys: [...Object.keys(mainFields), ...childKeys, ...(childKeys.length ? ["processControl"] : [])],
+        actor: rootAdmin,
+        lockOverride,
+        transaction: t,
+      });
+    }
+    return updated;
   });
 }
 
 async function deletePorPromesh(id, actor) {
-  const report = await repo.findBareById(id);
-  if (!report) throw { status: 404, message: "PorPromesh introuvable" };
-  assertOwnership(report, actor);
+  return sequelize.transaction(async (t) => {
+    const report = await repo.findBareById(id, t);
+    if (!report) throw { status: 404, message: "PorPromesh introuvable" };
+    assertOwnership(report, actor);
 
-  if (report.isLocked) {
-    throw { status: 403, code: "SHEET_LOCKED", message: LOCKED_MESSAGE };
-  }
-  if (report.status === "ARCHIVED") {
-    throw { status: 403, code: "SHEET_ARCHIVED", message: ARCHIVED_MESSAGE, ficheId: report.id, ficheType: "PROMESH" };
-  }
+    // Fiche validée (verrouillée) : suppression réservée au root admin (relu
+    // en base). Fiche archivée : jamais, pour personne.
+    const rootAdmin = report.isLocked ? await loadRootAdmin(actor, t) : null;
+    if (report.isLocked && !rootAdmin) {
+      throw { status: 403, code: "SHEET_LOCKED", message: LOCKED_MESSAGE };
+    }
+    if (report.status === "ARCHIVED") {
+      throw { status: 403, code: "SHEET_ARCHIVED", message: ARCHIVED_MESSAGE, ficheId: report.id, ficheType: "PROMESH" };
+    }
 
-  await repo.destroy(report);
-  return { id };
+    // Toute suppression est journalisée avec une copie intégrale de la fiche
+    // (enfants inclus) — dans la même transaction : pas d'audit, pas de suppression.
+    const snapshot = await repo.findById(id, t);
+    await ficheAudit.recordDelete({ ficheType: "PROMESH", fiche: report, snapshot, actor, lockOverride: report.isLocked, transaction: t });
+    await repo.destroy(report, t);
+    return { id };
+  });
 }
 
 // Champs devenant obligatoires uniquement à la soumission finale ("Terminer

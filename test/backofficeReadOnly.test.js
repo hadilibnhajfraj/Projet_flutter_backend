@@ -94,7 +94,7 @@ describeIfPassword("Compte back-office en consultation seule", () => {
     expect(payload).toMatchObject({ email: EMAIL, role: "backoffice_readonly" });
     expect(res.body.user).toMatchObject({ email: EMAIL, role: "backoffice_readonly", isActive: true });
     // granted : permissions nommées du rôle, lues en base (role_permissions).
-    expect(res.body.user.permissions).toEqual({ probarProjectManager: false, readOnly: true, referenceEmail: REFERENCE, granted: ["production.read_all"] });
+    expect(res.body.user.permissions).toEqual({ probarProjectManager: false, readOnly: true, referenceEmail: REFERENCE, granted: ["production.read_all"], productionFicheAdmin: false });
     expect(["admin", "superadmin", "superadmin2"]).not.toContain(payload.role);
     const [row] = await sql(`SELECT "passwordHash" h FROM users WHERE email = :e`, { e: EMAIL });
     expect(row.h).toMatch(/^\$2[aby]\$12\$/); // bcrypt, jamais le mot de passe en clair

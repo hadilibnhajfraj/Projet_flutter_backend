@@ -131,6 +131,7 @@ describe("permission production.read_all", () => {
       readOnly: true,
       referenceEmail: "info@probardistribution.com",
       granted: ["production.read_all"],
+      productionFicheAdmin: false,
     });
   });
 });

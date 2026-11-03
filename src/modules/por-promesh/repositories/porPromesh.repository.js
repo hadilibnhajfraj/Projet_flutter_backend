@@ -130,8 +130,8 @@ function update(instance, data, transaction) {
   return instance.update(data, { transaction });
 }
 
-function destroy(instance) {
-  return instance.destroy();
+function destroy(instance, transaction) {
+  return instance.destroy({ transaction });
 }
 
 async function replaceChildren(porPromeshId, children, transaction) {

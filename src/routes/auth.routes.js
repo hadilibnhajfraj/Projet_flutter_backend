@@ -28,6 +28,7 @@ const { logMfaAttempt } = require("../services/mfaAttemptLog.service");
 const { isProbarDomainEmail, isProbarProjectManager } = require("../config/probarProjectAccess");
 const backofficeReadOnly = require("../config/backofficeReadOnly");
 const { rolePermissions } = require("../config/rolePermissions");
+const { isRootAdminUser } = require("../config/rootAdmin");
 
 const router = express.Router();
 
@@ -396,6 +397,10 @@ async function issueSession(res, user) {
         // ex. production.read_all pour le back-office). Les routes les
         // revérifient elles-mêmes.
         granted: await rolePermissions(user.role),
+        // Root admin (cbitunisia@cbi-tunisia.com, superadmin actif — compte
+        // relu en base) : modification / suppression des fiches de production
+        // validées. Affichage seulement : chaque route le revérifie en base.
+        productionFicheAdmin: isRootAdminUser(user),
       },
     },
     accessToken,

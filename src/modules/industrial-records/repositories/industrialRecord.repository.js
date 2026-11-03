@@ -23,24 +23,24 @@ function count(where = {}) {
   return IndustrialRecord.count({ where });
 }
 
-function findById(id) {
-  return IndustrialRecord.findByPk(id, { include: INCLUDE_CREATOR });
+function findById(id, transaction) {
+  return IndustrialRecord.findByPk(id, { include: INCLUDE_CREATOR, transaction });
 }
 
-function findBareById(id) {
-  return IndustrialRecord.findByPk(id);
+function findBareById(id, transaction) {
+  return IndustrialRecord.findByPk(id, { transaction });
 }
 
 function create(data) {
   return IndustrialRecord.create(data);
 }
 
-function update(instance, data) {
-  return instance.update(data);
+function update(instance, data, transaction) {
+  return instance.update(data, { transaction });
 }
 
-function destroy(instance) {
-  return instance.destroy();
+function destroy(instance, transaction) {
+  return instance.destroy({ transaction });
 }
 
 module.exports = { findAll, count, findById, findBareById, create, update, destroy };

@@ -11,6 +11,9 @@ const { sendEmail } = require("../../../services/email.service");
 const { MAINTENANCE_NOTIFY_EMAIL, isMaintenanceRequester } = require("../../../config/maintenanceRequester");
 const ficheApproval = require("../../production-fiche-approvals/services/ficheApproval.service");
 const logisticsManagers = require("../../../config/logisticsManagers");
+const { sequelize } = require("../../../db");
+const { loadRootAdmin } = require("../../../config/rootAdmin");
+const ficheAudit = require("../../../services/productionFicheAudit.service");
 
 // responsable_logistique_achat ne voit/édite que ses propres fiches —
 // admin/superadmin voient tout (même règle que POR PROMESH). finance_production
@@ -328,10 +331,18 @@ async function getRecordById(id, actor) {
 }
 
 async function updateRecord(id, body, actor) {
-  const record = await repo.findBareById(id);
+  return sequelize.transaction((t) => updateRecordTx(id, body, actor, t));
+}
+
+async function updateRecordTx(id, body, actor, t) {
+  const record = await repo.findBareById(id, t);
   if (!record) throw { status: 404, message: "Fiche introuvable" };
   assertOwnership(record, actor);
   assertNotArchived(record);
+  // Root admin (relu en base) : ses modifications de fiches PROBAR sont
+  // journalisées (anciennes / nouvelles valeurs). Aucune règle d'accès changée.
+  const rootAdmin = record.module === "probar" ? await loadRootAdmin(actor, t) : null;
+  const before = rootAdmin ? record.toJSON() : null;
 
   if (body.statut === "validee" && record.module === "probar") {
     assertProbarCanValidate(record, body);
@@ -349,18 +360,37 @@ async function updateRecord(id, body, actor) {
     if ("heureFin" in payload) payload.heureFin = nullifyEmpty(payload.heureFin);
   }
 
-  await repo.update(record, payload);
-  return repo.findById(id);
+  await repo.update(record, payload, t);
+  if (rootAdmin) {
+    await ficheAudit.recordUpdate({
+      ficheType: "PROBAR",
+      fiche: record,
+      before,
+      after: record,
+      keys: Object.keys(payload),
+      actor: rootAdmin,
+      lockOverride: before.statut === "validee",
+      transaction: t,
+    });
+  }
+  return repo.findById(id, t);
 }
 
 async function deleteRecord(id, actor) {
-  const record = await repo.findBareById(id);
-  if (!record) throw { status: 404, message: "Fiche introuvable" };
-  assertOwnership(record, actor);
-  assertNotArchived(record);
+  return sequelize.transaction(async (t) => {
+    const record = await repo.findBareById(id, t);
+    if (!record) throw { status: 404, message: "Fiche introuvable" };
+    assertOwnership(record, actor);
+    assertNotArchived(record);
 
-  await repo.destroy(record);
-  return { id };
+    // Fiche PROBAR : toute suppression est journalisée avec une copie
+    // intégrale, dans la même transaction (pas d'audit, pas de suppression).
+    if (record.module === "probar") {
+      await ficheAudit.recordDelete({ ficheType: "PROBAR", fiche: record, snapshot: record, actor, lockOverride: record.statut === "validee", transaction: t });
+    }
+    await repo.destroy(record, t);
+    return { id };
+  });
 }
 
 // ═══════════════════════════════════════════════════════════════════════

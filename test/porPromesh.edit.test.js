@@ -103,6 +103,8 @@ describe("PROMESH — édition (UPDATE partiel)", () => {
   afterAll(async () => {
     if (createdFiches.length) {
       await sequelize.query(`DELETE FROM production_draft_archive_log WHERE "ficheId" IN (:ids)`, { replacements: { ids: createdFiches } });
+      // Toute suppression de fiche est journalisée (production_fiche_audit).
+      await sequelize.query(`DELETE FROM production_fiche_audit WHERE "ficheId" IN (:ids)`, { replacements: { ids: createdFiches } });
       await sequelize.query(`DELETE FROM por_promesh WHERE id IN (:ids)`, { replacements: { ids: createdFiches } });
     }
     await User.destroy({ where: { id: createdUsers } });
