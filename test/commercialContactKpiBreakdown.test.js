@@ -129,6 +129,22 @@ describe("/my-kpi — répartitions sur le périmètre du compte", () => {
   });
 });
 
+describe("/kpi — compte non administrateur : mêmes répartitions que /my-kpi", () => {
+  test("commercial : /kpi = son périmètre, avec top entreprises et activité mensuelle", async () => {
+    const res = await request(app).get("/commercial-contacts/kpi").set(AZIZ.auth);
+    expect(res.status).toBe(200);
+    expect(res.body.data.isPersonalDashboard).toBe(true);
+    checkAgainst(res.body.data, await expected(`WHERE "createdBy" = :u`, { u: AZIZ.user.id }));
+  });
+
+  (PASSWORD ? test : test.skip)("back-office réel : /kpi = périmètre de son compte de référence", async () => {
+    const res = await request(app).get("/commercial-contacts/kpi").set(BO);
+    expect(res.status).toBe(200);
+    checkAgainst(res.body.data, await expected(`WHERE "createdBy" = :u`, { u: INFO.user.id }));
+    expect(res.body.data.topCompanies.length).toBeGreaterThan(0);
+  });
+});
+
 describe("/kpi — administrateur, périmètre global", () => {
   test("répartitions globales = SQL ; clés existantes conservées", async () => {
     const res = await request(app).get("/commercial-contacts/kpi").set(ADMIN.auth);

@@ -80,6 +80,17 @@ async function getKPI(req, res) {
         validationRate:   stats.validationRate,
         contactsByStatus: stats.contactsByStatus,
         contactsByType:   stats.contactsByType,
+        // Mêmes répartitions que /my-kpi (même périmètre) : commerciaux,
+        // top entreprises, activité mensuelle, totaux actifs / non validés.
+        contactsByCommercial:   stats.contactsByCommercial,
+        topCompanies:           stats.topCompanies,
+        contactsWithoutCompany: stats.contactsWithoutCompany,
+        monthlyActivity:        stats.monthlyActivity,
+        monthlyCallsAvailable:  stats.monthlyCallsAvailable,
+        monthlyCallsNote:       stats.monthlyCallsNote,
+        totalCommerciaux:       stats.totalCommerciaux,
+        totalActifs:            stats.totalActifs,
+        totalNonValides:        stats.totalNonValides,
       },
     });
   } catch (err) {
