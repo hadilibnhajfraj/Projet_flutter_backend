@@ -33,7 +33,11 @@ async function getKPI(req, res) {
     // ── Admin / Superadmin → KPI globaux ────────────────────────────────────
     if (isAdmin) {
       console.log("[KPI] Branche ADMIN → appel getCommercialContactKPI(null)");
-      const raw = await svc.getCommercialContactKPI(null);
+      const [raw, breakdowns] = await Promise.all([
+        svc.getCommercialContactKPI(null),
+        // Commerciaux (nom enregistré sur la fiche), entreprises, activité mensuelle.
+        svc.dashboardBreakdowns("", {}),
+      ]);
 
       console.log("CONTACTS FOUND =", raw.global.totalContacts);
       console.log("================================");
@@ -49,6 +53,7 @@ async function getKPI(req, res) {
           contactsByStatus:    raw.statusDistribution,
           contactsByType:      raw.typeDistribution,
           topCommercials:      raw.topUsers,
+          ...breakdowns,
         },
       });
     }

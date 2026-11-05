@@ -16,6 +16,98 @@ function _andUserJoin(userId){ return userId ? `AND cc."createdBy" = :userId`  :
 function _rep(userId)      { return userId ? { userId }                        : {}; }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// Répartitions du dashboard « Commercial Contacts Analytics » (/my-kpi et /kpi)
+// ═══════════════════════════════════════════════════════════════════════════════
+//
+// COMMERCIAL d'un contact = nom enregistré sur la fiche (user_nom_custom, sinon
+// user_nom — ENUM des commerciaux). createdBy / commercialId désignent le
+// COMPTE qui a saisi le contact (en pratique le compte partagé info@ pour
+// presque tous) : ils n'identifient pas le commercial. Aucun contact n'est
+// exclu : sans nom enregistré, il est compté sous « Non assigné ».
+// Appels = nbAppels (compteur enregistré sur chaque contact, une seule ligne
+// par contact : aucun doublon). Entreprise = nomSociete (espaces retirés) ;
+// les contacts sans entreprise sont comptés à part (contactsWithoutCompany),
+// jamais regroupés sous une fausse entreprise.
+// Statuts : mêmes définitions que les KPI globaux ci-dessous (_getGlobalKPIs).
+//
+// ACTIVITÉ MENSUELLE : nouveaux contacts = date réelle de création. Les appels
+// ne sont PAS répartis par mois : nbAppels est un compteur cumulé saisi sur la
+// fiche (aucun historique daté — commercial_contact_actions ne trace que des
+// visites, les relances sont des rappels planifiés) ; callsCount mensuel = null
+// et monthlyCallsAvailable = false plutôt qu'une répartition inventée.
+const MONTHLY_CALLS_NOTE =
+  "Appels non répartis par mois : seul le total cumulé par contact (nbAppels) est enregistré, sans date pour chaque appel.";
+const REP_NAME   = `COALESCE(NULLIF(TRIM("user_nom_custom"::text), ''), NULLIF(TRIM("user_nom"::text), ''), 'Non assigné')`;
+const IS_ACTIF   = `statut = 'ok'`;
+const NON_VALIDE = `statut IN ('client_refuse','user_injoignable')`;
+const MONTHS_FR  = ["Jan", "Fév", "Mar", "Avr", "Mai", "Jun", "Jul", "Aoû", "Sep", "Oct", "Nov", "Déc"];
+
+/**
+ * @param {string} whereClause  "" (global) ou "WHERE …" — même périmètre que les totaux
+ * @param {object} replacements valeurs liées du WHERE
+ */
+async function _dashboardBreakdowns(whereClause, replacements) {
+  const and = whereClause ? `${whereClause} AND` : "WHERE";
+  const [counts, byRep, companies, monthly] = await Promise.all([
+    sequelize.query(
+      `SELECT COUNT(*) FILTER (WHERE ${IS_ACTIF})::int AS "totalActifs",
+              COUNT(*) FILTER (WHERE ${NON_VALIDE})::int AS "totalNonValides",
+              COUNT(DISTINCT ${REP_NAME}) FILTER (WHERE ${REP_NAME} <> 'Non assigné')::int AS "totalCommerciaux",
+              COUNT(*) FILTER (WHERE NULLIF(TRIM("nomSociete"), '') IS NULL)::int AS "contactsWithoutCompany"
+         FROM commercial_contacts ${whereClause}`,
+      { replacements, type: "SELECT" }
+    ),
+    sequelize.query(
+      `SELECT ${REP_NAME}                                          AS commercial,
+              COUNT(*)::int                                        AS contacts,
+              COALESCE(SUM("nbAppels"), 0)::int                    AS calls,
+              COUNT(*) FILTER (WHERE ${IS_ACTIF})::int             AS actifs,
+              COUNT(*) FILTER (WHERE ${NON_VALIDE})::int           AS "nonValides",
+              COUNT(DISTINCT NULLIF(TRIM("nomSociete"), ''))::int  AS entreprises
+         FROM commercial_contacts ${whereClause}
+        GROUP BY 1 ORDER BY contacts DESC, commercial`,
+      { replacements, type: "SELECT" }
+    ),
+    sequelize.query(
+      `SELECT TRIM("nomSociete")                AS "companyName",
+              COUNT(*)::int                     AS "contactsCount",
+              COALESCE(SUM("nbAppels"), 0)::int AS "callsCount"
+         FROM commercial_contacts ${and} NULLIF(TRIM("nomSociete"), '') IS NOT NULL
+        GROUP BY 1 ORDER BY "contactsCount" DESC, "callsCount" DESC, "companyName" LIMIT 10`,
+      { replacements, type: "SELECT" }
+    ),
+    sequelize.query(
+      `SELECT TO_CHAR(DATE_TRUNC('month', "createdAt"), 'YYYY-MM') AS ym,
+              COUNT(*)::int                                         AS "newContacts"
+         FROM commercial_contacts ${and} "createdAt" >= DATE_TRUNC('month', NOW()) - INTERVAL '11 months'
+        GROUP BY 1`,
+      { replacements, type: "SELECT" }
+    ),
+  ]);
+  // 12 derniers mois (mois courant inclus), y compris les mois sans contact.
+  // Les bornes viennent de la base (NOW()) : même horloge que le filtre SQL.
+  const byMonth = new Map(monthly.map((m) => [m.ym, m.newContacts]));
+  const [{ cur }] = await sequelize.query(`SELECT TO_CHAR(DATE_TRUNC('month', NOW()), 'YYYY-MM') AS cur`, { type: "SELECT" });
+  const [cy, cm] = cur.split("-").map(Number);
+  const monthlyActivity = Array.from({ length: 12 }, (_, i) => {
+    const d = new Date(Date.UTC(cy, cm - 1 - 11 + i, 1));
+    const ym = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
+    return { month: ym, label: MONTHS_FR[d.getUTCMonth()], newContacts: byMonth.get(ym) ?? 0, callsCount: null };
+  });
+  return {
+    totalActifs:            counts[0]?.totalActifs ?? 0,
+    totalNonValides:        counts[0]?.totalNonValides ?? 0,
+    totalCommerciaux:       counts[0]?.totalCommerciaux ?? 0,
+    contactsWithoutCompany: counts[0]?.contactsWithoutCompany ?? 0,
+    contactsByCommercial:   byRep,
+    topCompanies:           companies,
+    monthlyActivity,
+    monthlyCallsAvailable:  false,
+    monthlyCallsNote:       MONTHLY_CALLS_NOTE,
+  };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // /kpi
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -461,7 +553,7 @@ async function getPersonalKPISummary(userId, commercialName = null) {
     ? { userId, commercialName }
     : { userId };
 
-  const [globalRows, statusDistribution, typeDistribution] = await Promise.all([
+  const [globalRows, statusDistribution, typeDistribution, breakdowns] = await Promise.all([
     sequelize.query(
       `SELECT
          COUNT(*)::int                                                          AS "totalContacts",
@@ -498,6 +590,8 @@ async function getPersonalKPISummary(userId, commercialName = null) {
        ORDER BY count DESC`,
       { replacements, type: "SELECT" }
     ),
+    // Commerciaux, entreprises et activité mensuelle — même périmètre (whereClause).
+    _dashboardBreakdowns(whereClause, replacements),
   ]);
 
   const row = globalRows[0] ?? {};
@@ -511,11 +605,13 @@ async function getPersonalKPISummary(userId, commercialName = null) {
     validationRate:   parseFloat(row.validationRate ?? 0),
     contactsByStatus: statusDistribution,
     contactsByType:   typeDistribution,
+    ...breakdowns,
   };
 }
 
 module.exports = {
   ADMIN_ROLES,
+  dashboardBreakdowns: _dashboardBreakdowns,
   getCommercialContactKPI,
   getCommercialContactAnalytics,
   getMyKPI,
