@@ -18,6 +18,7 @@ const cfg = require("../../../config/qualityControl");
 const WRITE_ROLES = cfg.writeRoles;
 const READ_ROLES = cfg.readRoles;
 const DELETE_ROLES = cfg.deleteRoles;
+const ADMIN_DASHBOARD_ROLES = cfg.adminDashboardRoles;
 
 router.use(authRequired);
 
@@ -36,6 +37,11 @@ router.get("/comparison/export", requireRole(...READ_ROLES), ctrl.exportComparis
 // l'association elle-même est recalculée par le serveur à la sauvegarde.
 router.get("/production-match", requireRole(...READ_ROLES), validateMatchQuery, ctrl.productionMatch);
 router.get("/production/:productionRecordId", requireRole(...READ_ROLES), ctrl.listByProductionRecord);
+// Tableau de bord Contrôle Qualité — Super Admin : indicateurs et liste de
+// TOUTES les fiches (aucune restriction d'auteur), lecture seule. Le détail
+// d'une fiche reste GET /:id.
+router.get("/admin/overview", requireRole(...ADMIN_DASHBOARD_ROLES), ctrl.adminOverview);
+router.get("/admin/controls", requireRole(...ADMIN_DASHBOARD_ROLES), ctrl.adminListControls);
 
 router.get("/", requireRole(...READ_ROLES), ctrl.listControls);
 router.post("/", requireRole(...WRITE_ROLES), validateCreate, ctrl.createControl);

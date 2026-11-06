@@ -878,8 +878,10 @@ function tunisDayStart(dateStr) {
 
 // Filtres de l'Historique → clause WHERE. UNE seule définition, partagée par
 // la liste, l'export et la comparaison (mêmes règles, mêmes chiffres).
-function buildListWhere(filters, actor) {
-  const where = scopeWhere(actor);
+// `allAuthors` : aucune restriction d'auteur — réservé au tableau de bord
+// Super Admin (qualityControlAdmin.service, route limitée à ce rôle).
+function buildListWhere(filters, actor, { allAuthors = false } = {}) {
+  const where = allAuthors ? {} : scopeWhere(actor);
 
   // Un ou plusieurs statuts séparés par des virgules (ex. "À vérifier" =
   // EN_ATTENTE,EN_COURS côté écran Historique).
@@ -1585,6 +1587,8 @@ module.exports = {
   scopeSqlFor,
   loadEntriesFor,
   toControlResponse,
+  // Partagé avec qualityControlAdmin.service (tableau de bord Super Admin).
+  withItemsForList,
   isValidated,
   tunisDayStart,
   listParameters,

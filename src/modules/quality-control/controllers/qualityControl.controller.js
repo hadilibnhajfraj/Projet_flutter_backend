@@ -3,6 +3,7 @@
 const svc = require("../services/qualityControl.service");
 const reports = require("../services/qualityControlReports.service");
 const comparisons = require("../services/qualityControlComparison.service");
+const admin = require("../services/qualityControlAdmin.service");
 const files = require("../services/qualityControlExport");
 const logger = require("../../../utils/logger");
 
@@ -96,6 +97,19 @@ const exportComparison = async (req, res) => {
   }
 };
 
+// ── Tableau de bord Super Admin (toutes les fiches, lecture seule) ───────
+
+const adminOverview = wrap((req) => admin.getOverview(req.query));
+
+const adminListControls = async (req, res) => {
+  try {
+    const { data, pagination } = await admin.listAllControls(req.query);
+    res.json({ success: true, data, pagination });
+  } catch (err) {
+    handle(res, err);
+  }
+};
+
 const productionMatch = wrap((req) => svc.productionMatch(req.matchQuery));
 const listByProductionRecord = wrap((req) => svc.listByProductionRecord(req.params.productionRecordId, req.query.productionType, actorFrom(req)));
 const getControl = wrap((req) => svc.getControlById(req.params.id, actorFrom(req)));
@@ -117,6 +131,8 @@ module.exports = {
   comparison,
   exportComparison,
   listControls,
+  adminOverview,
+  adminListControls,
   productionMatch,
   listByProductionRecord,
   getControl,

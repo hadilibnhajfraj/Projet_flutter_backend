@@ -470,6 +470,10 @@ module.exports = {
   // base par le service. controle_qualite, admin, superadmin2 et les rôles
   // Production n'ont jamais ce droit.
   deleteRoles: ["superadmin"],
+  // Tableau de bord Contrôle Qualité (GET /quality-control/admin/*) :
+  // consultation de TOUTES les fiches, quel que soit leur auteur — rôle
+  // Super Administrateur uniquement (admin, superadmin2, controle_qualite → 403).
+  adminDashboardRoles: ["superadmin"],
 
   parameters: Object.freeze(PARAMETERS),
   readingParameters: READING_PARAMETERS,
